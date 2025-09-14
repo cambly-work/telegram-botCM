@@ -1,0 +1,157 @@
+-- =========================
+-- SCHEMA v3.1 (compatible with handlers.py)
+-- =========================
+
+-- USERS
+CREATE TABLE IF NOT EXISTS users (
+  id                 SERIAL PRIMARY KEY,
+  tg_user_id         BIGINT NOT NULL UNIQUE,
+  username           TEXT,
+  full_name          TEXT,
+  name               TEXT,
+  email              TEXT,
+  phone              TEXT,
+  at_user_id         TEXT,
+  utm_source         TEXT,
+  utm_medium         TEXT,
+  utm_campaign       TEXT,
+  status             TEXT CHECK (status IN ('lead_funnel','member_active','member_expired'))
+                     DEFAULT 'lead_funnel',
+  access_until       TIMESTAMPTZ,
+  joined_club_at     TIMESTAMPTZ,
+  last_activity_at   TIMESTAMPTZ,
+  funnel_complete    BOOLEAN DEFAULT FALSE,
+  requested_session  BOOLEAN DEFAULT FALSE,
+  created_at         TIMESTAMPTZ DEFAULT NOW(),
+  updated_at         TIMESTAMPTZ DEFAULT NOW()
+);
+
+ALTER TABLE users
+  ADD COLUMN IF NOT EXISTS full_name          TEXT,
+  ADD COLUMN IF NOT EXISTS name               TEXT,
+  ADD COLUMN IF NOT EXISTS email              TEXT,
+  ADD COLUMN IF NOT EXISTS phone              TEXT,
+  ADD COLUMN IF NOT EXISTS at_user_id         TEXT,
+  ADD COLUMN IF NOT EXISTS utm_source         TEXT,
+  ADD COLUMN IF NOT EXISTS utm_medium         TEXT,
+  ADD COLUMN IF NOT EXISTS utm_campaign       TEXT,
+  ADD COLUMN IF NOT EXISTS status             TEXT DEFAULT 'lead_funnel',
+  ADD COLUMN IF NOT EXISTS access_until       TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS joined_club_at     TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS last_activity_at   TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS funnel_complete    BOOLEAN DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS requested_session  BOOLEAN DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS created_at         TIMESTAMPTZ DEFAULT NOW(),
+  ADD COLUMN IF NOT EXISTS updated_at         TIMESTAMPTZ DEFAULT NOW();
+
+DO $$
+BEGIN
+  BEGIN
+    ALTER TABLE users
+      ADD CONSTRAINT users_status_check
+      CHECK (status IN ('lead_funnel','member_active','member_expired'));
+  EXCEPTION WHEN duplicate_object THEN
+    NULL;
+  END;
+END$$;
+
+CREATE INDEX IF NOT EXISTS idx_users_username         ON users(username);
+CREATE INDEX IF NOT EXISTS idx_users_status           ON users(status);
+CREATE INDEX IF NOT EXISTS idx_users_access_until     ON users(access_until);
+CREATE INDEX IF NOT EXISTS idx_users_last_activity    ON users(last_activity_at);
+CREATE INDEX IF NOT EXISTS idx_users_status_access    ON users(status, access_until);
+
+CREATE UNIQUE INDEX IF NOT EXISTS ux_users_email_nonnull
+  ON users(LOWER(email))
+  WHERE email IS NOT NULL AND email <> '';
+
+CREATE UNIQUE INDEX IF NOT EXISTS ux_users_phone_nonnull
+  ON users(phone)
+  WHERE phone IS NOT NULL AND phone <> '';
+
+-- FUNNEL_PROGRESS
+CREATE TABLE IF NOT EXISTS funnel_progress (
+  id            SERIAL PRIMARY KEY,
+  user_id       INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  lesson_num    INT CHECK (lesson_num BETWEEN 1 AND 4) NOT NULL,
+  delivered_at  TIMESTAMPTZ,
+  opened_at     TIMESTAMPTZ,
+  hw_answer     TEXT,
+  hw_status     TEXT CHECK (hw_status IN ('submitted','skipped','pending')) DEFAULT 'pending'
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS ux_funnel_user_lesson ON funnel_progress(user_id, lesson_num);
+CREATE INDEX IF NOT EXISTS idx_funnel_user              ON funnel_progress(user_id);
+CREATE INDEX IF NOT EXISTS idx_funnel_status_opened     ON funnel_progress(hw_status, opened_at);
+CREATE INDEX IF NOT EXISTS idx_funnel_delivered_at      ON funnel_progress(delivered_at);
+
+-- LESSON_FEEDBACK
+CREATE TABLE IF NOT EXISTS lesson_feedback (
+  id            SERIAL PRIMARY KEY,
+  user_id       INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  lesson_num    INT NOT NULL,
+  feedback_type TEXT NOT NULL,
+  feedback_text TEXT,
+  created_at    TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_feedback_user ON lesson_feedback(user_id);
+
+-- PAYMENTS (опционально, совместимость)
+CREATE TABLE IF NOT EXISTS payments (
+  id            SERIAL PRIMARY KEY,
+  order_id      TEXT,
+  at_user_id    TEXT,
+  email         TEXT,
+  phone         TEXT,
+  product_id    TEXT,
+  status        TEXT CHECK (status IN ('paid','refund','failed')),
+  paid_at       TIMESTAMPTZ,
+  access_until  TIMESTAMPTZ,
+  raw_payload   JSONB,
+  created_at    TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_payments_order_id ON payments(order_id);
+CREATE INDEX IF NOT EXISTS idx_payments_status         ON payments(status);
+CREATE INDEX IF NOT EXISTS idx_payments_email          ON payments(LOWER(email));
+CREATE INDEX IF NOT EXISTS idx_payments_phone          ON payments(phone);
+
+-- CONTENT
+CREATE TABLE IF NOT EXISTS content (
+  id         SERIAL PRIMARY KEY,
+  key        TEXT UNIQUE NOT NULL,
+  value      TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_content_key ON content(key);
+
+-- ADMIN_LOG (совместимость с v2 → v3)
+
+-- v2 могла уже создать admin_log с (event, user_id, payload, created_at)
+CREATE TABLE IF NOT EXISTS admin_log (
+  id         SERIAL PRIMARY KEY,
+  event      TEXT,
+  user_id    INT,
+  payload    JSONB,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 1) Сначала добавляем нужные колонки для текущих хендлеров
+ALTER TABLE admin_log
+  ADD COLUMN IF NOT EXISTS admin_id  BIGINT,
+  ADD COLUMN IF NOT EXISTS action    TEXT,
+  ADD COLUMN IF NOT EXISTS payload   JSONB,
+  ALTER COLUMN created_at TYPE TIMESTAMPTZ USING created_at::timestamptz;
+
+-- 2) Мягко перенесём старые значения event → action (только если action пуст)
+UPDATE admin_log
+SET action = event
+WHERE action IS NULL AND event IS NOT NULL;
+
+-- 3) Теперь индексы (после того, как колонка 'action' гарантированно есть)
+CREATE INDEX IF NOT EXISTS idx_admin_log_action ON admin_log(action);
+CREATE INDEX IF NOT EXISTS idx_admin_log_event  ON admin_log(event);
+
+-- =========================
+-- Конец schema.sql v3.1
+-- =========================

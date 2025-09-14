@@ -1,0 +1,663 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <title>Тим Голдфингер — Аналитика рынков и обучающие материалы</title>
+  <meta name="description" content="Тим Голдфингер — аналитик рынков. Понятные обзоры структуры и трендов, сценарии и условия отмены. Короткие обучающие материалы. Канал @gaingrow_ru." />
+
+  <!-- Open Graph -->
+  <meta property="og:type" content="website" />
+  <meta property="og:title" content="Тим Голдфингер — Аналитика рынков" />
+  <meta property="og:description" content="Спокойная и ясная аналитика рынка. Подписывайтесь на канал @gaingrow_ru." />
+  <meta property="og:image" content="https://example.com/og-image.jpg" />
+  <meta property="og:url" content="https://example.com/" />
+
+  <!-- Twitter -->
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="Тим Голдфингер — Аналитика рынков" />
+  <meta name="twitter:description" content="Аналитика рынка и обучающие материалы без лишнего шума." />
+  <meta name="twitter:image" content="https://example.com/og-image.jpg" />
+
+  <!-- Favicons -->
+  <link rel="icon" href="/favicon.ico" sizes="any">
+  <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+  <meta name="theme-color" content="#0f172a">
+
+  <style>
+    /* ===== База ===== */
+    *,*::before,*::after{box-sizing:border-box}
+    html{line-height:1.5;-webkit-text-size-adjust:100%}
+    body{
+      margin:0;
+      font-family: 'Inter', system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,"Helvetica Neue",Arial,"Noto Sans",sans-serif;
+      background:#0b1020;
+      color:#e6e9f5;
+      overflow-x: hidden;
+    }
+    img{max-width:100%;display:block}
+    a{color:inherit;text-decoration:none}
+    :focus-visible{outline:2px solid #7ddcff;outline-offset:2px}
+
+    /* ===== Токены ===== */
+    :root{
+      --bg:#0b1020;
+      --bg-soft:#0e1530;
+      --card:#111836;
+      --muted:#93a3c7;
+      --brand:#7ddcff;
+      --brand-2:#8b5cf6;
+      --radius:16px;
+      --radius-lg: 20px;
+      --shadow:0 10px 30px rgba(0,0,0,.25);
+      --shadow-lg: 0 20px 40px rgba(0,0,0,.35);
+      --max:1120px;
+      --header-h:72px;
+    }
+
+    /* ===== Сетка и типографика ===== */
+    .container{max-width:var(--max);margin-inline:auto;padding:0 20px}
+    h1,h2,h3{line-height:1.2;margin:0 0 .6rem}
+    .section{padding:80px 0;border-top:1px solid rgba(125,220,255,.08); position: relative;}
+    .section-title{font-size:clamp(28px,4.5vw,42px);text-align:center; margin-bottom: 16px;}
+    .section-sub{color:var(--muted);text-align:center;max-width:720px;margin:0 auto 48px; font-size: 18px;}
+
+    /* ===== Стеклянный хедер ===== */
+    header{
+      position:sticky;top:0;z-index:100;
+      height:var(--header-h);
+      background:linear-gradient(180deg, rgba(11,16,32,.95), rgba(11,16,32,.7));
+      backdrop-filter:saturate(180%) blur(12px);
+      border-bottom:1px solid rgba(125,220,255,.1)
+    }
+    .nav{height:100%;display:flex;align-items:center;justify-content:space-between}
+    .brand{display:flex;align-items:center;gap:10px;font-weight:700; font-size: 18px;}
+    .logo{
+      width:36px;height:36px;border-radius:10px;
+      display:grid;place-items:center;color:#001;
+      background:linear-gradient(135deg,var(--brand),var(--brand-2));
+      box-shadow:0 0 0 2px rgba(125,220,255,.25) inset;
+      font-weight: bold;
+    }
+    .nav-links{display:flex;align-items:center;gap:24px}
+    .nav a{color:#dbe7ff; transition: all 0.3s ease;}
+    .nav a:hover{color: var(--brand);}
+
+    /* Кнопки */
+    .btn{
+      display:inline-flex;align-items:center;justify-content:center;gap:8px;
+      padding:14px 24px;border:none;border-radius:14px;cursor:pointer;
+      background:linear-gradient(135deg,var(--brand),var(--brand-2));
+      color:#0a0f1f;font-weight:700;box-shadow:var(--shadow);
+      transition: all 0.3s ease;
+      position: relative;
+      overflow: hidden;
+    }
+    .btn::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: -100%;
+      width: 100%;
+      height: 100%;
+      background: linear-gradient(90deg, transparent, rgba(255,255,255,0.2), transparent);
+      transition: 0.5s;
+    }
+    .btn:hover::before {
+      left: 100%;
+    }
+    .btn:hover {
+      transform: translateY(-2px);
+      box-shadow: var(--shadow-lg);
+    }
+    .btn--tg{
+      background:linear-gradient(135deg,#37b5ff,#7ddcff);
+      color:#05243a;
+    }
+    .btn--outline{
+      background:transparent;
+      color:#dbe7ff;
+      border:1px solid rgba(125,220,255,.35);
+    }
+    .btn--outline:hover {
+      background: rgba(125,220,255,.1);
+    }
+    .btn--full{width:100%}
+
+    /* ===== Мобильное меню ===== */
+    .menu-btn{display:none;flex-direction:column;gap:5px;background:transparent;border:0; padding: 8px;}
+    .menu-btn span{width:26px;height:2px;background:var(--brand); transition: all 0.3s ease;}
+    .mobile-menu{
+      position:fixed;inset:var(--header-h) 0 auto 0;
+      background:rgba(11,16,32,.98);backdrop-filter:blur(12px);
+      display:none;flex-direction:column;align-items:center;gap:24px;padding:32px;
+      z-index: 99;
+    }
+    .mobile-menu.show{display:flex}
+    .menu-btn.active span:nth-child(1) {
+      transform: translateY(8px) rotate(45deg);
+    }
+    .menu-btn.active span:nth-child(2) {
+      opacity: 0;
+    }
+    .menu-btn.active span:nth-child(3) {
+      transform: translateY(-8px) rotate(-45deg);
+    }
+
+    /* ===== Hero ===== */
+    .hero{padding:100px 0 60px;position:relative;overflow:hidden}
+    .hero::before{
+      content:"";position:absolute;inset:-10% -20% auto;height:480px;z-index:-1;
+      background:
+        radial-gradient(900px 380px at 70% -10%, rgba(125,220,255,.25), transparent 60%),
+        radial-gradient(500px 280px at 0% 20%, rgba(139,92,246,.18), transparent 60%);
+      filter:blur(12px);
+      animation: gradientShift 8s ease infinite;
+    }
+    @keyframes gradientShift {
+      0%, 100% { transform: scale(1) rotate(0deg); }
+      50% { transform: scale(1.05) rotate(1deg); }
+    }
+    .hero-grid{display:grid;grid-template-columns:1.08fr .92fr;gap:48px;align-items:center}
+    .kicker{
+      display:inline-flex;align-items:center;gap:8px;
+      padding:8px 16px;border-radius:999px;
+      background:rgba(125,220,255,.12);border:1px solid rgba(125,220,255,.25);
+      color:#cfeaff;font-size:14px;font-weight:600;letter-spacing:.3px;margin-bottom:16px;
+      animation: fadeInUp 0.8s ease;
+    }
+    .title{
+      font-size:clamp(36px,5.5vw,56px);
+      background:linear-gradient(135deg,#7ddcff,#8b5cf6);
+      -webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;
+      margin-bottom: 20px;
+      animation: fadeInUp 0.8s ease 0.2s both;
+    }
+    .subtitle{color:var(--muted);max-width:60ch; font-size: 18px; animation: fadeInUp 0.8s ease 0.4s both;}
+    .hero-cta {animation: fadeInUp 0.8s ease 0.6s both;}
+    .hero-card{
+      background:linear-gradient(180deg, rgba(17,24,54,.8), rgba(17,24,54,.6));
+      border:1px solid rgba(125,220,255,.15);border-radius:var(--radius-lg);padding:28px;
+      box-shadow: var(--shadow-lg);
+      backdrop-filter: blur(10px);
+      animation: fadeInRight 0.8s ease 0.8s both;
+    }
+
+    /* ===== Карточки ===== */
+    .cards{display:grid;grid-template-columns:repeat(3,1fr);gap:24px}
+    .card{
+      background:var(--card);border:1px solid rgba(125,220,255,.12);border-radius:var(--radius-lg);padding:28px;
+      box-shadow: var(--shadow);
+      transition: all 0.3s ease;
+      position: relative;
+      overflow: hidden;
+    }
+    .card::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 4px;
+      background: linear-gradient(90deg, var(--brand), var(--brand-2));
+      transform: scaleX(0);
+      transform-origin: left;
+      transition: transform 0.3s ease;
+    }
+    .card:hover {
+      transform: translateY(-5px);
+      box-shadow: var(--shadow-lg);
+    }
+    .card:hover::before {
+      transform: scaleX(1);
+    }
+
+    /* ===== Особенности ===== */
+    .features {display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px;}
+    .feature {
+      background: var(--card);
+      border-radius: var(--radius-lg);
+      padding: 28px;
+      border: 1px solid rgba(125,220,255,.1);
+      text-align: center;
+      transition: all 0.3s ease;
+    }
+    .feature:hover {
+      transform: translateY(-5px);
+      box-shadow: var(--shadow);
+      border-color: rgba(125,220,255,.25);
+    }
+    .feature-icon {
+      width: 60px;
+      height: 60px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, rgba(125,220,255,.1), rgba(139,92,246,.1));
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0 auto 20px;
+      font-size: 24px;
+      color: var(--brand);
+    }
+
+    /* ===== Форма ===== */
+    .form{display:grid;gap:16px;max-width:560px;margin:0 auto}
+    .input,textarea{
+      width:100%;padding:14px 16px;border-radius:12px;
+      border:1px solid rgba(125,220,255,.2);background:#0f1733;color:#e6e9f5;
+      transition: all 0.3s ease;
+      font-family: inherit;
+    }
+    .input:focus,textarea:focus{
+      border-color:var(--brand);
+      box-shadow: 0 0 0 3px rgba(125,220,255,.15);
+      outline: none;
+    }
+    .note{color:var(--muted);font-size:12px;text-align:center}
+
+    /* ===== Футер ===== */
+    footer{padding:40px 0;color:#9fb1d9;border-top:1px solid rgba(125,220,255,.1);background:var(--bg-soft)}
+    .foot{display:flex;flex-wrap:wrap;gap:16px;justify-content:space-between;align-items:center}
+
+    /* ===== Анимации ===== */
+    @keyframes fadeInUp {
+      from {
+        opacity: 0;
+        transform: translateY(20px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+    @keyframes fadeInRight {
+      from {
+        opacity: 0;
+        transform: translateX(20px);
+      }
+      to {
+        opacity: 1;
+        transform: translateX(0);
+      }
+    }
+    .fade-in {
+      opacity: 0;
+      transform: translateY(20px);
+      transition: opacity 0.6s ease, transform 0.6s ease;
+    }
+    .fade-in.visible {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    /* ===== Адаптив ===== */
+    @media (max-width:1100px){
+      .container{padding:0 20px}
+    }
+    @media (max-width:1024px){
+      .cards, .features{grid-template-columns:repeat(2,1fr)}
+    }
+    @media (max-width:900px){
+      .nav-links{display:none}
+      .menu-btn{display:flex}
+      .hero-grid{grid-template-columns:1fr;gap:40px}
+      .section {padding: 60px 0;}
+    }
+    @media (max-width:640px){
+      .cards, .features{grid-template-columns:1fr}
+      .btn--sm-full{width:100%}
+      .section{padding:50px 0}
+      .section-title {font-size: 28px;}
+      .section-sub {font-size: 16px; margin-bottom: 40px;}
+      .hero {padding: 80px 0 40px;}
+      .title {font-size: 32px;}
+      .subtitle {font-size: 16px;}
+      .hero-card {padding: 20px;}
+    }
+
+    /* Сетка на фоне */
+    .grid-pattern {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background-image: 
+        linear-gradient(rgba(125, 220, 255, 0.05) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(125, 220, 255, 0.05) 1px, transparent 1px);
+      background-size: 40px 40px;
+      pointer-events: none;
+      z-index: -1;
+      opacity: 0.3;
+    }
+  </style>
+
+  <!-- JSON-LD -->
+  <script type="application/ld+json">
+  {
+    "@context":"https://schema.org",
+    "@type":"Person",
+    "name":"Тим Голдфингер",
+    "jobTitle":"Аналитик рынков",
+    "description":"Публикую понятные обзоры структуры и трендов. Сценарии и условия отмены. Короткие обучающие материалы.",
+    "sameAs":["https://t.me/goldfinger_uk","https://t.me/gaingrow_ru"],
+    "url":"https://example.com/"
+  }
+  </script>
+</head>
+<body>
+
+  <!-- ===== Хедер ===== -->
+  <header>
+    <div class="container nav" role="navigation" aria-label="Основная навигация">
+      <a class="brand" href="#top" aria-label="На главную">
+        <span class="logo" aria-hidden="true">TG</span>
+        <strong>Тим Голдфингер</strong>
+      </a>
+
+      <nav class="nav-links" aria-label="Навигация по разделам">
+        <a href="#about">Обо мне</a>
+        <a href="#analytics">Аналитика</a>
+        <a href="#features">Преимущества</a>
+        <a href="#contact">Контакты</a>
+        <!-- Аккуратная кнопка Telegram в хедере -->
+        <a class="btn btn--tg" href="https://t.me/goldfinger_uk" target="_blank" rel="noopener" aria-label="Личный Telegram">@goldfinger_uk</a>
+      </nav>
+
+      <button class="menu-btn" id="menuBtn" aria-label="Открыть меню">
+        <span></span><span></span><span></span>
+      </button>
+    </div>
+
+    <nav class="mobile-menu" id="mobileMenu" aria-label="Мобильное меню">
+      <a href="#about">Обо мне</a>
+      <a href="#analytics">Аналитика</a>
+      <a href="#features">Преимущества</a>
+      <a href="#contact">Контакты</a>
+      <a class="btn btn--tg btn--full" href="https://t.me/goldfinger_uk" target="_blank" rel="noopener">@goldfinger_uk</a>
+    </nav>
+  </header>
+
+  <!-- ===== Hero ===== -->
+  <main id="top" class="hero">
+    <div class="grid-pattern"></div>
+    <div class="container hero-grid">
+      <div>
+        <span class="kicker">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" aria-hidden="true">
+            <path d="M12 3l7 3v5c0 5-3.5 9-7 10-3.5-1-7-5-7-10V6l7-3z" stroke="currentColor" stroke-width="1.5"/>
+          </svg>
+          Аналитика рынков и обучающие материалы
+        </span>
+        <h1 class="title">Ясная аналитика без шума</h1>
+        <p class="subtitle">
+          Короткие и наглядные обзоры: контекст, ключевые зоны, сценарии и условия отмены.
+          Плюс простые обучающие заметки — всё по делу.
+        </p>
+
+        <div class="hero-cta" style="display:flex;gap:16px;flex-wrap:wrap;margin-top:28px">
+          <a class="btn btn--sm-full" href="https://t.me/gaingrow_ru" target="_blank" rel="noopener">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path d="M12 4C10.4178 4 8.87103 4.46919 7.55544 5.34824C6.23985 6.22729 5.21447 7.47672 4.60897 8.93853C4.00347 10.4003 3.84504 12.0089 4.15372 13.5607C4.4624 15.1126 5.22433 16.538 6.34315 17.6569C7.46197 18.7757 8.88743 19.5376 10.4393 19.8463C11.9911 20.155 13.5997 19.9965 15.0615 19.391C16.5233 18.7855 17.7727 17.7602 18.6518 16.4446C19.5308 15.129 20 13.5823 20 12C20 9.87827 19.1571 7.84344 17.6569 6.34315C16.1566 4.84285 14.1217 4 12 4ZM15.93 9.48L14.62 15.67C14.52 16.11 14.26 16.22 13.89 16.01L11.89 14.53L10.89 15.46C10.84 15.51 10.78 15.55 10.71 15.59L10.95 17.59L13.31 16.3C13.67 16.11 13.97 16.25 13.81 16.6L11.29 16.58L8.77 15.29C8.42 15.13 8.41 14.8 8.85 14.63L15.26 11.51C15.57 11.36 15.84 11.5 15.62 11.75L10.91 15.92L10.92 15.91L9.52 15.36C9.12 15.2 9.11 14.9 9.59 14.69L15.07 12.14L15.93 9.48Z" fill="currentColor"/>
+            </svg>
+            Подписаться на канал — @gaingrow_ru
+          </a>
+          <a class="btn btn--outline btn--sm-full" href="https://t.me/goldfinger_uk" target="_blank" rel="noopener">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path d="M12 11C12.5523 11 13 11.4477 13 12C13 12.5523 12.5523 13 12 13C11.4477 13 11 12.5523 11 12C11 11.4477 11.4477 11 12 11Z" fill="currentColor"/>
+              <path d="M16 11C16.5523 11 17 11.4477 17 12C17 12.5523 16.5523 13 16 13C15.4477 13 15 12.5523 15 12C15 11.4477 15.4477 11 16 11Z" fill="currentColor"/>
+              <path d="M8 11C8.55228 11 9 11.4477 9 12C9 12.5523 8.55228 13 8 13C7.44772 13 7 12.5523 7 12C7 11.4477 7.44772 11 8 11Z" fill="currentColor"/>
+              <path fill-rule="evenodd" clip-rule="evenodd" d="M12 2C6.47715 2 2 6.47715 2 12C2 17.5228 6.47715 22 12 22C17.5228 22 22 17.5228 22 12C22 6.47715 17.5228 2 12 2ZM4 12C4 16.4183 7.58172 20 12 20C16.4183 20 20 16.4183 20 12C20 7.58172 16.4183 4 12 4C7.58172 4 4 7.58172 4 12Z" fill="currentColor"/>
+            </svg>
+            @goldfinger_uk
+          </a>
+        </div>
+      </div>
+
+      <!-- Заменяем виджеты Telegram на привлекательный блок с преимуществами -->
+      <aside class="hero-card" aria-label="Преимущества канала">
+        <h2 style="margin-top: 0; margin-bottom: 20px;">Что вы найдете в канале</h2>
+        <div class="features-list" style="display: flex; flex-direction: column; gap: 16px;">
+          <div style="display: flex; align-items: flex-start; gap: 12px;">
+            <div style="background: rgba(125,220,255,.1); width: 24px; height: 24px; border-radius: 6px; display: flex; align-items: center; justify-content: center; flex-shrink: 0;">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+                <path d="M5 13l4 4L19 7" stroke="var(--brand)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </div>
+            <p style="margin: 0;">Ежедневный анализ рыночной структуры и ключевых уровней</p>
+          </div>
+          <div style="display: flex; align-items: flex-start; gap: 12px;">
+            <div style="background: rgba(125,220,255,.1); width: 24px; height: 24px; border-radius: 6px; display: flex; align-items: center; justify-content: center; flex-shrink: 0;">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+                <path d="M5 13l4 4L19 7" stroke="var(--brand)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </div>
+            <p style="margin: 0;">Четкие сценарии с условиями подтверждения и отмены</p>
+          </div>
+          <div style="display: flex; align-items: flex-start; gap: 12px;">
+            <div style="background: rgba(125,220,255,.1); width: 24px; height: 24px; border-radius: 6px; display: flex; align-items: center; justify-content: center; flex-shrink: 0;">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+                <path d="M5 13l4 4L19 7" stroke="var(--brand)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </div>
+            <p style="margin: 0;">Обучающие материалы и разборы конкретных ситуаций</p>
+          </div>
+          <div style="display: flex; align-items: flex-start; gap: 12px;">
+            <div style="background: rgba(125,220,255,.1); width: 24px; height: 24px; border-radius: 6px; display: flex; align-items: center; justify-content: center; flex-shrink: 0;">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+                <path d="M5 13l4 4L19 7" stroke="var(--brand)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </div>
+            <p style="margin: 0;">Объективный подход без эмоций и рекламы</p>
+          </div>
+        </div>
+      </aside>
+    </div>
+  </main>
+
+  <!-- ===== Обо мне ===== -->
+  <section id="about" class="section" aria-labelledby="about-title">
+    <div class="grid-pattern"></div>
+    <div class="container">
+      <h2 class="section-title fade-in" id="about-title">Обо мне</h2>
+      <p class="section-sub fade-in">
+        Я — Тим Голдфингер, аналитик рынков. Спокойный, структурный подход: без громких обещаний.
+        Смотрю на структуру движения цены и формирую понятные сценарии — чтобы у вас была карта, а не случайные идеи.
+      </p>
+
+      <div class="cards" role="list">
+        <article class="card fade-in" role="listitem">
+          <h3>Что делаю</h3>
+          <p>Регулярные обзоры и обучающие материалы. Фокус: структура (HH/HL/LH/LL), фазы и логика сценариев.</p>
+        </article>
+        <article class="card fade-in" role="listitem">
+          <h3>Формат</h3>
+          <p>Коротко и по делу: контекст, зоны, условия и риски — без «украшений» и лишнего шума.</p>
+        </article>
+        <article class="card fade-in" role="listitem">
+          <h3>Для кого</h3>
+          <p>Для тех, кто хочет понимать рынок и принимать решения спокойнее. Все обновления — в канале.</p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== О чём аналитика ===== -->
+  <section id="analytics" class="section" aria-labelledby="analytics-title">
+    <div class="grid-pattern"></div>
+    <div class="container">
+      <h2 class="section-title fade-in" id="analytics-title">О чём аналитика</h2>
+      <p class="section-sub fade-in">Без «магии» — только структура, сценарии и прозрачные условия отмены.</p>
+
+      <div class="cards">
+        <article class="card fade-in">
+          <h3>Контекст и тренд</h3>
+          <p>Фаза рынка, рабочий тренд и общая картина. Только то, что можно проверить на графике.</p>
+        </article>
+        <article class="card fade-in">
+          <h3>Ключевые зоны</h3>
+          <p>Где интересно наблюдать и что должно произойти. Когда сценарий подтверждён, а когда — отменён.</p>
+        </article>
+        <article class="card fade-in">
+          <h3>Обучающие заметки</h3>
+          <p>Разборы кейсов, мини-чек-листы, частые ошибки и простые правила, которые помогают.</p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== Преимущества ===== -->
+  <section id="features" class="section" aria-labelledby="features-title">
+    <div class="grid-pattern"></div>
+    <div class="container">
+      <h2 class="section-title fade-in" id="features-title">Почему стоит подписаться</h2>
+      <p class="section-sub fade-in">Качественная аналитика, которая помогает принимать обоснованные решения</p>
+
+      <div class="features">
+        <div class="feature fade-in">
+          <div class="feature-icon">📊</div>
+          <h3>Структурный анализ</h3>
+          <p>Анализируем графики без лишних индикаторов, focusing на price action и ключевых уровнях</p>
+        </div>
+        <div class="feature fade-in">
+          <div class="feature-icon">🎯</div>
+          <h3>Четкие сценарии</h3>
+          <p>Понятные условия входа, цели и стоп-лоссы с указанием условий отмены сценария</p>
+        </div>
+        <div class="feature fade-in">
+          <div class="feature-icon">📚</div>
+          <h3>Обучение</h3>
+          <p>Регулярные обучающие материалы, которые помогут улучшить ваши навыки анализа</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== CTA ===== -->
+  <section class="section" style="background: var(--bg-soft); text-align: center;">
+    <div class="container">
+      <h2 class="section-title fade-in">Начните получать качественную аналитику</h2>
+      <p class="section-sub fade-in">Присоединяйтесь к каналу @gaingrow_ru — подписывайтесь прямо сейчас</p>
+      <div class="fade-in" style="display: flex; justify-content: center; gap: 16px; flex-wrap: wrap; margin-top: 32px;">
+        <a class="btn" href="https://t.me/gaingrow_ru" target="_blank" rel="noopener">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M12 4C10.4178 4 8.87103 4.46919 7.55544 5.34824C6.23985 6.22729 5.21447 7.47672 4.60897 8.93853C4.00347 10.4003 3.84504 12.0089 4.15372 13.5607C4.4624 15.1126 5.22433 16.538 6.34315 17.6569C7.46197 18.7757 8.88743 19.5376 10.4393 19.8463C11.9911 20.155 13.5997 19.9965 15.0615 19.391C16.5233 18.7855 17.7727 17.7602 18.6518 16.4446C19.5308 15.129 20 13.5823 20 12C20 9.87827 19.1571 7.84344 17.6569 6.34315C16.1566 4.84285 14.1217 4 12 4ZM15.93 9.48L14.62 15.67C14.52 16.11 14.26 16.22 13.89 16.01L11.89 14.53L10.89 15.46C10.84 15.51 10.78 15.55 10.71 15.59L10.95 17.59L13.31 16.3C13.67 16.11 13.97 16.25 13.81 16.6L11.29 16.58L8.77 15.29C8.42 15.13 8.41 14.8 8.85 14.63L15.26 11.51C15.57 11.36 15.84 11.5 15.62 11.75L10.91 15.92L10.92 15.91L9.52 15.36C9.12 15.2 9.11 14.9 9.59 14.69L15.07 12.14L15.93 9.48Z" fill="currentColor"/>
+          </svg>
+          Подписаться на канал
+        </a>
+        <a class="btn btn--outline" href="https://t.me/goldfinger_uk" target="_blank" rel="noopener">
+          Написать в личные сообщения
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== Контакты: коммерческие предложения (Getform) ===== -->
+  <section id="contact" class="section" aria-labelledby="contact-title">
+    <div class="grid-pattern"></div>
+    <div class="container">
+      <h2 class="section-title fade-in" id="contact-title">Коммерческие предложения</h2>
+      <p class="section-sub fade-in">Если есть идея или проект — напишите пару строк.</p>
+
+      <!-- Замените YOUR-GETFORM-ENDPOINT на ваш endpoint из getform.io -->
+      <form class="form fade-in" action="https://getform.io/f/YOUR-GETFORM-ENDPOINT" method="POST">
+        <input type="text" name="_gotcha" style="display:none"> <!-- honeypot -->
+
+        <label>
+          Организация / Имя
+          <input class="input" type="text" name="name" placeholder="Компания или имя" required>
+        </label>
+        <label>
+          Контакт
+          <input class="input" type="text" name="contact" placeholder="Email или Telegram" required>
+        </label>
+        <label>
+          Сообщение
+          <textarea class="input" name="message" rows="4" placeholder="Кратко: задача, формат, сроки" required></textarea>
+        </label>
+
+        <input type="hidden" name="_redirect" value="https://example.com/thanks.html">
+        <button class="btn" type="submit">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true" style="margin-right: 8px;">
+            <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" fill="currentColor"/>
+          </svg>
+          Отправить
+        </button>
+        <p class="note">Отправляя форму, вы соглашаетесь с обработкой данных.</p>
+      </form>
+    </div>
+  </section>
+
+  <!-- ===== Футер ===== -->
+  <footer>
+    <div class="container foot">
+      <div style="display:flex;align-items:center;gap:10px">
+        <span class="logo" aria-hidden="true">TG</span>
+        <span>© <span id="y"></span> Тим Голдфингер</span>
+      </div>
+      <nav style="display:flex;gap:14px;flex-wrap:wrap">
+        <a href="https://t.me/goldfinger_uk" target="_blank" rel="noopener">Telegram: @goldfinger_uk</a>
+        <a href="https://t.me/gaingrow_ru" target="_blank" rel="noopener">Канал: @gaingrow_ru</a>
+        <a href="#top">Наверх ↑</a>
+      </nav>
+    </div>
+  </footer>
+
+  <script>
+    // Год в футере
+    document.getElementById('y').textContent = new Date().getFullYear();
+
+    // Мобильное меню
+    const menuBtn = document.getElementById('menuBtn');
+    const mobileMenu = document.getElementById('mobileMenu');
+    
+    function toggleMobileMenu() {
+      menuBtn.classList.toggle('active');
+      mobileMenu.classList.toggle('show');
+      document.body.style.overflow = mobileMenu.classList.contains('show') ? 'hidden' : '';
+    }
+    
+    function closeMobileMenu() {
+      menuBtn.classList.remove('active');
+      mobileMenu.classList.remove('show');
+      document.body.style.overflow = '';
+    }
+    
+    menuBtn?.addEventListener('click', toggleMobileMenu);
+    
+    mobileMenu?.addEventListener('click', (e) => {
+      if (e.target.tagName === 'A') {
+        closeMobileMenu();
+      }
+    });
+
+    // Защита от двойной отправки формы
+    const form = document.querySelector('form[action^="https://getform.io"]');
+    form?.addEventListener('submit', () => {
+      const btn = form.querySelector('button[type="submit"]');
+      if (btn){ 
+        btn.disabled = true; 
+        btn.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true" style="margin-right: 8px;"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" fill="currentColor"/></svg> Отправка...'; 
+      }
+    });
+
+    // Анимация появления элементов при скролле
+    const fadeElements = document.querySelectorAll('.fade-in');
+    
+    function checkFade() {
+      fadeElements.forEach(element => {
+        const elementTop = element.getBoundingClientRect().top;
+        const elementVisible = 150;
+        if (elementTop < window.innerHeight - elementVisible) {
+          element.classList.add('visible');
+        }
+      });
+    }
+    
+    window.addEventListener('scroll', checkFade);
+    window.addEventListener('load', checkFade);
+  </script>
+</body>
+</html>
