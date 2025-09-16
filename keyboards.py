@@ -1,6 +1,11 @@
 # keyboards.py
 import os
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import (
+    InlineKeyboardMarkup,
+    InlineKeyboardButton,
+    ReplyKeyboardMarkup,
+    KeyboardButton,
+)
 
 # ──────────────────────────────────────────────────────────────────────────────
 # ENV / helpers
@@ -14,46 +19,38 @@ def _support_url() -> str:
 # ──────────────────────────────────────────────────────────────────────────────
 # Главное меню (UX-вариант)
 # ──────────────────────────────────────────────────────────────────────────────
-def main_menu(is_member: bool = False, has_pay: bool = False) -> InlineKeyboardMarkup:
+def main_menu(is_member: bool = False, has_pay: bool = False) -> ReplyKeyboardMarkup:
     """
-    Аккуратное, предсказуемое меню:
-    - верхний ряд: инфо/FAQ
-    - второй ряд: бесплатные уроки/прогресс
-    - третий ряд: профиль/поддержка
-    - опционально: оплата/разделы участника
+    Реплай-клавиатура основного меню для использования в чатах.
     """
-    rows: list[list[InlineKeyboardButton]] = []
+    rows: list[list[KeyboardButton]] = [
+        [
+            KeyboardButton(text="О клубе"),
+            KeyboardButton(text="FAQ"),
+        ],
+        [
+            KeyboardButton(text="Бесплатные уроки"),
+            KeyboardButton(text="Мой прогресс"),
+        ],
+        [
+            KeyboardButton(text="Поддержка"),
+            KeyboardButton(text="Правила"),
+        ],
+        [
+            KeyboardButton(text="Записаться на разбор"),
+            KeyboardButton(text="Пройти тест"),
+        ],
+    ]
 
-    # Инфо-блок
-    rows.append([
-        InlineKeyboardButton(text="🌟 О клубе", callback_data="menu:about"),
-        InlineKeyboardButton(text="❓ FAQ", callback_data="menu:faq"),
-    ])
-
-    # Обучение
-    rows.append([
-        InlineKeyboardButton(text="📚 Бесплатные уроки", callback_data="menu:funnel"),
-        InlineKeyboardButton(text="📊 Мой прогресс", callback_data="menu:progress"),
-    ])
-
-    # Профиль/поддержка
-    rows.append([
-        InlineKeyboardButton(text="👤 Профиль", callback_data="menu:profile"),
-        InlineKeyboardButton(text="🆘 Поддержка", callback_data="menu:support"),
-    ])
-
-    # Монетизация
     if has_pay:
-        rows.append([InlineKeyboardButton(text="💳 Продлить доступ", callback_data="menu:pay")])
+        rows.append([KeyboardButton(text="Оплатить доступ")])
 
-    # Разделы участника
-    if is_member:
-        rows.append([
-            InlineKeyboardButton(text="🗂️ Материалы недели", callback_data="menu:weekly"),
-            InlineKeyboardButton(text="📅 Расписание", callback_data="menu:schedule"),
-        ])
-
-    return InlineKeyboardMarkup(inline_keyboard=rows)
+    return ReplyKeyboardMarkup(
+        keyboard=rows,
+        resize_keyboard=True,
+        one_time_keyboard=False,
+        input_field_placeholder="Выберите раздел",
+    )
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Список уроков (карта уроков)
