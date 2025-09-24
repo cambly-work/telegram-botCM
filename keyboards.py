@@ -15,6 +15,7 @@ BACK_TO_LEARNING = "⬅️ К обучению"
 BACK_TO_MATERIALS = "⬅️ К материалам"
 BACK_TO_PROFILE = "⬅️ К профилю"
 BACK_TO_ADMIN = "⬅️ В админку"
+BACK_TO_TEXT_GROUPS = "⬅️ К списку текстов"
 BACK_TO_LESSONS = "⬅️ К списку уроков"
 LESSON_DONE = "✅ Выполнено"
 LESSON_SKIP = "⏭️ Пропустить"
@@ -23,6 +24,7 @@ NEXT_LESSON = "➡️ Следующий урок"
 WRITE_FEEDBACK = "📝 Написать отзыв"
 SKIP_FEEDBACK = "Пропустить отзыв"
 CANCEL_TEXT = "Отмена"
+ADMIN_TEXTS_ENTRY = "📝 Тексты окон"
 
 FEEDBACK_OPTIONS: dict[str, str] = {
     "Отлично": "excellent",
@@ -197,5 +199,23 @@ def admin_settings_keyboard(
     for key, label in labels.items():
         status = "✅" if flags.get(key, True) else "❌"
         rows.append([KeyboardButton(text=f"{status} {label}")])
+    rows.append([KeyboardButton(text=ADMIN_TEXTS_ENTRY)])
+    rows.append([KeyboardButton(text=BACK_TO_ADMIN), KeyboardButton(text=BACK_TO_MAIN)])
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
+
+
+def admin_text_groups_keyboard(group_titles: list[str]) -> ReplyKeyboardMarkup:
+    rows: list[list[KeyboardButton]] = []
+    for title in group_titles:
+        rows.append([KeyboardButton(text=title)])
+    rows.append([KeyboardButton(text=BACK_TO_ADMIN), KeyboardButton(text=BACK_TO_MAIN)])
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
+
+
+def admin_text_items_keyboard(options: list[str]) -> ReplyKeyboardMarkup:
+    rows: list[list[KeyboardButton]] = []
+    for label in options:
+        rows.append([KeyboardButton(text=label)])
+    rows.append([KeyboardButton(text=BACK_TO_TEXT_GROUPS)])
     rows.append([KeyboardButton(text=BACK_TO_ADMIN), KeyboardButton(text=BACK_TO_MAIN)])
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)

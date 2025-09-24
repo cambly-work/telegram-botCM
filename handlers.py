@@ -32,9 +32,12 @@ from keyboards import (
     cancel_keyboard,
     admin_main_keyboard,
     admin_settings_keyboard,
+    admin_text_groups_keyboard,
+    admin_text_items_keyboard,
     BACK_TO_MAIN,
     BACK_TO_LEARNING,
     BACK_TO_ADMIN,
+    BACK_TO_TEXT_GROUPS,
     BACK_TO_LESSONS,
     LESSON_DONE,
     LESSON_SKIP,
@@ -44,6 +47,7 @@ from keyboards import (
     SKIP_FEEDBACK,
     FEEDBACK_OPTIONS,
     CANCEL_TEXT,
+    ADMIN_TEXTS_ENTRY,
 )
 =======
 from keyboards import lesson_keyboard, after_lesson_keyboard, cancel_button
@@ -62,6 +66,16 @@ AT_PRODUCT_ID_CLUB = os.getenv("AT_PRODUCT_ID_CLUB", "")
 CLUB_CHAT_ID = os.getenv("CLUB_CHAT_ID", "")  # ID приватной группы/канала (опц.)
 ADMIN_IDS = os.getenv("ADMIN_IDS", "").split(",") if os.getenv("ADMIN_IDS") else []
 BOT_VERSION = "1.0.0"
+
+
+def is_admin_id(user_id: int | str | None) -> bool:
+    if user_id is None:
+        return False
+    try:
+        uid_str = str(int(user_id))
+    except (ValueError, TypeError):
+        uid_str = str(user_id)
+    return uid_str in ADMIN_IDS
 # ──────────────────────────────────────────────────────────────────────────────
 # Мидлвара для throttling
 # ──────────────────────────────────────────────────────────────────────────────
@@ -112,11 +126,30 @@ def sanitize_html(text: str) -> str:
     
     # Обрабатываем теги
     text = tag_re.sub(replace_tag, text)
-    
+
     # Удаляем все остальные HTML-теги
     text = re.sub(r'<[^>]*>', '', text)
-    
+
     return text
+
+
+def render_content(text: str, **placeholders: str) -> str:
+    """Заменяет плейсхолдеры вида {name} и {{NAME}} на значения."""
+    if not text:
+        return ""
+
+    rendered = text
+    for key, value in placeholders.items():
+        replacement = value or ""
+        tokens = {
+            f"{{{key}}}",
+            f"{{{key.upper()}}}",
+            f"{{{{{key}}}}}",
+            f"{{{{{key.upper()}}}}}",
+        }
+        for token in tokens:
+            rendered = rendered.replace(token, replacement)
+    return rendered
 async def log_admin_action(admin_id: int, action: str, payload: dict = None):
     """Логирование админских действий в admin_log"""
     try:
@@ -224,6 +257,10 @@ class BroadcastStates(StatesGroup):
 class ProfileStates(StatesGroup):
     waiting_email = State()
     waiting_phone = State()
+
+
+class AdminContentStates(StatesGroup):
+    waiting_value = State()
 # ──────────────────────────────────────────────────────────────────────────────
 # Улучшенные клавиатуры
 # ──────────────────────────────────────────────────────────────────────────────
@@ -251,7 +288,65 @@ _PROFILE_STATUS_TITLES: dict[str, str] = {
     "lead_funnel": "Без подписки",
     "member_active": "Активный доступ",
     "member_expired": "Доступ истёк",
+<<<<<<< HEAD
 }
+
+_ADMIN_TEXT_GROUPS: dict[str, list[tuple[str, str]]] = {
+    "🏠 Вход и меню": [
+        ("Приветствие /start", "menu.start"),
+        ("Сообщение после регистрации", "menu.registration_complete"),
+        ("Подсказка главного меню", "menu.prompts.root"),
+        ("Подсказка «Профиль»", "menu.prompts.profile"),
+    ],
+    "ℹ️ Раздел «О клубе»": [
+        ("Подсказка «О клубе»", "menu.prompts.info"),
+        ("Окно «О клубе»", "menu.about"),
+        ("Окно FAQ", "menu.faq"),
+        ("Окно «Правила»", "menu.rules"),
+    ],
+    "🎓 Раздел «Обучение»": [
+        ("Подсказка «Обучение»", "menu.prompts.learning"),
+        ("Окно «Записаться на разбор»", "menu.analysis"),
+        ("Окно «Пройти тест»", "menu.test"),
+        ("Сообщение «Все уроки пройдены»", "menu.funnel.completed"),
+    ],
+    "📦 Раздел «Материалы»": [
+        ("Подсказка «Материалы»", "menu.prompts.materials"),
+        ("Материалы недели (контент)", "weekly_materials"),
+        ("Материалы недели закрыты", "menu.weekly.disabled"),
+        ("Материалы недели без доступа", "menu.weekly.locked"),
+        ("Расписание (контент)", "schedule"),
+        ("Расписание скрыто", "menu.schedule.disabled"),
+        ("Расписание без доступа", "menu.schedule.locked"),
+    ],
+    "💳 Оплата и поддержка": [
+        ("Окно «Оплата»", "menu.pay"),
+        ("Оплата закрыта", "menu.pay.closed"),
+        ("Окно «Поддержка»", "menu.support"),
+    ],
+}
+
+_ADMIN_TEXT_PLACEHOLDERS: dict[str, list[str]] = {
+    "menu.start": ["{name}", "{{NAME}}"],
+    "menu.registration_complete": ["{name}", "{{NAME}}"],
+    "menu.pay": ["{checkout_url}", "{{CHECKOUT_URL}}"],
+    "menu.support": ["{support}", "{{SUPPORT_CONTACT}}"],
+=======
+>>>>>>> main
+}
+
+
+def _admin_text_labels(group_title: str) -> list[str]:
+    entries = _ADMIN_TEXT_GROUPS.get(group_title, [])
+    return [label for label, _ in entries]
+
+
+def _admin_find_text_entry(label: str) -> tuple[Optional[str], Optional[str]]:
+    for group_title, entries in _ADMIN_TEXT_GROUPS.items():
+        for entry_label, key in entries:
+            if entry_label == label:
+                return group_title, key
+    return None, None
 
 
 async def get_bool_setting(key: str, default: bool = True) -> bool:
@@ -652,9 +747,15 @@ async def send_support_section(
     *,
     from_callback: bool = False,
 ) -> None:
-    support_text = (
+    support_template = await get_content(
+        "menu.support",
         "Поддержка.\n\n"
-        f"Если есть вопросы или сложности — пиши сюда: {SUPPORT_CONTACT}. Мы отвечаем лично и максимально быстро."
+        "Если есть вопросы или сложности — пиши сюда: {support}. Мы отвечаем лично и максимально быстро.",
+    )
+    support_text = render_content(
+        support_template,
+        support=SUPPORT_CONTACT,
+        SUPPORT_CONTACT=SUPPORT_CONTACT,
     )
 
     await answer_with_main_menu(
@@ -965,12 +1066,17 @@ async def send_pay_section(
         return
 
     url = f"https://antitraining.example/checkout/{AT_PRODUCT_ID_CLUB}"
-    pay_text = await get_content(
+    pay_template = await get_content(
         "menu.pay",
         "Доступ в клуб CODE: Магнетизм.\n\n"
         "Тариф: Полный доступ — 2690₽ (единовременно).\n\n"
-        f"Ссылка на оплату: {url}\n\n"
+        "Ссылка на оплату: {checkout_url}\n\n"
         "После оплаты бот автоматически активирует доступ.",
+    )
+    pay_text = render_content(
+        pay_template,
+        checkout_url=url,
+        CHECKOUT_URL=url,
     )
 
     await answer_with_main_menu(
@@ -1065,10 +1171,36 @@ async def send_admin_settings(
         f"Окно оплаты: {'открыто' if flags.get('payments_open', True) else 'закрыто'}\n"
         f"Материалы недели: {'доступны' if flags.get('show_weekly_materials', True) else 'скрыты'}\n"
         f"Расписание: {'показывается' if flags.get('show_schedule', True) else 'скрыто'}\n\n"
-        "Используй кнопки ниже, чтобы включать и выключать опции мгновенно."
+        "Используй кнопки ниже, чтобы включать и выключать опции или перейти к редактору текстов."
     )
     keyboard = admin_settings_keyboard(flags, _ADMIN_SETTINGS_LABELS)
 
+    await message.answer(text, reply_markup=keyboard)
+
+
+async def send_admin_text_groups(message: types.Message) -> None:
+    text = (
+        "Редактор текстов бота\n\n"
+        "Выбери раздел, в котором нужно изменить тексты."
+    )
+    keyboard = admin_text_groups_keyboard(list(_ADMIN_TEXT_GROUPS.keys()))
+    await message.answer(text, reply_markup=keyboard)
+
+
+async def send_admin_text_items(message: types.Message, group_title: str) -> None:
+    labels = _admin_text_labels(group_title)
+    if not labels:
+        await message.answer(
+            "В этой группе пока нет текстов. Выбери другой раздел.",
+            reply_markup=admin_text_groups_keyboard(list(_ADMIN_TEXT_GROUPS.keys())),
+        )
+        return
+
+    text = (
+        f"Группа «{group_title}».\n\n"
+        "Выбери текст, который нужно обновить."
+    )
+    keyboard = admin_text_items_keyboard(labels)
     await message.answer(text, reply_markup=keyboard)
 
 =======
@@ -1449,10 +1581,23 @@ async def on_start(message: types.Message, state: FSMContext):
     is_admin = str(message.from_user.id) in ADMIN_IDS
     kb = await build_menu_keyboard(user=user, is_admin=is_admin, section="root")
     
-    welcome_text = (
-        "Добро пожаловать в CODE: Магнетизм. Это пространство для развития и перемен. Выбери раздел в меню, чтобы начать."
+    welcome_template = await get_content(
+        "menu.start",
+        "Добро пожаловать в CODE: Магнетизм. Это пространство для развития и перемен. Выбери раздел в меню, чтобы начать, {name}!",
     )
-    
+    display_name = (
+        user.get("name")
+        or user.get("full_name")
+        or message.from_user.full_name
+        or message.from_user.first_name
+        or "друг"
+    )
+    welcome_text = render_content(
+        welcome_template,
+        name=display_name,
+        NAME=display_name,
+    )
+
     async with ChatActionSender.typing(chat_id=message.chat.id, bot=message.bot):
         await asyncio.sleep(0.15)
         await message.answer(welcome_text, reply_markup=kb)
@@ -1519,16 +1664,28 @@ async def registration_receive_phone(message: types.Message, state: FSMContext):
     # Показываем главное меню
     kb = await build_menu_keyboard(user=user, is_admin=is_admin, section="root")
     
-    welcome_text = (
-        f"Регистрация завершена, {user.get('name')}!\n\n"
-        "Теперь тебе доступно:\n"
-        "- Бесплатные уроки\n"
-        "- Доступ в клуб\n"
-        "- Отслеживание прогресса\n\n"
-        "Выбирай в меню и начинай."
+    completion_template = await get_content(
+        "menu.registration_complete",
+        "Регистрация завершена, {name}!\n\nТеперь тебе доступно:\n- Бесплатные уроки\n- Доступ в клуб\n- Отслеживание прогресса\n\nВыбирай в меню и начинай.",
+    )
+    display_name = (
+        user.get("name")
+        or user.get("full_name")
+        or message.from_user.full_name
+        or message.from_user.first_name
+        or "друг"
+    )
+    completion_text = render_content(
+        completion_template,
+        name=display_name,
+        NAME=display_name,
     )
 
+<<<<<<< HEAD
+    await message.answer(completion_text, reply_markup=kb)
+=======
     await message.answer(welcome_text, reply_markup=kb)
+>>>>>>> main
 
 # Fallback — если не матчится ни на один хэндлер (и не мешаем FSM)
 @router.message(
@@ -1539,9 +1696,16 @@ async def registration_receive_phone(message: types.Message, state: FSMContext):
 )
 async def fallback(message: types.Message, state: FSMContext):
     cur = await state.get_state()
-    if cur in (HWStates.waiting_answer, HWStates.waiting_feedback,
-                RegistrationStates.waiting_name, RegistrationStates.waiting_email, RegistrationStates.waiting_phone,
-                ProfileStates.waiting_email, ProfileStates.waiting_phone):
+    if cur in (
+        HWStates.waiting_answer,
+        HWStates.waiting_feedback,
+        RegistrationStates.waiting_name,
+        RegistrationStates.waiting_email,
+        RegistrationStates.waiting_phone,
+        ProfileStates.waiting_email,
+        ProfileStates.waiting_phone,
+        AdminContentStates.waiting_value,
+    ):
         return
     await message.answer("Используй кнопки меню ниже. Если клавиатура пропала — набери /start.")
 # ──────────────────────────────────────────────────────────────────────────────
@@ -2449,9 +2613,26 @@ async def cancel_handler(message: types.Message, state: FSMContext):
     current_state = await state.get_state()
     if not current_state:
         return
+    data = await state.get_data()
     await state.clear()
 <<<<<<< HEAD
     user, is_admin = await _get_user_and_admin(message)
+
+    if current_state == AdminContentStates.waiting_value.state and is_admin:
+        group_title = (data or {}).get("content_group")
+        if group_title and group_title in _ADMIN_TEXT_GROUPS:
+            await message.answer(
+                "Редактирование отменено. Выбери текст для изменения или вернись назад.",
+                reply_markup=admin_text_items_keyboard(_admin_text_labels(group_title)),
+            )
+            return
+
+        await message.answer(
+            "Редактирование отменено. Можно выбрать другой текст или вернуться в админку.",
+            reply_markup=admin_text_groups_keyboard(list(_ADMIN_TEXT_GROUPS.keys())),
+        )
+        return
+
     kb = await build_menu_keyboard(user=user, is_admin=is_admin, section="root")
     await message.answer("Действие отменено. Возвращаюсь в главное меню...", reply_markup=kb)
 
@@ -2475,6 +2656,117 @@ def _admin_toggle_key_from_text(text: str | None) -> str | None:
 @router.message(F.text == "Управление пользователями")
 async def admin_users_help(message: types.Message):
     if not is_admin_id(message.from_user.id):
+        return
+    text = (
+        "Управление пользователями\n\n"
+        "Команды:\n"
+        "/admin user <code>username или tg_id</code> — информация о пользователе\n"
+        "/admin set_paid <code>username</code> [days или YYYY-MM-DD] — установить оплату\n"
+        "/admin bind <code>username или tg_id</code> email=<code>email</code> phone=<code>phone</code> — привязать контакты\n"
+        "/admin access <code>username</code> [revoke или status] — управление доступом"
+    )
+    await message.answer(text, reply_markup=admin_main_keyboard())
+
+
+@router.message(F.text == "Рассылка")
+async def admin_broadcast_help(message: types.Message):
+    if not is_admin_id(message.from_user.id):
+        return
+    text = (
+        "Рассылка\n\n"
+        "Команда:\n"
+        "/broadcast <code>segment</code> [--html] — рассылка пользователям\n\n"
+        "Сегменты: all, lead_funnel, member_active, member_expired, expired"
+    )
+    await message.answer(text, reply_markup=admin_main_keyboard())
+
+
+@router.message(F.text == "Управление контентом")
+async def admin_content_help(message: types.Message):
+    if not is_admin_id(message.from_user.id):
+        return
+    text = (
+        "Управление контентом\n\n"
+        "/content_keys — показать ключи\n"
+        "/content_get <code>key</code> — показать текст\n"
+        "/content_set <code>key</code> — сохранить текст (ответом)"
+    )
+    await message.answer(text, reply_markup=admin_main_keyboard())
+
+
+@router.message(F.text == "Статистика")
+async def admin_stats(message: types.Message):
+    if not is_admin_id(message.from_user.id):
+        return
+    users_count = (await fetchrow("SELECT COUNT(*) as count FROM users"))["count"]
+    active_users = (await fetchrow("SELECT COUNT(*) as count FROM users WHERE status='member_active' AND access_until > NOW()"))["count"]
+    lessons_completed = (await fetchrow("SELECT COUNT(*) as count FROM funnel_progress WHERE hw_status='submitted'"))["count"]
+    feedback_count = (await fetchrow("SELECT COUNT(*) as count FROM lesson_feedback"))["count"]
+    stats_text = (
+        f"Статистика\n\n"
+        f"Всего пользователей: {users_count}\n"
+        f"Активных участниц: {active_users}\n"
+        f"Выполнено уроков: {lessons_completed}\n"
+        f"Оставлено отзывов: {feedback_count}"
+    )
+    await message.answer(stats_text, reply_markup=admin_main_keyboard())
+
+
+@router.message(F.text == "Диагностика")
+async def admin_debug(message: types.Message):
+    if not is_admin_id(message.from_user.id):
+        return
+    config_text = (
+        "Конфигурация бота\n\n"
+        f"Версия: {BOT_VERSION}\n"
+        f"Часовой пояс: {BOT_TIMEZONE}\n"
+        f"Поддержка: {SUPPORT_CONTACT}\n"
+        f"Продукт ID: {AT_PRODUCT_ID_CLUB or 'Не задан'}\n"
+        f"Чат клуба: {CLUB_CHAT_ID or 'Не задан'}"
+    )
+    await message.answer(config_text, reply_markup=admin_main_keyboard())
+
+
+@router.message(F.text == "Тонкие настройки")
+async def admin_settings_menu(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+    await _reset_state_if_needed(state)
+    await send_admin_settings(message)
+
+
+@router.message(F.text == ADMIN_TEXTS_ENTRY)
+async def admin_texts_entry(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+    await _reset_state_if_needed(state)
+    await send_admin_text_groups(message)
+
+
+@router.message(F.text == BACK_TO_TEXT_GROUPS)
+async def admin_texts_back_to_groups(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+    await _reset_state_if_needed(state)
+    await send_admin_text_groups(message)
+
+
+@router.message(F.text.func(lambda text: text in _ADMIN_TEXT_GROUPS))
+async def admin_texts_open_group(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+    await _reset_state_if_needed(state)
+    await send_admin_text_items(message, message.text)
+
+
+@router.message(F.text.func(lambda text: _admin_find_text_entry(text or "")[1] is not None))
+async def admin_texts_edit_prompt(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+
+    group_title, key = _admin_find_text_entry(message.text or "")
+    if not key:
+        return
 =======
     text = "Действие отменено\n\n"
     
@@ -2697,6 +2989,102 @@ async def cb_admin_actions(cb: types.CallbackQuery, state: FSMContext):
     
     await cb.answer()
 >>>>>>> main
+
+    await _reset_state_if_needed(state)
+    await state.set_state(AdminContentStates.waiting_value)
+    await state.update_data(content_key=key, content_group=group_title, content_label=message.text)
+
+    current_text = await get_content(key, default="")
+    preview = current_text if len(current_text) <= 1500 else current_text[:1500] + "…"
+
+    placeholders = _ADMIN_TEXT_PLACEHOLDERS.get(key, [])
+    placeholders_line = ""
+    if placeholders:
+        placeholders_line = "Плейсхолдеры: " + ", ".join(
+            f"<code>{html.escape(token)}</code>" for token in placeholders
+        )
+
+    text_lines = [
+        f"<b>Редактирование текста:</b> {html.escape(message.text or key)}",
+        "",
+        "<b>Текущий текст:</b>",
+        html.escape(preview) if preview else "(пусто)",
+        "",
+        "Отправь новый текст одним сообщением.",
+        "Допустимы теги: &lt;b&gt;, &lt;i&gt;, &lt;u&gt;, &lt;strong&gt;, &lt;em&gt;, &lt;code&gt;, &lt;a href=&quot;...&quot;&gt;ссылка&lt;/a&gt;.",
+    ]
+
+    if placeholders_line:
+        text_lines.extend(["", placeholders_line])
+
+    text_lines.append("\nДля отмены нажми «Отмена».")
+
+    await message.answer(
+        "\n".join(text_lines),
+        reply_markup=cancel_keyboard(),
+        parse_mode="HTML",
+        disable_web_page_preview=True,
+    )
+
+
+@router.message(AdminContentStates.waiting_value, F.text.len() > 0)
+async def admin_texts_receive_value(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        await state.clear()
+        return
+
+    data = await state.get_data()
+    key = data.get("content_key")
+    label = data.get("content_label") or key
+    group_title = data.get("content_group")
+
+    if not key:
+        await state.clear()
+        await message.answer("Не удалось определить, какой текст обновить. Попробуй ещё раз.")
+        return
+
+    new_text = message.text.strip()
+    await set_content_value(key, new_text)
+    await log_admin_action(
+        message.from_user.id,
+        "content_set_menu",
+        {"key": key, "length": len(new_text)},
+    )
+
+    await message.answer(
+        f"Текст «{label}» обновлён ✅",
+        reply_markup=admin_text_groups_keyboard(list(_ADMIN_TEXT_GROUPS.keys())),
+    )
+
+    await state.clear()
+
+    if group_title:
+        await send_admin_text_items(message, group_title)
+    else:
+        await send_admin_text_groups(message)
+
+
+@router.message(F.text == BACK_TO_ADMIN)
+async def admin_back(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+    await _reset_state_if_needed(state)
+    await send_admin_menu(message)
+
+
+@router.message(F.text.func(lambda text: _admin_toggle_key_from_text(text) is not None))
+async def admin_toggle_settings(message: types.Message):
+    if not is_admin_id(message.from_user.id):
+        return
+    key = _admin_toggle_key_from_text(message.text)
+    if not key:
+        return
+    current = await get_bool_setting(key, _ADMIN_SETTINGS_DEFAULTS[key])
+    new_value = not current
+    await set_bool_setting(key, new_value)
+    await log_admin_action(message.from_user.id, "toggle_setting", {"key": key, "value": new_value})
+    await send_admin_settings(message)
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Админка: доступ/помощь
