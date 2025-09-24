@@ -53,6 +53,10 @@
 | `ADMIN_IDS` | CSV-список Telegram ID администраторов |
 | `PUBLIC_BASE_URL` | Публичный URL, по которому Telegram обращается к вебхуку |
 | `WEBHOOK_SECRET` | Секрет для ручного управления вебхуком и админ-эндпоинтов |
+| `NGROK_AUTOFETCH` | Если `1/true` — автоматически подтянуть `PUBLIC_BASE_URL` из ngrok |
+| `NGROK_API_URL` | Endpoint ngrok, возвращающий список туннелей (например, `http://ngrok:4040/api/tunnels`) |
+| `NGROK_API_TOKEN` | Токен API ngrok (нужен для облачного API `https://api.ngrok.com`) |
+| `NGROK_TUNNEL_NAME` | Фильтр по имени/URL туннеля ngrok, если их несколько |
 | `DB_DSN` | Строка подключения к PostgreSQL (для Docker — `postgres`) |
 | `BOT_TIMEZONE` | Таймзона планировщика уроков |
 | `TIME_SEND_LESSONS` | Локальное время запуска рассылки уроков |
