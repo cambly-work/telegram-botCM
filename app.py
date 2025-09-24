@@ -6,6 +6,8 @@ import json
 import logging
 import os
 import re
+import urllib.error
+import urllib.request
 from typing import Optional, Any, Dict, List
 from contextlib import asynccontextmanager
 from pprint import pformat
@@ -34,7 +36,138 @@ def _env_flag(name: str, default: str = "0") -> bool:
 
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
-PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "https://example.com").rstrip("/")
+NGROK_AUTOFETCH = _env_flag("NGROK_AUTOFETCH")
+NGROK_API_URL = os.getenv("NGROK_API_URL", "").strip()
+NGROK_API_TOKEN = os.getenv("NGROK_API_TOKEN", "").strip()
+NGROK_TUNNEL_NAME = os.getenv("NGROK_TUNNEL_NAME", "").strip()
+
+
+def _fetch_ngrok_public_url(api_url: str, api_token: str, tunnel_name: str) -> Optional[str]:
+    """Получить публичный URL активного туннеля ngrok"""
+    logger_ngrok = logging.getLogger("code-magnetism")
+
+    api_url = (api_url or "").strip()
+    if not api_url:
+        logger_ngrok.warning("Ngrok autofetch enabled but NGROK_API_URL is not set")
+        return None
+
+    endpoint = api_url.rstrip("/")
+
+    try:
+        request = urllib.request.Request(endpoint)
+        request.add_header("User-Agent", "code-magnetism-bot/1.0")
+
+        if api_token:
+            request.add_header("Authorization", f"Bearer {api_token}")
+            request.add_header("Ngrok-Version", "2")
+
+        with urllib.request.urlopen(request, timeout=10) as response:
+            raw = response.read()
+    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError) as exc:
+        logger_ngrok.warning("Failed to fetch ngrok data from %s: %s", endpoint, exc)
+        return None
+    except Exception as exc:  # noqa: BLE001 — хотим логировать любую ошибку
+        logger_ngrok.warning("Unexpected error fetching ngrok data from %s: %s", endpoint, exc)
+        return None
+
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except Exception as exc:  # noqa: BLE001 — чтобы не падать из-за формата ответа
+        logger_ngrok.warning("Failed to decode ngrok response from %s: %s", endpoint, exc)
+        return None
+
+    entries: List[Dict[str, Any]] = []
+    if isinstance(payload, dict):
+        tunnels = payload.get("tunnels")
+        endpoints = payload.get("endpoints")
+
+        if isinstance(tunnels, list):
+            entries = [t for t in tunnels if isinstance(t, dict)]
+        elif isinstance(endpoints, list):
+            entries = [e for e in endpoints if isinstance(e, dict)]
+
+    if not entries:
+        logger_ngrok.warning("Ngrok response from %s did not include tunnels/endpoints", endpoint)
+        return None
+
+    candidates: List[str] = []
+    for entry in entries:
+        url = entry.get("public_url")
+
+        if not url:
+            proto = entry.get("proto") or entry.get("scheme")
+            hostport = entry.get("hostport")
+            if proto and hostport:
+                url = f"{proto}://{hostport}"
+
+        if not url:
+            continue
+
+        if tunnel_name:
+            identifiers = [
+                entry.get("name"),
+                entry.get("id"),
+                entry.get("domain"),
+                entry.get("forwards_to"),
+            ]
+
+            match = tunnel_name in url
+            if not match:
+                for ident in identifiers:
+                    if ident and tunnel_name in str(ident):
+                        match = True
+                        break
+
+            if not match:
+                continue
+
+        candidates.append(url)
+
+    if not candidates:
+        if tunnel_name:
+            logger_ngrok.warning("Ngrok public URL not found for tunnel '%s'", tunnel_name)
+        else:
+            logger_ngrok.warning("Ngrok response did not contain usable public URLs")
+        return None
+
+    candidates.sort(key=lambda value: (0 if value.startswith("https://") else 1, value))
+    return candidates[0]
+
+
+def _resolve_public_base_url(
+    env_value: str,
+    autofetch: bool,
+    api_url: str,
+    api_token: str,
+    tunnel_name: str,
+) -> tuple[str, str, bool]:
+    """Выбрать PUBLIC_BASE_URL с учётом автоподстановки ngrok"""
+
+    env_value = (env_value or "").strip()
+
+    fallback_url = "https://example.com"
+    fallback_source = "default"
+    if env_value and env_value.lower() not in {"auto", "ngrok"}:
+        fallback_url = env_value
+        fallback_source = "env"
+
+    prefer_ngrok = autofetch or env_value.lower() in {"", "auto", "ngrok"}
+    if prefer_ngrok:
+        ngrok_url = _fetch_ngrok_public_url(api_url, api_token, tunnel_name)
+        if ngrok_url:
+            return ngrok_url.rstrip("/"), "ngrok", True
+
+    return fallback_url.rstrip("/"), fallback_source, prefer_ngrok
+
+
+PUBLIC_BASE_URL, PUBLIC_BASE_URL_SOURCE, NGROK_FETCH_ATTEMPTED = _resolve_public_base_url(
+    os.getenv("PUBLIC_BASE_URL", ""),
+    NGROK_AUTOFETCH,
+    NGROK_API_URL,
+    NGROK_API_TOKEN,
+    NGROK_TUNNEL_NAME,
+)
+NGROK_FETCH_SUCCEEDED = PUBLIC_BASE_URL_SOURCE == "ngrok"
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "change_me")
 
 DB_DSN = os.getenv("DB_DSN", "postgresql://magnet:magnet_pwd@localhost:5432/magnetism")
@@ -85,6 +218,13 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger("code-magnetism")
+
+logger.info("PUBLIC_BASE_URL resolved (%s): %s", PUBLIC_BASE_URL_SOURCE, PUBLIC_BASE_URL)
+if NGROK_FETCH_ATTEMPTED and not NGROK_FETCH_SUCCEEDED:
+    logger.warning(
+        "Ngrok autofetch requested but failed; using %s URL instead",
+        PUBLIC_BASE_URL_SOURCE,
+    )
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Локальные модули
@@ -352,12 +492,20 @@ async def debug_config(secret: Optional[str] = None) -> dict:
     
     return {
         "PUBLIC_BASE_URL": PUBLIC_BASE_URL,
+        "PUBLIC_BASE_URL_source": PUBLIC_BASE_URL_SOURCE,
         "BOT_TIMEZONE": BOT_TIMEZONE,
         "TIME_SEND_LESSONS": TIME_SEND_LESSONS,
         "CLUB_CHAT_ID_present": bool(_club_chat_id_as_int()),
         "ADMIN_IDS": list(ADMIN_IDS),
         "MAX_RETRIES": MAX_RETRIES,
         "RETRY_DELAY": RETRY_DELAY,
+        "NGROK": {
+            "autofetch": NGROK_AUTOFETCH,
+            "fetch_attempted": NGROK_FETCH_ATTEMPTED,
+            "fetch_succeeded": NGROK_FETCH_SUCCEEDED,
+            "api_url_present": bool(NGROK_API_URL),
+            "tunnel_name": NGROK_TUNNEL_NAME,
+        },
     }
 
 
