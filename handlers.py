@@ -7,7 +7,7 @@ import logging
 import time
 import html
 from datetime import datetime, timedelta, timezone
-from typing import Optional, Iterable, Dict, List
+from typing import Optional, Iterable, Dict, List, Callable, Awaitable
 from aiogram import Router, F, types
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
@@ -204,6 +204,7 @@ class ProfileStates(StatesGroup):
 # ──────────────────────────────────────────────────────────────────────────────
 # Улучшенные клавиатуры
 # ──────────────────────────────────────────────────────────────────────────────
+<<<<<<< HEAD
 _MAIN_MENU_BASE_BUTTONS: list[list[tuple[str, str]]] = [
     [("О клубе", "about"), ("FAQ", "faq")],
     [("Бесплатные уроки", "funnel"), ("Мой прогресс", "progress")],
@@ -228,6 +229,36 @@ def create_main_menu_keyboard(
     """Создает клавиатуру главного меню, закреплённую под строкой ввода."""
     keyboard_layout: list[list[tuple[str, str]]] = list(_MAIN_MENU_BASE_BUTTONS)
 
+=======
+def create_main_menu_keyboard(is_member: bool = False, has_pay: bool = False, is_admin: bool = False) -> types.InlineKeyboardMarkup:
+    """Создает улучшенную клавиатуру главного меню с разделами"""
+    keyboard = [
+        [
+            types.InlineKeyboardButton(text="О клубе", callback_data="menu:about"),
+            types.InlineKeyboardButton(text="FAQ", callback_data="menu:faq"),
+        ],
+        [
+            types.InlineKeyboardButton(text="Бесплатные уроки", callback_data="menu:funnel"),
+            types.InlineKeyboardButton(text="Мой прогресс", callback_data="menu:progress"),
+        ],
+        [
+            types.InlineKeyboardButton(text="Поддержка", callback_data="menu:support"),
+            types.InlineKeyboardButton(text="Правила", callback_data="menu:rules")
+        ],
+        [
+            types.InlineKeyboardButton(text="Записаться на разбор", callback_data="menu:analysis"),
+            types.InlineKeyboardButton(text="Пройти тест", callback_data="menu:test")
+        ],
+    ]
+
+    if is_member:
+        keyboard.append([
+            types.InlineKeyboardButton(text="Материалы недели", callback_data="menu:weekly"),
+            types.InlineKeyboardButton(text="Расписание", callback_data="menu:schedule"),
+        ])
+
+    # Если есть оплата, добавляем кнопку оплаты
+>>>>>>> 2be8e6bb6e45e114546ed97c1247d4a8055b5546
     if has_pay:
         keyboard_layout.append([_PAY_MENU_BUTTON])
 
@@ -584,6 +615,267 @@ def create_feedback_keyboard(lesson_num: int) -> types.InlineKeyboardMarkup:
             [types.InlineKeyboardButton(text="Пропустить", callback_data=f"feedback:skip:{lesson_num}")]
         ]
     )
+
+
+_MAIN_MENU_BASE_BUTTONS: List[str] = [
+    "О клубе",
+    "FAQ",
+    "Бесплатные уроки",
+    "Мой прогресс",
+    "Поддержка",
+    "Правила",
+    "Записаться на разбор",
+    "Пройти тест",
+    "Оплатить доступ",
+    "Материалы недели",
+    "Расписание",
+]
+
+
+async def answer_with_main_menu(
+    message: types.Message,
+    text: str,
+    user: Optional[dict] = None,
+    reply_markup: Optional[types.InlineKeyboardMarkup] = None,
+) -> None:
+    """Отвечает сообщением и прикрепляет актуальное главное меню."""
+
+    user_row = user or await get_user_with_id(message.from_user.id)
+    is_admin = str(message.from_user.id) in ADMIN_IDS
+
+    if reply_markup is None:
+        menu_kb = create_main_menu_keyboard(
+            is_member=await is_member(user_row) if user_row else False,
+            has_pay=bool(AT_PRODUCT_ID_CLUB),
+            is_admin=is_admin,
+        )
+    else:
+        menu_kb = reply_markup
+
+    await message.answer(text, reply_markup=menu_kb)
+
+
+async def send_about_section(message: types.Message, user: Optional[dict] = None) -> None:
+    about_text = await get_content(
+        "menu.about",
+        "CODE: Магнетизм — закрытое пространство для тех, кто хочет:\n\n",
+        "- Управлять вниманием, мыслями и эмоциями\n",
+        "- Укрепить уверенность и личный магнетизм\n",
+        "- Изменить сценарии в отношениях и деньгах\n\n",
+        "Внутри тебя ждут:\n",
+        "- Подкасты и практики\n",
+        "- Челленджи и разборы\n",
+        "- Структурная система развития\n\n",
+        "Готова присоединиться? Оформи доступ в меню.",
+    )
+    await answer_with_main_menu(message, about_text, user)
+
+
+async def send_faq_section(message: types.Message, user: Optional[dict] = None) -> None:
+    faq_text = await get_content(
+        "menu.faq",
+        "FAQ.\n\n",
+        "Как получить доступ? — Оформи участие в разделе «Оплата».\n\n",
+        "Как проходят уроки? — Видеоуроки + практики, доступ через меню.\n\n",
+        "Как задать вопрос? — Кнопка «Вопрос» в уроке или " + SUPPORT_CONTACT + ".\n\n",
+        "Как продлить доступ? — Раздел «Оплата».",
+    )
+    await answer_with_main_menu(message, faq_text, user)
+
+
+async def send_pay_section(message: types.Message, user: Optional[dict] = None) -> None:
+    if not AT_PRODUCT_ID_CLUB:
+        await answer_with_main_menu(message, "Сейчас доступ в клуб бесплатный.", user)
+        return
+
+    url = f"https://antitraining.example/checkout/{AT_PRODUCT_ID_CLUB}"
+    pay_text = await get_content(
+        "menu.pay",
+        "Доступ в клуб CODE: Магнетизм.\n\n",
+        "Тариф: Полный доступ — 2690₽ (единовременно).\n\n",
+        f"Ссылка на оплату: {url}\n\n",
+        "После оплаты бот автоматически активирует доступ.",
+    )
+    await answer_with_main_menu(message, pay_text, user)
+
+
+async def send_free_lessons_section(message: types.Message, user: Optional[dict] = None) -> None:
+    user_row = user or await get_user_with_id(message.from_user.id)
+    if not user_row:
+        user_row = await ensure_user(message.from_user)
+
+    if not user_row:
+        await answer_with_main_menu(message, "Перезапусти /start", user_row)
+        return
+
+    next_lesson = await next_lesson_to_deliver(user_row["id"])
+
+    if next_lesson == 5:
+        completed_text = await get_content(
+            "menu.funnel.completed",
+            "Все уроки пройдены.\n\n",
+            "Дальше — клуб CODE: Магнетизм: углублённые практики, сообщество, живые эфиры.",
+        )
+        await answer_with_main_menu(message, completed_text, user_row)
+        return
+
+    access_text = (
+        "Уроки CODE: Магнетизм.\n\n"
+        "Выбери доступ:\n\n"
+        "Бесплатно: 4 базовых урока + задания.\n\n"
+        "Платно: весь курс + практики, материалы и клуб."
+    )
+
+    await answer_with_main_menu(
+        message,
+        access_text,
+        user_row,
+        reply_markup=create_access_type_keyboard(),
+    )
+
+
+async def send_progress_section(message: types.Message, user: Optional[dict] = None) -> None:
+    user_row = user or await get_user_with_id(message.from_user.id)
+
+    if not user_row:
+        await answer_with_main_menu(message, "Перезапусти /start", user_row)
+        return
+
+    rows = await fetch(
+        "SELECT lesson_num, hw_status FROM funnel_progress WHERE user_id=$1 ORDER BY lesson_num",
+        user_row["id"],
+    )
+
+    status_map = {r["lesson_num"]: r["hw_status"] for r in rows} if rows else {}
+
+    progress_text = "Мой прогресс.\n\n"
+
+    for i in range(1, 5):
+        st = status_map.get(i, "—")
+        status_text = {
+            "submitted": "Выполнено",
+            "skipped": "Пропущено",
+            "pending": "В процессе",
+        }.get(st, "Не начато")
+
+        lesson_titles = {
+            1: "Внимание",
+            2: "Мысли",
+            3: "Слова",
+            4: "Эмоции",
+        }
+
+        progress_text += f"Урок {i}: {lesson_titles.get(i, f'Урок {i}')} — {status_text}\n"
+
+    completed = sum(1 for st in status_map.values() if st == "submitted")
+    if completed == 0:
+        progress_text += "\nНачни с первого урока."
+    elif completed < 4:
+        progress_text += f"\nПройдено {completed} из 4 уроков."
+    else:
+        progress_text += "\nВсе уроки завершены. Пора на следующий уровень."
+
+    await answer_with_main_menu(message, progress_text, user_row)
+
+
+async def send_support_section(message: types.Message, user: Optional[dict] = None) -> None:
+    support_text = (
+        "Поддержка.\n\n"
+        f"Если есть вопросы или сложности — пиши сюда: {SUPPORT_CONTACT}. Мы отвечаем лично и максимально быстро."
+    )
+    await answer_with_main_menu(message, support_text, user)
+
+
+async def send_rules_section(message: types.Message, user: Optional[dict] = None) -> None:
+    rules_text = await get_content(
+        "menu.rules",
+        "Правила CODE: Магнетизм.\n\n",
+        "1. Уважение к участникам.\n",
+        "2. Только полезный контент.\n",
+        "3. Без спама и рекламы.\n",
+        "4. Конфиденциальность.\n",
+        "5. Без оскорблений и дискриминации.\n\n",
+        "Нарушение = блокировка доступа.",
+    )
+    await answer_with_main_menu(message, rules_text, user)
+
+
+async def send_analysis_section(message: types.Message, user: Optional[dict] = None) -> None:
+    analysis_text = await get_content(
+        "menu.analysis",
+        "Персональный разбор.\n\n",
+        "Заполни форму → мы назначим время.\n\n",
+        "https://forms.example.com/analysis",
+    )
+    await answer_with_main_menu(message, analysis_text, user)
+
+
+async def send_test_section(message: types.Message, user: Optional[dict] = None) -> None:
+    test_text = await get_content(
+        "menu.test",
+        "Тест: определение уровня.\n\n",
+        "Ссылка: https://forms.example.com/test\n\n",
+        "После теста ты получишь анализ, рекомендации и сможешь записаться на разбор.",
+    )
+    await answer_with_main_menu(message, test_text, user)
+
+
+async def send_weekly_materials_section(message: types.Message, user: Optional[dict] = None) -> None:
+    user_row = user or await get_user_with_id(message.from_user.id)
+
+    if not user_row or not await is_member(user_row):
+        locked_text = await get_content(
+            "menu.weekly.locked",
+            "Материалы недели доступны участницам клуба.\n\nОформи доступ в разделе «Оплатить доступ», и бот пришлёт ссылку.",
+        )
+        await answer_with_main_menu(message, locked_text, user_row)
+        return
+
+    weekly_text = await get_content(
+        "weekly_materials",
+        "📚 Материалы недели:\n"
+        "• Подкаст: [ссылка]\n"
+        "• Практика: [ссылка]\n"
+        "• Челлендж: [описание]\n"
+        "• Дневник: [шаблон]",
+    )
+    await answer_with_main_menu(message, weekly_text, user_row)
+
+
+async def send_schedule_section(message: types.Message, user: Optional[dict] = None) -> None:
+    user_row = user or await get_user_with_id(message.from_user.id)
+
+    if not user_row or not await is_member(user_row):
+        locked_text = await get_content(
+            "menu.schedule.locked",
+            "Расписание доступно участницам клуба.\n\nАктивируй доступ — и бот пришлёт ближайшие эфиры.",
+        )
+        await answer_with_main_menu(message, locked_text, user_row)
+        return
+
+    schedule_text = await get_content(
+        "schedule",
+        "🗓️ Расписание эфиров:\n"
+        "• Понедельник 20:00 — Вводный эфир\n"
+        "• Четверг 19:00 — Практика в группе\n"
+        "• Воскресенье 18:00 — Подведение итогов",
+    )
+    await answer_with_main_menu(message, schedule_text, user_row)
+
+
+MAIN_MENU_ACTIONS: Dict[str, Callable[[types.Message, Optional[dict]], Awaitable[None]]] = {
+    "О клубе": send_about_section,
+    "FAQ": send_faq_section,
+    "Бесплатные уроки": send_free_lessons_section,
+    "Мой прогресс": send_progress_section,
+    "Поддержка": send_support_section,
+    "Правила": send_rules_section,
+    "Записаться на разбор": send_analysis_section,
+    "Пройти тест": send_test_section,
+    "Оплатить доступ": send_pay_section,
+    "Материалы недели": send_weekly_materials_section,
+    "Расписание": send_schedule_section,
+}
 # ──────────────────────────────────────────────────────────────────────────────
 # Утилиты/бизнес-логика
 # ──────────────────────────────────────────────────────────────────────────────
@@ -893,6 +1185,7 @@ async def registration_receive_phone(message: types.Message, state: FSMContext):
 
     await message.answer(welcome_text, reply_markup=kb)
 
+<<<<<<< HEAD
 # Обработка нажатий по кнопкам реплай-клавиатуры главного меню
 @router.message(F.text.func(lambda text: text and text.casefold() in MAIN_MENU_ACTIONS))
 async def handle_main_menu_buttons(message: types.Message):
@@ -932,6 +1225,39 @@ async def handle_main_menu_buttons(message: types.Message):
             await send_admin_menu(message)
         else:
             await message.answer("Доступ запрещен.")
+=======
+
+@router.message(
+    ~F.via_bot,
+    F.text.in_(tuple(MAIN_MENU_ACTIONS.keys())),
+)
+async def handle_main_menu_buttons(message: types.Message, state: FSMContext) -> None:
+    """Обработка текстовых кнопок главного меню."""
+
+    current_state = await state.get_state()
+    if current_state in (
+        HWStates.waiting_answer,
+        HWStates.waiting_feedback,
+        RegistrationStates.waiting_name,
+        RegistrationStates.waiting_email,
+        RegistrationStates.waiting_phone,
+        ProfileStates.waiting_email,
+        ProfileStates.waiting_phone,
+    ):
+        return
+
+    text = (message.text or "").strip()
+    handler = MAIN_MENU_ACTIONS.get(text)
+    if not handler:
+        return
+
+    user = await get_user_with_id(message.from_user.id)
+    if not user:
+        user = await ensure_user(message.from_user)
+
+    await handler(message, user)
+
+>>>>>>> 2be8e6bb6e45e114546ed97c1247d4a8055b5546
 
 # Fallback — если не матчится ни на один хэндлер (и не мешаем FSM)
 @router.message(
@@ -1306,7 +1632,99 @@ async def cb_analysis(cb: types.CallbackQuery):
 async def cb_test(cb: types.CallbackQuery):
     user = await get_user_with_id(cb.from_user.id)
     is_admin = str(cb.from_user.id) in ADMIN_IDS
+<<<<<<< HEAD
     await send_test_section(cb.message, user, is_admin, from_callback=True)
+=======
+
+    test_text = await get_content("menu.test",
+        "Тест: определение уровня.\n\n"
+        "Ссылка: https://forms.example.com/test\n\n"
+        "После теста ты получишь анализ, рекомендации и сможешь записаться на разбор."
+    )
+
+    try:
+        await safe_edit_text(
+            cb.message,
+            test_text,
+            reply_markup=create_main_menu_keyboard(await is_member(user), bool(AT_PRODUCT_ID_CLUB), is_admin)
+        )
+    except TelegramBadRequest as e:
+        if "message is not modified" not in str(e):
+            logger.error(f"Error in cb_test: {e}", exc_info=True)
+>>>>>>> 2be8e6bb6e45e114546ed97c1247d4a8055b5546
+    await cb.answer()
+
+
+@router.callback_query(F.data == "menu:weekly")
+async def cb_weekly(cb: types.CallbackQuery):
+    user = await get_user_with_id(cb.from_user.id)
+
+    if not user:
+        await cb.answer("Перезапусти /start", show_alert=True)
+        return
+
+    member = await is_member(user)
+    if not member:
+        await cb.answer("Раздел доступен участницам клуба", show_alert=True)
+        return
+
+    is_admin = str(cb.from_user.id) in ADMIN_IDS
+
+    weekly_text = await get_content(
+        "weekly_materials",
+        "📚 Материалы недели:\n"
+        "• Подкаст: [ссылка]\n"
+        "• Практика: [ссылка]\n"
+        "• Челлендж: [описание]\n"
+        "• Дневник: [шаблон]",
+    )
+
+    try:
+        await safe_edit_text(
+            cb.message,
+            weekly_text,
+            reply_markup=create_main_menu_keyboard(member, bool(AT_PRODUCT_ID_CLUB), is_admin),
+        )
+    except TelegramBadRequest as e:
+        if "message is not modified" not in str(e):
+            logger.error(f"Error in cb_weekly: {e}", exc_info=True)
+
+    await cb.answer()
+
+
+@router.callback_query(F.data == "menu:schedule")
+async def cb_schedule(cb: types.CallbackQuery):
+    user = await get_user_with_id(cb.from_user.id)
+
+    if not user:
+        await cb.answer("Перезапусти /start", show_alert=True)
+        return
+
+    member = await is_member(user)
+    if not member:
+        await cb.answer("Расписание доступно участницам клуба", show_alert=True)
+        return
+
+    is_admin = str(cb.from_user.id) in ADMIN_IDS
+
+    schedule_text = await get_content(
+        "schedule",
+        "🗓️ Расписание эфиров:\n"
+        "• Понедельник 20:00 — Вводный эфир\n"
+        "• Четверг 19:00 — Практика в группе\n"
+        "• Воскресенье 18:00 — Подведение итогов",
+    )
+
+    try:
+        await safe_edit_text(
+            cb.message,
+            schedule_text,
+            reply_markup=create_main_menu_keyboard(member, bool(AT_PRODUCT_ID_CLUB), is_admin),
+        )
+    except TelegramBadRequest as e:
+        if "message is not modified" not in str(e):
+            logger.error(f"Error in cb_schedule: {e}", exc_info=True)
+
     await cb.answer()
 # ──────────────────────────────────────────────────────────────────────────────
 # Поддержка и помощь
