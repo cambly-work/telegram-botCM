@@ -125,6 +125,18 @@ CREATE TABLE IF NOT EXISTS content (
 );
 CREATE INDEX IF NOT EXISTS idx_content_key ON content(key);
 
+-- BROADCAST_TEMPLATES
+CREATE TABLE IF NOT EXISTS broadcast_templates (
+  id         SERIAL PRIMARY KEY,
+  slug       TEXT UNIQUE NOT NULL,
+  title      TEXT UNIQUE NOT NULL,
+  segment    TEXT NOT NULL DEFAULT 'all',
+  body       TEXT NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_broadcast_templates_segment ON broadcast_templates(segment);
+
 -- ADMIN_LOG (совместимость с v2 → v3)
 
 -- v2 могла уже создать admin_log с (event, user_id, payload, created_at)
