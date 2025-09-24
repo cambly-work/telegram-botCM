@@ -151,6 +151,19 @@ def lesson_actions_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
 
+def lesson_keyboard(lesson_num: int) -> ReplyKeyboardMarkup:
+    """Alias for the основной клавиатуры урока.
+
+    Планировщик использует эту функцию, поэтому оставляем совместимый
+    интерфейс с номером урока на будущее (можно будет расширить поведение
+    в зависимости от номера урока).
+    """
+
+    # Пока для всех уроков клавиатура одинакова, поэтому просто
+    # возвращаем базовую клавиатуру действий.
+    return lesson_actions_keyboard()
+
+
 def after_lesson_keyboard() -> ReplyKeyboardMarkup:
     rows = [
         [KeyboardButton(text=NEXT_LESSON)],
