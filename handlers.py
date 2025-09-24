@@ -9,6 +9,7 @@ import html
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Iterable, Dict, List, Callable, Awaitable
 from aiogram import Router, F, types
+from aiogram.enums import ParseMode
 from aiogram.types import ReplyKeyboardMarkup
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
@@ -62,6 +63,7 @@ from keyboards import (
     ADMIN_CONTENT_CREATE,
     ADMIN_USERS_BUTTON,
     ADMIN_BROADCAST_BUTTON,
+    ADMIN_BEHAVIOR_BUTTON,
     BROADCAST_ALL_BUTTON,
     BROADCAST_LEADS_BUTTON,
     BROADCAST_MEMBERS_BUTTON,
