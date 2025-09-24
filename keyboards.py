@@ -24,7 +24,15 @@ NEXT_LESSON = "➡️ Следующий урок"
 WRITE_FEEDBACK = "📝 Написать отзыв"
 SKIP_FEEDBACK = "Пропустить отзыв"
 CANCEL_TEXT = "Отмена"
-ADMIN_TEXTS_ENTRY = "📝 Тексты окон"
+ADMIN_TEXTS_ENTRY = "📄 Тексты экранов"
+ADMIN_CONTENT_MENU = "🧾 Контент и тексты"
+ADMIN_CONTENT_VIEW = "🔍 Посмотреть текст"
+ADMIN_CONTENT_CREATE = "➕ Добавить или обновить текст"
+ADMIN_USERS_BUTTON = "👥 Пользователи"
+ADMIN_BROADCAST_BUTTON = "📢 Рассылка"
+ADMIN_STATS_BUTTON = "📊 Статистика"
+ADMIN_DEBUG_BUTTON = "🛠️ Диагностика"
+ADMIN_SETTINGS_BUTTON = "⚙️ Настройки"
 
 FEEDBACK_OPTIONS: dict[str, str] = {
     "Отлично": "excellent",
@@ -196,12 +204,16 @@ def remove_keyboard() -> ReplyKeyboardRemove:
 
 def admin_main_keyboard() -> ReplyKeyboardMarkup:
     rows = [
-        [KeyboardButton(text="Управление пользователями"), KeyboardButton(text="Рассылка")],
-        [KeyboardButton(text="Управление контентом"), KeyboardButton(text="Статистика")],
-        [KeyboardButton(text="Диагностика"), KeyboardButton(text="Тонкие настройки")],
+        [KeyboardButton(text=ADMIN_USERS_BUTTON), KeyboardButton(text=ADMIN_BROADCAST_BUTTON)],
+        [KeyboardButton(text=ADMIN_CONTENT_MENU), KeyboardButton(text=ADMIN_STATS_BUTTON)],
+        [KeyboardButton(text=ADMIN_DEBUG_BUTTON), KeyboardButton(text=ADMIN_SETTINGS_BUTTON)],
         [KeyboardButton(text=BACK_TO_MAIN)],
     ]
-    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
+    return ReplyKeyboardMarkup(
+        keyboard=rows,
+        resize_keyboard=True,
+        input_field_placeholder="Админ-панель — выберите раздел",
+    )
 
 
 def admin_settings_keyboard(
@@ -212,8 +224,23 @@ def admin_settings_keyboard(
     for key, label in labels.items():
         status = "✅" if flags.get(key, True) else "❌"
         rows.append([KeyboardButton(text=f"{status} {label}")])
-    rows.append([KeyboardButton(text=ADMIN_TEXTS_ENTRY)])
+    rows.append([
+        KeyboardButton(text=ADMIN_CONTENT_MENU),
+        KeyboardButton(text=ADMIN_TEXTS_ENTRY),
+    ])
     rows.append([KeyboardButton(text=BACK_TO_ADMIN), KeyboardButton(text=BACK_TO_MAIN)])
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
+
+
+def admin_content_keyboard() -> ReplyKeyboardMarkup:
+    rows = [
+        [KeyboardButton(text=ADMIN_TEXTS_ENTRY)],
+        [
+            KeyboardButton(text=ADMIN_CONTENT_VIEW),
+            KeyboardButton(text=ADMIN_CONTENT_CREATE),
+        ],
+        [KeyboardButton(text=BACK_TO_ADMIN), KeyboardButton(text=BACK_TO_MAIN)],
+    ]
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
 
@@ -221,6 +248,7 @@ def admin_text_groups_keyboard(group_titles: list[str]) -> ReplyKeyboardMarkup:
     rows: list[list[KeyboardButton]] = []
     for title in group_titles:
         rows.append([KeyboardButton(text=title)])
+    rows.append([KeyboardButton(text=ADMIN_CONTENT_MENU)])
     rows.append([KeyboardButton(text=BACK_TO_ADMIN), KeyboardButton(text=BACK_TO_MAIN)])
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
@@ -230,5 +258,6 @@ def admin_text_items_keyboard(options: list[str]) -> ReplyKeyboardMarkup:
     for label in options:
         rows.append([KeyboardButton(text=label)])
     rows.append([KeyboardButton(text=BACK_TO_TEXT_GROUPS)])
+    rows.append([KeyboardButton(text=ADMIN_CONTENT_MENU)])
     rows.append([KeyboardButton(text=BACK_TO_ADMIN), KeyboardButton(text=BACK_TO_MAIN)])
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
