@@ -1400,30 +1400,6 @@ async def registration_receive_phone(message: types.Message, state: FSMContext):
 
     await message.answer(completion_text, reply_markup=kb)
 
-# Fallback — если не матчится ни на один хэндлер (и не мешаем FSM)
-@router.message(
-    ~F.via_bot,
-    F.text,
-    ~F.text.startswith("/"),
-    F.text.func(lambda text: text.strip().lower() != "отмена"),
-)
-async def fallback(message: types.Message, state: FSMContext):
-    cur = await state.get_state()
-    if cur in (
-        HWStates.waiting_answer,
-        HWStates.waiting_feedback,
-        RegistrationStates.waiting_name,
-        RegistrationStates.waiting_email,
-        RegistrationStates.waiting_phone,
-        ProfileStates.waiting_email,
-        ProfileStates.waiting_phone,
-        AdminContentStates.waiting_value,
-    ):
-        return
-    await message.answer("Используй кнопки меню ниже. Если клавиатура пропала — набери /start.")
-# ──────────────────────────────────────────────────────────────────────────────
-# Меню
-# ──────────────────────────────────────────────────────────────────────────────
 async def _reset_state_if_needed(state: FSMContext) -> bool:
     """Сбрасывает активный FSM-стейт, если он есть."""
     if state is None:
@@ -2794,3 +2770,31 @@ async def cmd_debug(message: types.Message, command: CommandObject):
     
     else:
         await message.answer("Неизвестная команда. Используйте /debug для списка команд.")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Fallback — должен регистрироваться последним
+# ──────────────────────────────────────────────────────────────────────────────
+@router.message(
+    ~F.via_bot,
+    F.text,
+    ~F.text.startswith("/"),
+    F.text.func(lambda text: text.strip().lower() != "отмена"),
+)
+async def fallback(message: types.Message, state: FSMContext):
+    """Отвечает на произвольный текст, если не сработал ни один другой хэндлер."""
+
+    cur = await state.get_state()
+    if cur in (
+        HWStates.waiting_answer,
+        HWStates.waiting_feedback,
+        RegistrationStates.waiting_name,
+        RegistrationStates.waiting_email,
+        RegistrationStates.waiting_phone,
+        ProfileStates.waiting_email,
+        ProfileStates.waiting_phone,
+        AdminContentStates.waiting_value,
+    ):
+        return
+
+    await message.answer("Используй кнопки меню ниже. Если клавиатура пропала — набери /start.")
