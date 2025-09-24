@@ -7,7 +7,7 @@ import logging
 import time
 import html
 from datetime import datetime, timedelta, timezone
-from typing import Optional, Iterable, Dict, List, Callable, Awaitable
+from typing import Optional, Iterable, Dict, List, Callable, Awaitable, Any
 from aiogram import Router, F, types
 from aiogram.enums import ParseMode
 from aiogram.types import ReplyKeyboardMarkup
@@ -33,6 +33,7 @@ from keyboards import (
     admin_main_keyboard,
     admin_settings_keyboard,
     admin_content_keyboard,
+    admin_content_suggestions_keyboard,
     admin_text_groups_keyboard,
     admin_text_items_keyboard,
     admin_behavior_keyboard,
@@ -61,6 +62,7 @@ from keyboards import (
     ADMIN_CONTENT_MENU,
     ADMIN_CONTENT_VIEW,
     ADMIN_CONTENT_CREATE,
+    ADMIN_CONTENT_SUGGEST_MORE,
     ADMIN_USERS_BUTTON,
     ADMIN_BROADCAST_BUTTON,
     ADMIN_BEHAVIOR_BUTTON,
@@ -396,13 +398,18 @@ async def delete_broadcast_template(title: str) -> bool:
         title,
     )
     return bool(row)
-def _flatten_yaml_keys(src: dict, prefix: str = "") -> Iterable[str]:
-    for k, v in (src or {}).items():
-        full = f"{prefix}.{k}" if prefix else str(k)
-        if isinstance(v, dict):
+def _flatten_yaml_keys(src: Any, prefix: str = "") -> Iterable[str]:
+    if isinstance(src, dict):
+        for k, v in (src or {}).items():
+            full = f"{prefix}.{k}" if prefix else str(k)
             yield from _flatten_yaml_keys(v, full)
-        else:
-            yield full
+    elif isinstance(src, list):
+        for idx, item in enumerate(src):
+            full = f"{prefix}.{idx}" if prefix else str(idx)
+            yield from _flatten_yaml_keys(item, full)
+    else:
+        if prefix:
+            yield prefix
 def now_utc() -> datetime:
     return datetime.now(timezone.utc)
 # ──────────────────────────────────────────────────────────────────────────────
@@ -510,6 +517,10 @@ _ADMIN_TEXT_PLACEHOLDERS: dict[str, list[str]] = {
 }
 
 _CONTENT_KEY_PATTERN = re.compile(r"^[A-Za-z0-9_.-]{3,}$")
+_CONTENT_SUGGESTION_STEP = 6
+_CONTENT_SUGGESTION_LIMIT = 60
+_CONTENT_PREVIEW_KEY_RE = re.compile(r"<b>Ключ:</b>\s*<code>([^<]+)</code>")
+_CONTENT_PREVIEW_KEY_PLAIN_RE = re.compile(r"Ключ[:：]\s*([A-Za-z0-9_.-]{3,})")
 
 
 _BROADCAST_SEGMENT_LABELS: dict[str, str] = {
@@ -543,6 +554,65 @@ def _admin_find_text_entry(label: str) -> tuple[Optional[str], Optional[str]]:
             if entry_label == label:
                 return group_title, key
     return None, None
+
+
+def _merge_unique_content_keys(*sources: Iterable[str], limit: int | None = None) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for source in sources:
+        for key in source or []:
+            if not key:
+                continue
+            key_str = str(key)
+            if key_str in seen:
+                continue
+            seen.add(key_str)
+            result.append(key_str)
+            if limit is not None and len(result) >= limit:
+                return result
+    return result
+
+
+async def _collect_content_suggestions(limit: int = _CONTENT_SUGGESTION_LIMIT) -> list[str]:
+    db_keys = await list_content_keys_db()
+    yaml_content = _load_yaml_content()
+    yaml_keys = sorted(_flatten_yaml_keys(yaml_content))
+    return _merge_unique_content_keys(db_keys, yaml_keys, limit=limit)
+
+
+def _suggestion_chunk(
+    keys: list[str],
+    offset: int,
+    step: int = _CONTENT_SUGGESTION_STEP,
+) -> tuple[list[str], int, int, bool, bool]:
+    total = len(keys)
+    if total == 0:
+        return [], 0, 0, False, False
+
+    normalized = False
+    if offset < 0 or offset >= total:
+        offset = 0
+        normalized = True
+
+    end = min(offset + step, total)
+    chunk = keys[offset:end]
+    next_offset = 0 if end >= total else end
+    reached_end = end >= total
+    return chunk, next_offset, total, reached_end, normalized
+
+
+def _format_suggestion_lines(keys: list[str]) -> list[str]:
+    return [f"• <code>{html.escape(key)}</code>" for key in keys]
+
+
+def _filter_suggestions(keys: list[str], query: str, limit: int = 5) -> list[str]:
+    if not query:
+        return []
+    normalized = query.strip().lower()
+    if not normalized:
+        return []
+    matches = [key for key in keys if normalized in key.lower()]
+    return matches[:limit]
 
 
 async def get_bool_setting(key: str, default: bool = True) -> bool:
@@ -1274,9 +1344,10 @@ async def send_admin_content_menu(message: types.Message) -> None:
         "<b>Контент и тексты</b>\n\n"
         "Здесь можно:\n"
         "• 📄 <b>Тексты экранов</b> — выбрать готовый экран и обновить его текст.\n"
-        "• 🔍 <b>Посмотреть текст</b> — узнать текущее содержимое любого ключа.\n"
-        "• ➕ <b>Добавить или обновить текст</b> — создать свой ключ и сразу внести текст.\n\n"
+        "• 🔍 <b>Посмотреть текст</b> — узнать текущее содержимое любого ключа и при необходимости сразу обновить его ответом.\n"
+        "• ➕ <b>Добавить или обновить текст</b> — создать свой ключ или выбрать существующий из подсказок.\n\n"
         "Допустимы теги: <code>&lt;b&gt;</code>, <code>&lt;i&gt;</code>, <code>&lt;u&gt;</code>, <code>&lt;strong&gt;</code>, <code>&lt;em&gt;</code>, <code>&lt;code&gt;</code>, <code>&lt;a href=&quot;...&quot;&gt;</code>.\n"
+        "Бот подсказывает популярные ключи и запоминает последние изменения, чтобы можно было быстро вносить правки.\n"
         "Если нужно отменить действие — нажми кнопку «Отмена»."
     )
     keyboard = admin_content_keyboard()
@@ -2868,12 +2939,113 @@ async def admin_content_view_prompt(message: types.Message, state: FSMContext):
         return
     await _reset_state_if_needed(state)
     await state.set_state(AdminContentStates.waiting_view_key)
+    suggestions = await _collect_content_suggestions()
+    chunk, next_offset, total, _, _ = _suggestion_chunk(suggestions, 0)
+    show_more = total > len(chunk)
+
+    await state.update_data(
+        content_suggest={
+            "keys": suggestions,
+            "offset": next_offset,
+            "step": _CONTENT_SUGGESTION_STEP,
+            "context": "view",
+            "cycled": False,
+        }
+    )
+
+    lines = [
+        "<b>Просмотр текста</b>",
+        "",
+        "Выбери ключ кнопкой ниже или введи его вручную, например <code>menu.support</code>.",
+        "Бот покажет текущий текст и позволит обновить его — просто ответь на сообщение новым вариантом.",
+    ]
+
+    if chunk:
+        lines.extend(["", "<b>Быстрый выбор:</b>"])
+        lines.extend(_format_suggestion_lines(chunk))
+        if show_more:
+            lines.extend([
+                "",
+                "Нужен другой ключ — жми «🔁 Ещё варианты».",
+            ])
+    else:
+        lines.extend([
+            "",
+            "Пока нет сохранённых ключей — можно указать свой и бот сохранит его.",
+        ])
+
+    lines.append("")
+    lines.append("Если передумал — нажми «Отмена».")
+
+    keyboard = admin_content_suggestions_keyboard(chunk, show_more=show_more)
     await message.answer(
-        "<b>Просмотр текста</b>\n\n"
-        "Отправь ключ, например <code>menu.support</code> или <code>schedule</code>.\n"
-        "Бот покажет, что сейчас сохранено.\n\n"
-        "Если передумал — нажми «Отмена».",
-        reply_markup=cancel_keyboard(),
+        "\n".join(lines),
+        reply_markup=keyboard,
+        disable_web_page_preview=True,
+    )
+
+
+@router.message(AdminContentStates.waiting_view_key, F.text == ADMIN_CONTENT_SUGGEST_MORE)
+async def admin_content_view_more_options(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        await state.clear()
+        return
+
+    data = await state.get_data()
+    suggest_info = dict((data or {}).get("content_suggest") or {})
+
+    suggestions = await _collect_content_suggestions()
+    step = int(suggest_info.get("step", _CONTENT_SUGGESTION_STEP) or _CONTENT_SUGGESTION_STEP)
+    prev_offset = int(suggest_info.get("offset", 0) or 0)
+    chunk, next_offset, total, reached_end, normalized = _suggestion_chunk(suggestions, prev_offset, step)
+    show_more = total > len(chunk)
+    cycled_flag = bool(suggest_info.get("cycled", False))
+    just_wrapped = show_more and (normalized or (cycled_flag and prev_offset == 0))
+
+    new_cycled = reached_end and show_more
+    if just_wrapped:
+        new_cycled = False
+
+    suggest_info.update(
+        {
+            "keys": suggestions,
+            "offset": next_offset,
+            "step": step,
+            "cycled": new_cycled,
+        }
+    )
+    await state.update_data(content_suggest=suggest_info)
+
+    if chunk:
+        lines = ["<b>Ещё ключи</b>", ""]
+        lines.extend(_format_suggestion_lines(chunk))
+        if show_more:
+            if reached_end:
+                lines.extend([
+                    "",
+                    "Это последние ключи. Кнопка «🔁 Ещё варианты» покажет список сначала.",
+                ])
+            elif just_wrapped:
+                lines.extend([
+                    "",
+                    "Список начался сначала — выбирай ключ или листай дальше.",
+                ])
+            else:
+                lines.extend([
+                    "",
+                    "Нужен другой ключ — жми «🔁 Ещё варианты».",
+                ])
+    else:
+        lines = [
+            "<b>Ещё ключи</b>",
+            "",
+            "Пока нет сохранённых ключей — можно указать свой вручную.",
+        ]
+
+    keyboard = admin_content_suggestions_keyboard(chunk, show_more=show_more)
+    await message.answer(
+        "\n".join(lines),
+        reply_markup=keyboard,
         disable_web_page_preview=True,
     )
 
@@ -2892,18 +3064,37 @@ async def admin_content_view_value(message: types.Message, state: FSMContext):
         )
         return
 
+    suggestions = await _collect_content_suggestions()
     value = await get_content(key, default="")
     has_value = bool(value.strip())
     preview = _preview_text_for_admin(value)
 
+    similar = [item for item in _filter_suggestions(suggestions, key, limit=5) if item != key]
+
     lines = [f"<b>Ключ:</b> <code>{html.escape(key)}</code>"]
     if has_value:
         lines.extend(["", "<b>Текущее значение:</b>", preview])
+        lines.extend([
+            "",
+            "Нужен новый текст? Ответь на это сообщение — бот сохранит обновление автоматически.",
+        ])
     else:
         lines.extend([
             "",
             "По этому ключу пока ничего не сохранено.",
             "Можно добавить текст через кнопку «➕ Добавить или обновить текст».",
+        ])
+
+        if similar:
+            lines.extend([
+                "",
+                "Возможно, подойдут другие ключи:",
+                *_format_suggestion_lines(similar),
+            ])
+
+        lines.extend([
+            "",
+            "Отправь текст ответом на это сообщение — и он сразу появится в боте.",
         ])
 
     await log_admin_action(
@@ -2926,13 +3117,116 @@ async def admin_content_create_prompt(message: types.Message, state: FSMContext)
         return
     await _reset_state_if_needed(state)
     await state.set_state(AdminContentStates.waiting_custom_key)
-    await message.answer(
-        "<b>Добавление текста</b>\n\n"
-        "Введи ключ для текста. Используй латинские буквы, цифры, точки, дефисы или подчёркивания.\n"
-        "Пример: <code>menu.support</code> или <code>promo.welcome</code>.\n"
-        "Если такой ключ уже есть, текст будет обновлён.\n\n"
+    suggestions = await _collect_content_suggestions()
+    chunk, next_offset, total, _, _ = _suggestion_chunk(suggestions, 0)
+    show_more = total > len(chunk)
+
+    await state.update_data(
+        content_suggest={
+            "keys": suggestions,
+            "offset": next_offset,
+            "step": _CONTENT_SUGGESTION_STEP,
+            "context": "create",
+            "cycled": False,
+        }
+    )
+
+    lines = [
+        "<b>Добавление текста</b>",
+        "",
+        "Введи ключ или выбери готовый из списка ниже. Допустимы латинские буквы, цифры, точки, дефисы и подчёркивания.",
+        "Если ключ уже существует, бот покажет текущий текст и попросит новый вариант.",
+    ]
+
+    if chunk:
+        lines.extend(["", "<b>Быстрый выбор:</b>"])
+        lines.extend(_format_suggestion_lines(chunk))
+        if show_more:
+            lines.extend([
+                "",
+                "Не нашёл нужный ключ — жми «🔁 Ещё варианты».",
+            ])
+    else:
+        lines.extend([
+            "",
+            "Пока нет сохранённых ключей — можно создать первый.",
+        ])
+
+    lines.extend([
+        "",
+        "После выбора бот покажет текущий текст и предложит отправить новый вариант одним сообщением.",
         "Для отмены нажми «Отмена».",
-        reply_markup=cancel_keyboard(),
+    ])
+
+    keyboard = admin_content_suggestions_keyboard(chunk, show_more=show_more)
+    await message.answer(
+        "\n".join(lines),
+        reply_markup=keyboard,
+        disable_web_page_preview=True,
+    )
+
+
+@router.message(AdminContentStates.waiting_custom_key, F.text == ADMIN_CONTENT_SUGGEST_MORE)
+async def admin_content_create_more_options(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        await state.clear()
+        return
+
+    data = await state.get_data()
+    suggest_info = dict((data or {}).get("content_suggest") or {})
+
+    suggestions = await _collect_content_suggestions()
+    step = int(suggest_info.get("step", _CONTENT_SUGGESTION_STEP) or _CONTENT_SUGGESTION_STEP)
+    prev_offset = int(suggest_info.get("offset", 0) or 0)
+    chunk, next_offset, total, reached_end, normalized = _suggestion_chunk(suggestions, prev_offset, step)
+    show_more = total > len(chunk)
+    cycled_flag = bool(suggest_info.get("cycled", False))
+    just_wrapped = show_more and (normalized or (cycled_flag and prev_offset == 0))
+
+    new_cycled = reached_end and show_more
+    if just_wrapped:
+        new_cycled = False
+
+    suggest_info.update(
+        {
+            "keys": suggestions,
+            "offset": next_offset,
+            "step": step,
+            "cycled": new_cycled,
+        }
+    )
+    await state.update_data(content_suggest=suggest_info)
+
+    if chunk:
+        lines = ["<b>Ещё ключи</b>", ""]
+        lines.extend(_format_suggestion_lines(chunk))
+        if show_more:
+            if reached_end:
+                lines.extend([
+                    "",
+                    "Это последние ключи. Кнопка «🔁 Ещё варианты» вернёт список к началу.",
+                ])
+            elif just_wrapped:
+                lines.extend([
+                    "",
+                    "Снова показываю ключи с начала — выбирай нужный или листай дальше.",
+                ])
+            else:
+                lines.extend([
+                    "",
+                    "Не подходит? Жми «🔁 Ещё варианты».",
+                ])
+    else:
+        lines = [
+            "<b>Ещё ключи</b>",
+            "",
+            "Сохранённых ключей пока нет — можно ввести свой вручную.",
+        ]
+
+    keyboard = admin_content_suggestions_keyboard(chunk, show_more=show_more)
+    await message.answer(
+        "\n".join(lines),
+        reply_markup=keyboard,
         disable_web_page_preview=True,
     )
 
@@ -2981,6 +3275,7 @@ async def admin_content_receive_key(message: types.Message, state: FSMContext):
         "",
         "Пришли новый текст одним сообщением. Допустимы теги:"
         " &lt;b&gt;, &lt;i&gt;, &lt;u&gt;, &lt;strong&gt;, &lt;em&gt;, &lt;code&gt;, &lt;a href=&quot;...&quot;&gt;ссылка&lt;/a&gt;.",
+        "Можно отправить текст обычным сообщением или ответом на это сообщение — бот сохранит результат сразу.",
     ])
 
     await message.answer(
@@ -3021,6 +3316,59 @@ async def admin_content_receive_value(message: types.Message, state: FSMContext)
     )
 
     await state.clear()
+
+
+@router.message(
+    F.reply_to_message,
+    F.reply_to_message.from_user.func(lambda user: user is not None and user.is_bot),
+)
+async def admin_content_quick_reply_update(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+
+    if await state.get_state():
+        return
+
+    reply = message.reply_to_message
+    if not reply or not reply.from_user or reply.from_user.id != message.bot.id:
+        return
+
+    preview_html = reply.html_text or ""
+    match = _CONTENT_PREVIEW_KEY_RE.search(preview_html)
+
+    key: Optional[str] = None
+    if match:
+        key = html.unescape(match.group(1) or "").strip()
+    else:
+        plain = reply.text or ""
+        match_plain = _CONTENT_PREVIEW_KEY_PLAIN_RE.search(plain)
+        if match_plain:
+            key = match_plain.group(1).strip()
+
+    if not key or not _CONTENT_KEY_PATTERN.match(key):
+        return
+
+    new_text = (message.text or message.caption or "").strip()
+    if not new_text:
+        await message.answer(
+            "Сообщение пустое — текст не обновлён. Пришли текст или используй меню.",
+            reply_markup=admin_content_keyboard(),
+            disable_web_page_preview=True,
+        )
+        return
+
+    await set_content_value(key, new_text)
+    await log_admin_action(
+        message.from_user.id,
+        "content_quick_reply",
+        {"key": key, "length": len(new_text)},
+    )
+
+    await message.answer(
+        f"Текст для ключа <code>{html.escape(key)}</code> обновлён ✅",
+        reply_markup=admin_content_keyboard(),
+        disable_web_page_preview=True,
+    )
 
 
 @router.message(F.text == ADMIN_STATS_BUTTON)
@@ -3119,6 +3467,7 @@ async def admin_texts_edit_prompt(message: types.Message, state: FSMContext):
         "",
         "Отправь новый текст одним сообщением — бот сохранит его и сразу начнёт использовать.",
         "Допустимы теги: &lt;b&gt;, &lt;i&gt;, &lt;u&gt;, &lt;strong&gt;, &lt;em&gt;, &lt;code&gt;, &lt;a href=&quot;...&quot;&gt;ссылка&lt;/a&gt;.",
+        "Можно отправить текст обычным сообщением или ответом на это сообщение — бот обработает оба варианта.",
     ]
 
     if placeholders_line:
