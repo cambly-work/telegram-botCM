@@ -5274,3 +5274,203 @@ asyncpg.exceptions.UndefinedColumnError: столбец "action" не сущес
 2025-09-12 09:31:55,964 | INFO | uvicorn.error | Application startup complete.
 2025-09-12 09:31:55,968 | INFO | uvicorn.error | Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
 2025-09-12 10:00:00,004 | INFO | apscheduler.executors.default | Running job "job_daily_lessons (trigger: cron[hour='10', minute='0'], next run at: 2025-09-13 10:00:00 -03)" (scheduled at 2025-09-12 10:00:00-03:00)
+2025-09-23 11:23:58,465 | INFO | code-magnetism | Routers attached: ['main-router']
+2025-09-23 11:28:14,651 | INFO | uvicorn.error | Started server process [4832]
+2025-09-23 11:28:14,652 | INFO | uvicorn.error | Waiting for application startup.
+2025-09-23 11:28:14,658 | INFO | code-magnetism | Startup: инициализация БД/планировщика/вебхука...
+2025-09-23 11:28:14,659 | INFO | db | Connecting PostgreSQL: postgresql://magnet:***@localhost:5432/magnetism
+2025-09-23 11:28:15,290 | INFO | db | PostgreSQL pool created
+2025-09-23 11:28:15,292 | INFO | db | Applying schema from: C:\Users\Tim\source\repos\cambly-work\telegram-botCM\schema.sql
+2025-09-23 11:28:15,875 | INFO | db | Schema applied successfully.
+2025-09-23 11:28:15,876 | INFO | db | Schema applied from C:\Users\Tim\source\repos\cambly-work\telegram-botCM\schema.sql
+2025-09-23 11:28:15,883 | INFO | code-magnetism | Database initialized successfully
+2025-09-23 11:28:15,958 | INFO | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2025-09-23 11:28:15,960 | INFO | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2025-09-23 11:28:15,964 | INFO | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2025-09-23 11:28:15,983 | INFO | apscheduler.scheduler | Added job "job_daily_lessons" to job store "default"
+2025-09-23 11:28:15,985 | INFO | apscheduler.scheduler | Added job "job_soft_reminders" to job store "default"
+2025-09-23 11:28:15,990 | INFO | apscheduler.scheduler | Added job "job_access_expiry_reminders" to job store "default"
+2025-09-23 11:28:15,995 | INFO | apscheduler.scheduler | Scheduler started
+2025-09-23 11:28:15,997 | INFO | scheduler | APScheduler started with timezone=Europe/Moscow; lessons at 10:00
+2025-09-23 11:28:15,999 | INFO | code-magnetism | Scheduler initialized successfully
+2025-09-23 11:28:16,001 | INFO | code-magnetism | Setting Telegram webhook to: https://5ef43a4597d2.ngrok-free.app/telegram/webhook?secret=change_me
+2025-09-23 11:28:16,702 | INFO | code-magnetism | Old webhook deleted
+2025-09-23 11:28:16,927 | INFO | code-magnetism | Telegram webhook установлен: https://5ef43a4597d2.ngrok-free.app/telegram/webhook?secret=change_me
+2025-09-23 11:28:16,928 | INFO | code-magnetism | Startup завершён.
+2025-09-23 11:28:16,935 | INFO | uvicorn.error | Application startup complete.
+2025-09-23 11:28:16,939 | INFO | uvicorn.error | Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+2025-09-23 11:28:46,145 | INFO | code-magnetism | Incoming update 822055101
+2025-09-23 11:28:46,147 | INFO | code-magnetism | Message from 815370781 (@goldfinger_uk): /start
+2025-09-23 11:28:47,012 | INFO | aiogram.event | Update id=822055101 is handled. Duration 854 ms by bot id=8485537220
+2025-09-23 11:28:47,013 | INFO | code-magnetism | Update 822055101 processed successfully
+2025-09-23 11:28:47,026 | INFO | uvicorn.access | 91.108.5.36:0 - "POST /telegram/webhook?secret=change_me HTTP/1.1" 200
+2025-09-23 11:28:55,979 | INFO | code-magnetism | Incoming update 822055102
+2025-09-23 11:28:55,980 | INFO | code-magnetism | Message from 815370781 (@goldfinger_uk): Админ-панель
+2025-09-23 11:28:56,324 | INFO | aiogram.event | Update id=822055102 is handled. Duration 335 ms by bot id=8485537220
+2025-09-23 11:28:56,325 | INFO | code-magnetism | Update 822055102 processed successfully
+2025-09-23 11:28:56,330 | INFO | uvicorn.access | 91.108.5.36:0 - "POST /telegram/webhook?secret=change_me HTTP/1.1" 200
+2025-09-23 11:28:59,763 | INFO | code-magnetism | Incoming update 822055103
+2025-09-23 11:28:59,764 | INFO | code-magnetism | Message from 815370781 (@goldfinger_uk): О клубе
+2025-09-23 11:29:00,203 | INFO | aiogram.event | Update id=822055103 is handled. Duration 431 ms by bot id=8485537220
+2025-09-23 11:29:00,209 | INFO | code-magnetism | Update 822055103 processed successfully
+2025-09-23 11:29:00,210 | INFO | uvicorn.access | 91.108.5.36:0 - "POST /telegram/webhook?secret=change_me HTTP/1.1" 200
+2025-09-23 11:29:14,911 | INFO | code-magnetism | Incoming update 822055104
+2025-09-23 11:29:14,911 | INFO | code-magnetism | Message from 815370781 (@goldfinger_uk): Пройти тест
+2025-09-23 11:29:15,167 | INFO | aiogram.event | Update id=822055104 is handled. Duration 250 ms by bot id=8485537220
+2025-09-23 11:29:15,168 | INFO | code-magnetism | Update 822055104 processed successfully
+2025-09-23 11:29:15,175 | INFO | uvicorn.access | 91.108.5.36:0 - "POST /telegram/webhook?secret=change_me HTTP/1.1" 200
+2025-09-23 11:31:37,000 | INFO | code-magnetism | Incoming update 822055105
+2025-09-23 11:31:37,000 | INFO | code-magnetism | Message from 815370781 (@goldfinger_uk): О
+2025-09-23 11:31:37,767 | INFO | aiogram.event | Update id=822055105 is handled. Duration 763 ms by bot id=8485537220
+2025-09-23 11:31:37,768 | INFO | code-magnetism | Update 822055105 processed successfully
+2025-09-23 11:31:37,770 | INFO | uvicorn.access | 91.108.5.36:0 - "POST /telegram/webhook?secret=change_me HTTP/1.1" 200
+2025-09-23 11:31:46,801 | INFO | code-magnetism | Incoming update 822055106
+2025-09-23 11:31:46,803 | INFO | code-magnetism | Message from 815370781 (@goldfinger_uk): /start
+2025-09-23 11:31:47,705 | INFO | aiogram.event | Update id=822055106 is handled. Duration 900 ms by bot id=8485537220
+2025-09-23 11:31:47,707 | INFO | code-magnetism | Update 822055106 processed successfully
+2025-09-23 11:31:47,710 | INFO | uvicorn.access | 91.108.5.36:0 - "POST /telegram/webhook?secret=change_me HTTP/1.1" 200
+2025-09-23 11:33:08,975 | INFO | code-magnetism | Incoming update 822055107
+2025-09-23 11:33:08,976 | INFO | code-magnetism | Message from 815370781 (@goldfinger_uk): /start
+2025-09-23 11:33:09,891 | INFO | aiogram.event | Update id=822055107 is handled. Duration 913 ms by bot id=8485537220
+2025-09-23 11:33:09,893 | INFO | code-magnetism | Update 822055107 processed successfully
+2025-09-23 11:33:09,895 | INFO | uvicorn.access | 91.108.5.36:0 - "POST /telegram/webhook?secret=change_me HTTP/1.1" 200
+2025-09-23 11:34:49,953 | INFO | code-magnetism | Incoming update 822055108
+2025-09-23 11:34:49,954 | INFO | code-magnetism | Message from 1648917869 (@Tokyo_tokyo): /start
+2025-09-23 11:34:50,797 | INFO | aiogram.event | Update id=822055108 is handled. Duration 841 ms by bot id=8485537220
+2025-09-23 11:34:50,798 | INFO | code-magnetism | Update 822055108 processed successfully
+2025-09-23 11:34:50,799 | INFO | uvicorn.access | 91.108.5.36:0 - "POST /telegram/webhook?secret=change_me HTTP/1.1" 200
+2025-09-23 11:35:36,985 | INFO | code-magnetism | Incoming update 822055109
+2025-09-23 11:35:36,986 | INFO | code-magnetism | Message from 1648917869 (@Tokyo_tokyo): /start
+2025-09-23 11:35:37,886 | INFO | aiogram.event | Update id=822055109 is handled. Duration 898 ms by bot id=8485537220
+2025-09-23 11:35:37,887 | INFO | code-magnetism | Update 822055109 processed successfully
+2025-09-23 11:35:37,888 | INFO | uvicorn.access | 91.108.5.36:0 - "POST /telegram/webhook?secret=change_me HTTP/1.1" 200
+2025-09-23 11:37:08,958 | INFO | code-magnetism | Incoming update 822055110
+2025-09-23 11:37:08,959 | INFO | code-magnetism | Message from 1648917869 (@Tokyo_tokyo): /start
+2025-09-23 11:37:09,784 | INFO | aiogram.event | Update id=822055110 is handled. Duration 823 ms by bot id=8485537220
+2025-09-23 11:37:09,785 | INFO | code-magnetism | Update 822055110 processed successfully
+2025-09-23 11:37:09,786 | INFO | uvicorn.access | 91.108.5.36:0 - "POST /telegram/webhook?secret=change_me HTTP/1.1" 200
+2025-09-23 11:37:38,631 | INFO | code-magnetism | Incoming update 822055111
+2025-09-23 11:37:38,632 | INFO | code-magnetism | Message from 1648917869 (@Tokyo_tokyo): Админ-панель
+2025-09-23 11:37:39,484 | INFO | aiogram.event | Update id=822055111 is handled. Duration 850 ms by bot id=8485537220
+2025-09-23 11:37:39,485 | INFO | code-magnetism | Update 822055111 processed successfully
+2025-09-23 11:37:39,486 | INFO | uvicorn.access | 91.108.5.36:0 - "POST /telegram/webhook?secret=change_me HTTP/1.1" 200
+2025-09-23 11:37:44,964 | INFO | code-magnetism | Incoming update 822055112
+2025-09-23 11:37:44,965 | INFO | code-magnetism | Message from 1648917869 (@Tokyo_tokyo): FAQ
+2025-09-23 11:37:45,378 | INFO | aiogram.event | Update id=822055112 is handled. Duration 410 ms by bot id=8485537220
+2025-09-23 11:37:45,379 | INFO | code-magnetism | Update 822055112 processed successfully
+2025-09-23 11:37:45,382 | INFO | uvicorn.access | 91.108.5.36:0 - "POST /telegram/webhook?secret=change_me HTTP/1.1" 200
+2025-09-23 11:38:06,349 | INFO | code-magnetism | Incoming update 822055113
+2025-09-23 11:38:06,350 | INFO | code-magnetism | Message from 1648917869 (@Tokyo_tokyo): Оплатить доступ
+2025-09-23 11:38:07,148 | INFO | aiogram.event | Update id=822055113 is handled. Duration 795 ms by bot id=8485537220
+2025-09-23 11:38:07,148 | INFO | code-magnetism | Update 822055113 processed successfully
+2025-09-23 11:38:07,150 | INFO | uvicorn.access | 91.108.5.36:0 - "POST /telegram/webhook?secret=change_me HTTP/1.1" 200
+2025-09-23 11:38:19,850 | INFO | code-magnetism | Incoming update 822055114
+2025-09-23 11:38:19,852 | INFO | code-magnetism | Message from 1648917869 (@Tokyo_tokyo): Поддержка
+2025-09-23 11:38:20,109 | INFO | aiogram.event | Update id=822055114 is handled. Duration 255 ms by bot id=8485537220
+2025-09-23 11:38:20,110 | INFO | code-magnetism | Update 822055114 processed successfully
+2025-09-23 11:38:20,112 | INFO | uvicorn.access | 91.108.5.36:0 - "POST /telegram/webhook?secret=change_me HTTP/1.1" 200
+2025-09-23 11:40:29,408 | INFO | code-magnetism | Incoming update 822055115
+2025-09-23 11:40:29,408 | INFO | code-magnetism | Callback from 1648917869 (@Tokyo_tokyo): menu:rules
+2025-09-23 11:40:30,584 | INFO | aiogram.event | Update id=822055115 is handled. Duration 1126 ms by bot id=8485537220
+2025-09-23 11:40:30,589 | INFO | code-magnetism | Update 822055115 processed successfully
+2025-09-23 11:40:30,594 | INFO | uvicorn.access | 91.108.5.36:0 - "POST /telegram/webhook?secret=change_me HTTP/1.1" 200
+2025-09-23 11:40:46,592 | INFO | code-magnetism | Incoming update 822055116
+2025-09-23 11:40:46,593 | INFO | code-magnetism | Message from 1648917869 (@Tokyo_tokyo): /start
+2025-09-23 11:40:47,538 | INFO | aiogram.event | Update id=822055116 is handled. Duration 943 ms by bot id=8485537220
+2025-09-23 11:40:47,539 | INFO | code-magnetism | Update 822055116 processed successfully
+2025-09-23 11:40:47,540 | INFO | uvicorn.access | 91.108.5.36:0 - "POST /telegram/webhook?secret=change_me HTTP/1.1" 200
+2025-09-23 11:41:43,488 | INFO | code-magnetism | Incoming update 822055117
+2025-09-23 11:41:43,489 | INFO | code-magnetism | Message from 1648917869 (@Tokyo_tokyo): Пройти тест
+2025-09-23 11:41:44,221 | INFO | aiogram.event | Update id=822055117 is handled. Duration 730 ms by bot id=8485537220
+2025-09-23 11:41:44,222 | INFO | code-magnetism | Update 822055117 processed successfully
+2025-09-23 11:41:44,223 | INFO | uvicorn.access | 91.108.5.36:0 - "POST /telegram/webhook?secret=change_me HTTP/1.1" 200
+2025-09-23 11:41:50,563 | INFO | code-magnetism | Incoming update 822055118
+2025-09-23 11:41:50,565 | INFO | code-magnetism | Message from 1648917869 (@Tokyo_tokyo): Бесплатные уроки
+2025-09-23 11:41:50,916 | INFO | aiogram.event | Update id=822055118 is handled. Duration 349 ms by bot id=8485537220
+2025-09-23 11:41:50,918 | INFO | code-magnetism | Update 822055118 processed successfully
+2025-09-23 11:41:50,919 | INFO | uvicorn.access | 91.108.5.36:0 - "POST /telegram/webhook?secret=change_me HTTP/1.1" 200
+2025-09-23 11:41:55,895 | INFO | code-magnetism | Incoming update 822055119
+2025-09-23 11:41:55,897 | INFO | code-magnetism | Message from 1648917869 (@Tokyo_tokyo): Мой прогресс
+2025-09-23 11:41:56,161 | INFO | aiogram.event | Update id=822055119 is handled. Duration 261 ms by bot id=8485537220
+2025-09-23 11:41:56,162 | INFO | code-magnetism | Update 822055119 processed successfully
+2025-09-23 11:41:56,165 | INFO | uvicorn.access | 91.108.5.36:0 - "POST /telegram/webhook?secret=change_me HTTP/1.1" 200
+2025-09-23 11:42:07,908 | INFO | code-magnetism | Incoming update 822055120
+2025-09-23 11:42:07,909 | INFO | code-magnetism | Message from 1648917869 (@Tokyo_tokyo): Пройти тест
+2025-09-23 11:42:08,168 | INFO | aiogram.event | Update id=822055120 is handled. Duration 256 ms by bot id=8485537220
+2025-09-23 11:42:08,169 | INFO | code-magnetism | Update 822055120 processed successfully
+2025-09-23 11:42:08,170 | INFO | uvicorn.access | 91.108.5.36:0 - "POST /telegram/webhook?secret=change_me HTTP/1.1" 200
+2025-09-23 11:42:18,203 | INFO | code-magnetism | Incoming update 822055121
+2025-09-23 11:42:18,204 | INFO | code-magnetism | Message from 1648917869 (@Tokyo_tokyo): Пройти тест
+2025-09-23 11:42:18,511 | INFO | aiogram.event | Update id=822055121 is handled. Duration 304 ms by bot id=8485537220
+2025-09-23 11:42:18,513 | INFO | code-magnetism | Update 822055121 processed successfully
+2025-09-23 11:42:18,514 | INFO | uvicorn.access | 91.108.5.36:0 - "POST /telegram/webhook?secret=change_me HTTP/1.1" 200
+2025-09-23 11:42:20,733 | INFO | code-magnetism | Incoming update 822055122
+2025-09-23 11:42:20,734 | INFO | code-magnetism | Message from 1648917869 (@Tokyo_tokyo): Записаться на разбор
+2025-09-23 11:42:21,055 | INFO | aiogram.event | Update id=822055122 is handled. Duration 319 ms by bot id=8485537220
+2025-09-23 11:42:21,056 | INFO | code-magnetism | Update 822055122 processed successfully
+2025-09-23 11:42:21,057 | INFO | uvicorn.access | 91.108.5.36:0 - "POST /telegram/webhook?secret=change_me HTTP/1.1" 200
+2025-09-23 11:42:39,652 | INFO | code-magnetism | Incoming update 822055123
+2025-09-23 11:42:39,653 | INFO | code-magnetism | Message from 815370781 (@goldfinger_uk): FAQ
+2025-09-23 11:42:40,498 | INFO | aiogram.event | Update id=822055123 is handled. Duration 843 ms by bot id=8485537220
+2025-09-23 11:42:40,499 | INFO | code-magnetism | Update 822055123 processed successfully
+2025-09-23 11:42:40,501 | INFO | uvicorn.access | 91.108.5.36:0 - "POST /telegram/webhook?secret=change_me HTTP/1.1" 200
+2025-09-23 11:42:41,750 | INFO | code-magnetism | Incoming update 822055124
+2025-09-23 11:42:41,752 | INFO | code-magnetism | Message from 815370781 (@goldfinger_uk): О клубе
+2025-09-23 11:42:42,047 | INFO | aiogram.event | Update id=822055124 is handled. Duration 293 ms by bot id=8485537220
+2025-09-23 11:42:42,048 | INFO | code-magnetism | Update 822055124 processed successfully
+2025-09-23 11:42:42,050 | INFO | uvicorn.access | 91.108.5.36:0 - "POST /telegram/webhook?secret=change_me HTTP/1.1" 200
+2025-09-23 11:42:44,811 | INFO | code-magnetism | Incoming update 822055125
+2025-09-23 11:42:44,815 | INFO | code-magnetism | Message from 815370781 (@goldfinger_uk): Правила
+2025-09-23 11:42:45,165 | INFO | aiogram.event | Update id=822055125 is handled. Duration 348 ms by bot id=8485537220
+2025-09-23 11:42:45,166 | INFO | code-magnetism | Update 822055125 processed successfully
+2025-09-23 11:42:45,167 | INFO | uvicorn.access | 91.108.5.36:0 - "POST /telegram/webhook?secret=change_me HTTP/1.1" 200
+2025-09-23 11:42:46,181 | INFO | code-magnetism | Incoming update 822055126
+2025-09-23 11:42:46,182 | INFO | code-magnetism | Message from 815370781 (@goldfinger_uk): Пройти тест
+2025-09-23 11:42:46,480 | INFO | aiogram.event | Update id=822055126 is handled. Duration 295 ms by bot id=8485537220
+2025-09-23 11:42:46,481 | INFO | code-magnetism | Update 822055126 processed successfully
+2025-09-23 11:42:46,483 | INFO | uvicorn.access | 91.108.5.36:0 - "POST /telegram/webhook?secret=change_me HTTP/1.1" 200
+2025-09-23 11:42:47,972 | INFO | code-magnetism | Incoming update 822055127
+2025-09-23 11:42:47,972 | INFO | code-magnetism | Message from 815370781 (@goldfinger_uk): Записаться на разбор
+2025-09-23 11:42:48,270 | INFO | aiogram.event | Update id=822055127 is handled. Duration 294 ms by bot id=8485537220
+2025-09-23 11:42:48,271 | INFO | code-magnetism | Update 822055127 processed successfully
+2025-09-23 11:42:48,272 | INFO | uvicorn.access | 91.108.5.36:0 - "POST /telegram/webhook?secret=change_me HTTP/1.1" 200
+2025-09-23 12:10:42,093 | INFO | code-magnetism | Incoming update 822055128
+2025-09-23 12:10:42,094 | INFO | code-magnetism | Message from 1648917869 (@Tokyo_tokyo): /start
+2025-09-23 12:10:44,894 | INFO | aiogram.event | Update id=822055128 is handled. Duration 2797 ms by bot id=8485537220
+2025-09-23 12:10:44,895 | INFO | code-magnetism | Update 822055128 processed successfully
+2025-09-23 12:10:44,897 | INFO | uvicorn.access | 91.108.5.36:0 - "POST /telegram/webhook?secret=change_me HTTP/1.1" 200
+2025-09-23 12:10:49,602 | INFO | code-magnetism | Incoming update 822055129
+2025-09-23 12:10:49,603 | INFO | code-magnetism | Message from 1648917869 (@Tokyo_tokyo): FAQ
+2025-09-23 12:10:49,908 | INFO | aiogram.event | Update id=822055129 is handled. Duration 303 ms by bot id=8485537220
+2025-09-23 12:10:49,909 | INFO | code-magnetism | Update 822055129 processed successfully
+2025-09-23 12:10:49,910 | INFO | uvicorn.access | 91.108.5.36:0 - "POST /telegram/webhook?secret=change_me HTTP/1.1" 200
+2025-09-23 12:11:05,847 | INFO | code-magnetism | Incoming update 822055130
+2025-09-23 12:11:05,848 | INFO | code-magnetism | Message from 1648917869 (@Tokyo_tokyo): Пройти тест
+2025-09-23 12:11:07,072 | INFO | aiogram.event | Update id=822055130 is handled. Duration 1220 ms by bot id=8485537220
+2025-09-23 12:11:07,073 | INFO | code-magnetism | Update 822055130 processed successfully
+2025-09-23 12:11:07,074 | INFO | uvicorn.access | 91.108.5.36:0 - "POST /telegram/webhook?secret=change_me HTTP/1.1" 200
+2025-09-23 12:11:13,892 | INFO | code-magnetism | Incoming update 822055131
+2025-09-23 12:11:13,892 | INFO | code-magnetism | Message from 1648917869 (@Tokyo_tokyo): Мой прогресс
+2025-09-23 12:11:14,273 | INFO | aiogram.event | Update id=822055131 is handled. Duration 377 ms by bot id=8485537220
+2025-09-23 12:11:14,276 | INFO | code-magnetism | Update 822055131 processed successfully
+2025-09-23 12:11:14,277 | INFO | uvicorn.access | 91.108.5.36:0 - "POST /telegram/webhook?secret=change_me HTTP/1.1" 200
+2025-09-23 12:11:18,004 | INFO | code-magnetism | Incoming update 822055132
+2025-09-23 12:11:18,005 | INFO | code-magnetism | Message from 1648917869 (@Tokyo_tokyo): Поддержка
+2025-09-23 12:11:18,298 | INFO | aiogram.event | Update id=822055132 is handled. Duration 290 ms by bot id=8485537220
+2025-09-23 12:11:18,307 | INFO | code-magnetism | Update 822055132 processed successfully
+2025-09-23 12:11:18,310 | INFO | uvicorn.access | 91.108.5.36:0 - "POST /telegram/webhook?secret=change_me HTTP/1.1" 200
+2025-09-23 12:11:29,670 | INFO | code-magnetism | Incoming update 822055133
+2025-09-23 12:11:29,671 | INFO | code-magnetism | Message from 1648917869 (@Tokyo_tokyo): Правила
+2025-09-23 12:11:29,958 | INFO | aiogram.event | Update id=822055133 is handled. Duration 284 ms by bot id=8485537220
+2025-09-23 12:11:29,960 | INFO | code-magnetism | Update 822055133 processed successfully
+2025-09-23 12:11:29,963 | INFO | uvicorn.access | 91.108.5.36:0 - "POST /telegram/webhook?secret=change_me HTTP/1.1" 200
+2025-09-23 12:11:40,479 | INFO | code-magnetism | Incoming update 822055134
+2025-09-23 12:11:40,481 | INFO | code-magnetism | Message from 1648917869 (@Tokyo_tokyo): Записаться на разбор
+2025-09-23 12:11:40,858 | INFO | aiogram.event | Update id=822055134 is handled. Duration 374 ms by bot id=8485537220
+2025-09-23 12:11:40,859 | INFO | code-magnetism | Update 822055134 processed successfully
+2025-09-23 12:11:40,861 | INFO | uvicorn.access | 91.108.5.36:0 - "POST /telegram/webhook?secret=change_me HTTP/1.1" 200
+2025-09-23 12:11:45,429 | INFO | code-magnetism | Incoming update 822055135
+2025-09-23 12:11:45,431 | INFO | code-magnetism | Message from 1648917869 (@Tokyo_tokyo): Оплатить доступ
+2025-09-23 12:11:45,709 | INFO | aiogram.event | Update id=822055135 is handled. Duration 276 ms by bot id=8485537220
+2025-09-23 12:11:45,710 | INFO | code-magnetism | Update 822055135 processed successfully
+2025-09-23 12:11:45,711 | INFO | uvicorn.access | 91.108.5.36:0 - "POST /telegram/webhook?secret=change_me HTTP/1.1" 200
