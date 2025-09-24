@@ -1,0 +1,96 @@
+# CODE: Magnetism Telegram Bot
+
+Этот репозиторий содержит Telegram-бота и вспомогательный REST API, написанный на FastAPI и aiogram. Проект готов к деплою «из коробки» в Docker вместе с PostgreSQL.
+
+## Структура
+
+- `app.py` — основной FastAPI/aiogram-приложение.
+- `db.py`, `schema.sql` — инициализация и утилиты работы с PostgreSQL.
+- `handlers.py`, `keyboards.py`, `scheduler.py` — логика бота, клавиатуры и планировщик.
+- `docker-compose.yml` — оркестрация Docker-сервисов (бот + PostgreSQL).
+- `Dockerfile` — образ приложения.
+- `.env.example` — пример файла окружения.
+- `.dockerignore` — исключения из контекста сборки.
+
+## Быстрый старт в Docker
+
+1. **Склонируйте репозиторий на сервер:**
+
+   ```bash
+   git clone https://github.com/<your-org>/telegram-botCM.git
+   cd telegram-botCM
+   ```
+
+2. **Создайте файл окружения:**
+
+   ```bash
+   cp .env.example .env
+   ```
+
+   Обязательно укажите боевой `BOT_TOKEN`, `PUBLIC_BASE_URL`, `WEBHOOK_SECRET`, идентификаторы администраторов и другие значения.
+
+3. **Запустите сервисы:**
+
+   ```bash
+   docker compose up -d --build
+   ```
+
+   По умолчанию FastAPI доступен на `http://localhost:8000`, Postgres — во внутренней сети Compose.
+
+4. **Проверьте работоспособность:**
+
+   ```bash
+   curl http://localhost:8000/health
+   ```
+
+   Ожидаемый ответ — JSON со статусом `ok`.
+
+## Переменные окружения
+
+| Переменная | Назначение |
+| ---------- | ---------- |
+| `BOT_TOKEN` | Токен Telegram-бота |
+| `ADMIN_IDS` | CSV-список Telegram ID администраторов |
+| `PUBLIC_BASE_URL` | Публичный URL, по которому Telegram обращается к вебхуку |
+| `WEBHOOK_SECRET` | Секрет для ручного управления вебхуком и админ-эндпоинтов |
+| `DB_DSN` | Строка подключения к PostgreSQL (для Docker — `postgres`) |
+| `BOT_TIMEZONE` | Таймзона планировщика уроков |
+| `TIME_SEND_LESSONS` | Локальное время запуска рассылки уроков |
+| `WELCOME_POST_URL` | Ссылка на приветственный пост клуба |
+| `SUPPORT_CONTACT` | Контакт службы поддержки |
+| `CLUB_CHAT_ID` | Числовой chat_id клубного чата (бот должен быть админом) |
+| `AT_WEBHOOK_SHARED_SECRET` | Секрет для вебхуков Anti-training (опционально) |
+
+## Разработка без Docker
+
+1. Установите зависимости:
+
+   ```bash
+   python -m venv venv
+   source venv/bin/activate
+   pip install -r requirements.txt
+   ```
+
+2. Поднимите PostgreSQL локально или используйте Docker-контейнер.
+3. Настройте `.env` (см. пример).
+4. Запустите приложение:
+
+   ```bash
+   uvicorn app:app --reload
+   ```
+
+## Обновление и деплой
+
+```bash
+git pull
+docker compose pull
+docker compose up -d --build
+```
+
+Docker перезапустит сервисы с обновлённым кодом. Логи приложения доступны через `docker compose logs -f bot`.
+
+## Резервное копирование данных
+
+- Данные PostgreSQL хранятся в volume `postgres_data`.
+- Для бэкапа используйте `docker run --rm --volumes-from code-magnetism-db postgres:15-alpine pg_dump -U magnet magnetism > backup.sql`.
+
