@@ -43,6 +43,7 @@ from keyboards import (
     admin_broadcast_confirm_keyboard,
     admin_broadcast_templates_keyboard,
     admin_broadcast_delete_keyboard,
+    BROADCAST_TEMPLATE_PREFIX,
     BACK_TO_MAIN,
     BACK_TO_LEARNING,
     BACK_TO_ADMIN,
@@ -63,6 +64,7 @@ from keyboards import (
     ADMIN_CONTENT_VIEW,
     ADMIN_CONTENT_CREATE,
     ADMIN_CONTENT_SUGGEST_MORE,
+    ADMIN_CONTENT_TAGS_HELP,
     ADMIN_USERS_BUTTON,
     ADMIN_BROADCAST_BUTTON,
     ADMIN_BEHAVIOR_BUTTON,
@@ -165,6 +167,68 @@ def sanitize_html(text: str) -> str:
     text = re.sub(r'<[^>]*>', '', text)
 
     return text
+
+
+_SHORTCUT_LINK_RE = re.compile(r"(?<!\\)\[([^\]]+)\]\(([^)]+)\)")
+_SHORTCUT_CODE_RE = re.compile(r"(?<!\\)`([^`]+)`")
+_SHORTCUT_BOLD_RE = re.compile(r"(?<!\\)\*\*(.+?)\*\*(?!\*)", re.S)
+_SHORTCUT_UNDERLINE_RE = re.compile(r"(?<!\\)__(.+?)__(?!_)", re.S)
+_SHORTCUT_ITALIC_RE = re.compile(r"(?<!\\)(?<!_)_(?!_)(.+?)(?<!_)_(?!_)", re.S)
+_SHORTCUT_ESCAPE_RE = re.compile(r"\\([*_`\[\]()])")
+
+
+def apply_formatting_shortcuts(text: str) -> str:
+    """Преобразует простые маркдауно-подобные сокращения в HTML-теги."""
+    if not text:
+        return ""
+
+    result = text
+
+    # Сохраняем исходные HTML-теги, чтобы не испортить атрибуты с подчёркиваниями и звёздочками
+    html_tags: list[str] = []
+
+    def _store_tag(match: re.Match[str]) -> str:
+        html_tags.append(match.group(0))
+        return f"__HTMLTAG_{len(html_tags) - 1}__"
+
+    result = re.sub(r"<[^>]+>", _store_tag, result)
+
+    def _link_repl(match: re.Match[str]) -> str:
+        label = match.group(1).strip()
+        url = match.group(2).strip()
+        if not url:
+            return match.group(0)
+        safe_url = html.escape(url, quote=True)
+        return f'<a href="{safe_url}">{label}</a>'
+
+    result = _SHORTCUT_LINK_RE.sub(_link_repl, result)
+    result = _SHORTCUT_CODE_RE.sub(lambda m: f"<code>{m.group(1)}</code>", result)
+    result = _SHORTCUT_BOLD_RE.sub(lambda m: f"<b>{m.group(1)}</b>", result)
+    result = _SHORTCUT_UNDERLINE_RE.sub(lambda m: f"<u>{m.group(1)}</u>", result)
+    result = _SHORTCUT_ITALIC_RE.sub(lambda m: f"<i>{m.group(1)}</i>", result)
+    result = _SHORTCUT_ESCAPE_RE.sub(lambda m: m.group(1), result)
+
+    if html_tags:
+        def _restore_tag(match: re.Match[str]) -> str:
+            idx = int(match.group(1))
+            if 0 <= idx < len(html_tags):
+                return html_tags[idx]
+            return match.group(0)
+
+        result = re.sub(r"__HTMLTAG_(\d+)__", _restore_tag, result)
+
+    return result
+
+
+def prepare_admin_text_input(raw_text: str | None) -> str:
+    """Очищает ввод администратора и приводит его к безопасному HTML."""
+    if raw_text is None:
+        return ""
+    cleaned = raw_text.strip()
+    if not cleaned:
+        return ""
+    formatted = apply_formatting_shortcuts(cleaned)
+    return sanitize_html(formatted)
 
 
 def render_content(text: str, **placeholders: str) -> str:
@@ -516,6 +580,23 @@ _ADMIN_TEXT_PLACEHOLDERS: dict[str, list[str]] = {
     "menu.support": ["{support}", "{{SUPPORT_CONTACT}}"],
 }
 
+_CONTENT_KEY_HINTS: dict[str, str] = {
+    "about": "Описание клуба по умолчанию",
+    "rules": "Правила сообщества",
+    "faq": "Ответы на частые вопросы",
+    "weekly_materials": "Шаблон блока «Материалы недели»",
+    "schedule": "Основной текст расписания",
+    "offer_after_lesson_4": "Оффер после четвёртого урока",
+}
+
+for entries in _ADMIN_TEXT_GROUPS.values():
+    for label, key in entries:
+        if key:
+            _CONTENT_KEY_HINTS.setdefault(key, label)
+
+for setting_key, label in _ADMIN_SETTINGS_LABELS.items():
+    _CONTENT_KEY_HINTS.setdefault(f"settings.{setting_key}", f"Настройка: {label}")
+
 _CONTENT_KEY_PATTERN = re.compile(r"^[A-Za-z0-9_.-]{3,}$")
 _CONTENT_SUGGESTION_STEP = 6
 _CONTENT_SUGGESTION_LIMIT = 60
@@ -537,7 +618,6 @@ _BROADCAST_BUTTON_SEGMENTS: dict[str, str] = {
     BROADCAST_EXPIRED_BUTTON: "member_expired",
 }
 
-_TEMPLATE_BUTTON_PREFIX = "📄 "
 _TEMPLATE_DELETE_PREFIX = "🗑️ "
 _ONBOARDING_EDIT_PREFIX = "✏️ Шаг "
 _ONBOARDING_DELETE_PREFIX = "🗑️ Шаг "
@@ -601,8 +681,60 @@ def _suggestion_chunk(
     return chunk, next_offset, total, reached_end, normalized
 
 
+def _describe_content_key(key: str) -> str:
+    if not key:
+        return ""
+
+    if key in _CONTENT_KEY_HINTS:
+        return _CONTENT_KEY_HINTS[key]
+
+    if key.startswith("onboarding."):
+        suffix = key.split(".", 1)[1]
+        if suffix.isdigit():
+            return f"Шаг онбординга #{int(suffix) + 1}"
+        return "Шаг онбординга"
+
+    if key.startswith("funnel.lesson_urls."):
+        lesson = key.rsplit(".", 1)[-1]
+        if lesson.isdigit():
+            return f"Ссылка на урок {lesson}"
+        return "Ссылка на урок"
+
+    if key.startswith("funnel.hw_questions."):
+        lesson = key.rsplit(".", 1)[-1]
+        if lesson.isdigit():
+            return f"Вопрос ДЗ для урока {lesson}"
+        return "Вопрос для домашнего задания"
+
+    offer_match = re.match(r"offer_after_lesson_(\d+)", key)
+    if offer_match:
+        return f"Оффер после урока {offer_match.group(1)}"
+
+    if key.startswith("settings."):
+        setting = key.split(".", 1)[1]
+        label = _ADMIN_SETTINGS_LABELS.get(setting)
+        if label:
+            return f"Настройка: {label}"
+        return "Настройка бота"
+
+    if key.startswith("funnel."):
+        return "Настройки воронки обучения"
+
+    if "." not in key:
+        return "Пользовательский текст из шаблона"
+
+    return "Пользовательский текст"
+
+
 def _format_suggestion_lines(keys: list[str]) -> list[str]:
-    return [f"• <code>{html.escape(key)}</code>" for key in keys]
+    lines: list[str] = []
+    for key in keys:
+        description = _describe_content_key(key)
+        if description:
+            lines.append(f"• <code>{html.escape(key)}</code> — {html.escape(description)}")
+        else:
+            lines.append(f"• <code>{html.escape(key)}</code>")
+    return lines
 
 
 def _filter_suggestions(keys: list[str], query: str, limit: int = 5) -> list[str]:
@@ -1346,6 +1478,8 @@ async def send_admin_content_menu(message: types.Message) -> None:
         "• 📄 <b>Тексты экранов</b> — выбрать готовый экран и обновить его текст.\n"
         "• 🔍 <b>Посмотреть текст</b> — узнать текущее содержимое любого ключа и при необходимости сразу обновить его ответом.\n"
         "• ➕ <b>Добавить или обновить текст</b> — создать свой ключ или выбрать существующий из подсказок.\n\n"
+        "Можно писать обычным текстом — бот автоматически преобразует популярные сокращения в теги и очищает форматирование.\n"
+        "Подробности о тегах и примерах — в кнопке «ℹ️ Форматирование текста».\n"
         "Допустимы теги: <code>&lt;b&gt;</code>, <code>&lt;i&gt;</code>, <code>&lt;u&gt;</code>, <code>&lt;strong&gt;</code>, <code>&lt;em&gt;</code>, <code>&lt;code&gt;</code>, <code>&lt;a href=&quot;...&quot;&gt;</code>.\n"
         "Бот подсказывает популярные ключи и запоминает последние изменения, чтобы можно было быстро вносить правки.\n"
         "Если нужно отменить действие — нажми кнопку «Отмена»."
@@ -2544,7 +2678,7 @@ async def admin_behavior_start_receive(message: types.Message, state: FSMContext
         await state.clear()
         return
 
-    new_text = sanitize_html(message.text.strip())
+    new_text = prepare_admin_text_input(message.text)
     await set_content_value("menu.start", new_text)
     await log_admin_action(
         message.from_user.id,
@@ -2618,7 +2752,7 @@ async def admin_behavior_registration_receive(message: types.Message, state: FSM
         await state.clear()
         return
 
-    new_text = sanitize_html(message.text.strip())
+    new_text = prepare_admin_text_input(message.text)
     await set_content_value("menu.registration_complete", new_text)
     await log_admin_action(
         message.from_user.id,
@@ -2719,7 +2853,7 @@ async def admin_onboarding_receive_text(message: types.Message, state: FSMContex
     idx = (data or {}).get("onboarding_index")
     steps = await get_onboarding_steps()
 
-    new_text = sanitize_html(message.text.strip())
+    new_text = prepare_admin_text_input(message.text)
     if mode == "add" or idx is None or idx >= len(steps):
         steps.append(new_text)
     else:
@@ -2902,11 +3036,11 @@ async def admin_broadcast_choose_segment(message: types.Message, state: FSMConte
     )
 
 
-@router.message(F.text.func(lambda text: text and text.startswith(_TEMPLATE_BUTTON_PREFIX)))
+@router.message(F.text.func(lambda text: text and text.startswith(BROADCAST_TEMPLATE_PREFIX)))
 async def admin_broadcast_use_template(message: types.Message, state: FSMContext):
     if not is_admin_id(message.from_user.id):
         return
-    title = message.text[len(_TEMPLATE_BUTTON_PREFIX):].strip()
+    title = message.text[len(BROADCAST_TEMPLATE_PREFIX):].strip()
     if not title:
         return
     template = await get_broadcast_template_by_title(title)
@@ -2931,6 +3065,31 @@ async def admin_content_menu(message: types.Message, state: FSMContext):
         return
     await _reset_state_if_needed(state)
     await send_admin_content_menu(message)
+
+
+@router.message(F.text == ADMIN_CONTENT_TAGS_HELP)
+async def admin_content_formatting_help(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+    await _reset_state_if_needed(state)
+    text = (
+        "<b>Форматирование текста</b>\n\n"
+        "Можно писать обычными словами или использовать сокращения — бот сам превратит их в теги:\n"
+        "• <code>**жирный**</code> → <b>жирный</b>\n"
+        "• <code>_курсив_</code> → <i>курсив</i>\n"
+        "• <code>__подчёркнуто__</code> → <u>подчёркнуто</u>\n"
+        "• <code>`код`</code> → <code>код</code>\n"
+        "• <code>[ссылка](https://site)</code> → <a href=\"https://site\">ссылка</a>\n\n"
+        "Также доступны HTML-теги напрямую: <code>&lt;b&gt;</code>, <code>&lt;i&gt;</code>, <code>&lt;u&gt;</code>, <code>&lt;strong&gt;</code>, <code>&lt;em&gt;</code>, <code>&lt;code&gt;</code>, <code>&lt;a href=&quot;...&quot;&gt;</code>.\n"
+        "Если нужно вывести символы <code>*</code>, <code>_</code> или <code>`</code> без форматирования — поставь перед ними обратный слеш, например <code>\\*</code>.\n"
+        "Плейсхолдеры (например, <code>{name}</code>) остаются без изменений и подставляются автоматически."
+    )
+    await message.answer(
+        text,
+        reply_markup=admin_content_keyboard(),
+        parse_mode=ParseMode.HTML,
+        disable_web_page_preview=True,
+    )
 
 
 @router.message(F.text == ADMIN_CONTENT_VIEW)
@@ -3154,6 +3313,9 @@ async def admin_content_create_prompt(message: types.Message, state: FSMContext)
 
     lines.extend([
         "",
+        "Бот понимает <code>**жирный**</code>, <code>_курсив_</code> и другие сокращения — можно писать как в заметке, он всё приведёт в порядок.",
+        "За подробностями нажми «ℹ️ Форматирование текста».",
+        "",
         "После выбора бот покажет текущий текст и предложит отправить новый вариант одним сообщением.",
         "Для отмены нажми «Отмена».",
     ])
@@ -3301,7 +3463,7 @@ async def admin_content_receive_value(message: types.Message, state: FSMContext)
         )
         return
 
-    new_text = (message.text or "").strip()
+    new_text = prepare_admin_text_input(message.text)
     await set_content_value(key, new_text)
     await log_admin_action(
         message.from_user.id,
@@ -3348,7 +3510,8 @@ async def admin_content_quick_reply_update(message: types.Message, state: FSMCon
     if not key or not _CONTENT_KEY_PATTERN.match(key):
         return
 
-    new_text = (message.text or message.caption or "").strip()
+    source_text = message.text or message.caption or ""
+    new_text = prepare_admin_text_input(source_text)
     if not new_text:
         await message.answer(
             "Сообщение пустое — текст не обновлён. Пришли текст или используй меню.",
@@ -3465,6 +3628,9 @@ async def admin_texts_edit_prompt(message: types.Message, state: FSMContext):
         "<b>Текущий текст:</b>",
         preview,
         "",
+        "Можно писать обычным текстом — бот преобразует <code>**жирный**</code>, <code>_курсив_</code> и другие сокращения в поддерживаемые теги.",
+        "Если нужна памятка по форматированию — нажми «ℹ️ Форматирование текста».",
+        "",
         "Отправь новый текст одним сообщением — бот сохранит его и сразу начнёт использовать.",
         "Допустимы теги: &lt;b&gt;, &lt;i&gt;, &lt;u&gt;, &lt;strong&gt;, &lt;em&gt;, &lt;code&gt;, &lt;a href=&quot;...&quot;&gt;ссылка&lt;/a&gt;.",
         "Можно отправить текст обычным сообщением или ответом на это сообщение — бот обработает оба варианта.",
@@ -3499,7 +3665,7 @@ async def admin_texts_receive_value(message: types.Message, state: FSMContext):
         await message.answer("Не удалось определить, какой текст обновить. Попробуй ещё раз.")
         return
 
-    new_text = message.text.strip()
+    new_text = prepare_admin_text_input(message.text)
     await set_content_value(key, new_text)
     await log_admin_action(
         message.from_user.id,
@@ -3843,7 +4009,8 @@ async def cmd_content_set(message: types.Message, command: CommandObject):
         await message.answer("Пришли новый текст ответом (reply) на команду /content_set <key>.")
         return
     
-    new_text = message.reply_to_message.text or message.reply_to_message.caption or ""
+    source_text = message.reply_to_message.text or message.reply_to_message.caption or ""
+    new_text = prepare_admin_text_input(source_text)
     await set_content_value(key, new_text)
     
     await log_admin_action(
@@ -4332,6 +4499,9 @@ async def fallback(message: types.Message, state: FSMContext):
         ProfileStates.waiting_email,
         ProfileStates.waiting_phone,
         AdminContentStates.waiting_value,
+        AdminContentStates.waiting_custom_key,
+        AdminContentStates.waiting_custom_value,
+        AdminContentStates.waiting_view_key,
     ):
         return
 
