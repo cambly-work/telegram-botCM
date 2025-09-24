@@ -17,6 +17,8 @@ BACK_TO_PROFILE = "⬅️ К профилю"
 BACK_TO_ADMIN = "⬅️ В админку"
 BACK_TO_TEXT_GROUPS = "⬅️ К списку текстов"
 BACK_TO_LESSONS = "⬅️ К списку уроков"
+BACK_TO_BEHAVIOR = "⬅️ К логике бота"
+BACK_TO_ONBOARDING = "⬅️ К шагам онбординга"
 LESSON_DONE = "✅ Выполнено"
 LESSON_SKIP = "⏭️ Пропустить"
 LESSON_QUESTION = "❓ Задать вопрос"
@@ -33,6 +35,27 @@ ADMIN_BROADCAST_BUTTON = "📢 Рассылка"
 ADMIN_STATS_BUTTON = "📊 Статистика"
 ADMIN_DEBUG_BUTTON = "🛠️ Диагностика"
 ADMIN_SETTINGS_BUTTON = "⚙️ Настройки"
+ADMIN_BEHAVIOR_BUTTON = "🎛 Логика бота"
+
+ADMIN_BEHAVIOR_START = "✉️ Приветствие /start"
+ADMIN_BEHAVIOR_REGISTRATION = "✅ Сообщение после регистрации"
+ADMIN_BEHAVIOR_ONBOARDING = "🚀 Шаги онбординга"
+
+ADD_ONBOARDING_STEP = "➕ Добавить шаг"
+DELETE_ONBOARDING_STEP = "🗑️ Удалить шаг"
+
+BROADCAST_ALL_BUTTON = "📣 Всем"
+BROADCAST_LEADS_BUTTON = "🎯 Лиды"
+BROADCAST_MEMBERS_BUTTON = "🔥 Активные"
+BROADCAST_EXPIRED_BUTTON = "🧊 Завершившие"
+BROADCAST_TEMPLATES_BUTTON = "🗂 Шаблоны рассылок"
+
+SEND_BROADCAST_BUTTON = "🚀 Отправить"
+EDIT_BROADCAST_BUTTON = "✏️ Изменить текст"
+SAVE_BROADCAST_TEMPLATE_BUTTON = "💾 Сохранить шаблон"
+CHANGE_BROADCAST_SEGMENT_BUTTON = "🌐 Изменить сегмент"
+BACK_TO_BROADCAST = "⬅️ К сегментам"
+DELETE_BROADCAST_TEMPLATE_BUTTON = "🗑️ Удалить шаблон"
 
 FEEDBACK_OPTIONS: dict[str, str] = {
     "Отлично": "excellent",
@@ -205,8 +228,9 @@ def remove_keyboard() -> ReplyKeyboardRemove:
 def admin_main_keyboard() -> ReplyKeyboardMarkup:
     rows = [
         [KeyboardButton(text=ADMIN_USERS_BUTTON), KeyboardButton(text=ADMIN_BROADCAST_BUTTON)],
-        [KeyboardButton(text=ADMIN_CONTENT_MENU), KeyboardButton(text=ADMIN_STATS_BUTTON)],
-        [KeyboardButton(text=ADMIN_DEBUG_BUTTON), KeyboardButton(text=ADMIN_SETTINGS_BUTTON)],
+        [KeyboardButton(text=ADMIN_CONTENT_MENU), KeyboardButton(text=ADMIN_BEHAVIOR_BUTTON)],
+        [KeyboardButton(text=ADMIN_STATS_BUTTON), KeyboardButton(text=ADMIN_DEBUG_BUTTON)],
+        [KeyboardButton(text=ADMIN_SETTINGS_BUTTON)],
         [KeyboardButton(text=BACK_TO_MAIN)],
     ]
     return ReplyKeyboardMarkup(
@@ -214,6 +238,80 @@ def admin_main_keyboard() -> ReplyKeyboardMarkup:
         resize_keyboard=True,
         input_field_placeholder="Админ-панель — выберите раздел",
     )
+
+
+def admin_behavior_keyboard() -> ReplyKeyboardMarkup:
+    rows = [
+        [KeyboardButton(text=ADMIN_BEHAVIOR_START)],
+        [KeyboardButton(text=ADMIN_BEHAVIOR_REGISTRATION)],
+        [KeyboardButton(text=ADMIN_BEHAVIOR_ONBOARDING)],
+        [KeyboardButton(text=BACK_TO_ADMIN), KeyboardButton(text=BACK_TO_MAIN)],
+    ]
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
+
+
+def admin_onboarding_steps_keyboard(steps: list[str]) -> ReplyKeyboardMarkup:
+    rows: list[list[KeyboardButton]] = []
+    for idx, _ in enumerate(steps, start=1):
+        rows.append([KeyboardButton(text=f"✏️ Шаг {idx}")])
+    rows.append([KeyboardButton(text=ADD_ONBOARDING_STEP)])
+    if steps:
+        rows.append([KeyboardButton(text=DELETE_ONBOARDING_STEP)])
+    rows.append([KeyboardButton(text=BACK_TO_BEHAVIOR), KeyboardButton(text=BACK_TO_ADMIN)])
+    rows.append([KeyboardButton(text=BACK_TO_MAIN)])
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
+
+
+def admin_onboarding_delete_keyboard(steps: list[str]) -> ReplyKeyboardMarkup:
+    rows: list[list[KeyboardButton]] = []
+    for idx, _ in enumerate(steps, start=1):
+        rows.append([KeyboardButton(text=f"🗑️ Шаг {idx}")])
+    rows.append([KeyboardButton(text=BACK_TO_ONBOARDING)])
+    rows.append([KeyboardButton(text=BACK_TO_BEHAVIOR), KeyboardButton(text=BACK_TO_ADMIN)])
+    rows.append([KeyboardButton(text=BACK_TO_MAIN)])
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
+
+
+def admin_broadcast_keyboard() -> ReplyKeyboardMarkup:
+    rows = [
+        [KeyboardButton(text=BROADCAST_ALL_BUTTON), KeyboardButton(text=BROADCAST_LEADS_BUTTON)],
+        [KeyboardButton(text=BROADCAST_MEMBERS_BUTTON), KeyboardButton(text=BROADCAST_EXPIRED_BUTTON)],
+        [KeyboardButton(text=BROADCAST_TEMPLATES_BUTTON)],
+        [KeyboardButton(text=BACK_TO_ADMIN), KeyboardButton(text=BACK_TO_MAIN)],
+    ]
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
+
+
+def admin_broadcast_confirm_keyboard(include_change_segment: bool = True) -> ReplyKeyboardMarkup:
+    rows: list[list[KeyboardButton]] = [
+        [KeyboardButton(text=SEND_BROADCAST_BUTTON)],
+        [KeyboardButton(text=EDIT_BROADCAST_BUTTON), KeyboardButton(text=SAVE_BROADCAST_TEMPLATE_BUTTON)],
+    ]
+    if include_change_segment:
+        rows.append([KeyboardButton(text=CHANGE_BROADCAST_SEGMENT_BUTTON)])
+    rows.append([KeyboardButton(text=BACK_TO_BROADCAST), KeyboardButton(text=BACK_TO_ADMIN)])
+    rows.append([KeyboardButton(text=BACK_TO_MAIN)])
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
+
+
+def admin_broadcast_templates_keyboard(titles: list[str]) -> ReplyKeyboardMarkup:
+    rows: list[list[KeyboardButton]] = []
+    for title in titles:
+        rows.append([KeyboardButton(text=f"📄 {title}")])
+    if titles:
+        rows.append([KeyboardButton(text=DELETE_BROADCAST_TEMPLATE_BUTTON)])
+    rows.append([KeyboardButton(text=BACK_TO_BROADCAST), KeyboardButton(text=BACK_TO_ADMIN)])
+    rows.append([KeyboardButton(text=BACK_TO_MAIN)])
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
+
+
+def admin_broadcast_delete_keyboard(titles: list[str]) -> ReplyKeyboardMarkup:
+    rows: list[list[KeyboardButton]] = []
+    for title in titles:
+        rows.append([KeyboardButton(text=f"🗑️ {title}")])
+    rows.append([KeyboardButton(text=BACK_TO_BROADCAST)])
+    rows.append([KeyboardButton(text=BACK_TO_ADMIN), KeyboardButton(text=BACK_TO_MAIN)])
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
 
 def admin_settings_keyboard(

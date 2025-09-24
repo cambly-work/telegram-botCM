@@ -34,11 +34,20 @@ from keyboards import (
     admin_content_keyboard,
     admin_text_groups_keyboard,
     admin_text_items_keyboard,
+    admin_behavior_keyboard,
+    admin_onboarding_steps_keyboard,
+    admin_onboarding_delete_keyboard,
+    admin_broadcast_keyboard,
+    admin_broadcast_confirm_keyboard,
+    admin_broadcast_templates_keyboard,
+    admin_broadcast_delete_keyboard,
     BACK_TO_MAIN,
     BACK_TO_LEARNING,
     BACK_TO_ADMIN,
     BACK_TO_TEXT_GROUPS,
     BACK_TO_LESSONS,
+    BACK_TO_BEHAVIOR,
+    BACK_TO_ONBOARDING,
     LESSON_DONE,
     LESSON_SKIP,
     LESSON_QUESTION,
@@ -53,6 +62,22 @@ from keyboards import (
     ADMIN_CONTENT_CREATE,
     ADMIN_USERS_BUTTON,
     ADMIN_BROADCAST_BUTTON,
+    BROADCAST_ALL_BUTTON,
+    BROADCAST_LEADS_BUTTON,
+    BROADCAST_MEMBERS_BUTTON,
+    BROADCAST_EXPIRED_BUTTON,
+    BROADCAST_TEMPLATES_BUTTON,
+    SEND_BROADCAST_BUTTON,
+    EDIT_BROADCAST_BUTTON,
+    SAVE_BROADCAST_TEMPLATE_BUTTON,
+    CHANGE_BROADCAST_SEGMENT_BUTTON,
+    BACK_TO_BROADCAST,
+    DELETE_BROADCAST_TEMPLATE_BUTTON,
+    ADD_ONBOARDING_STEP,
+    DELETE_ONBOARDING_STEP,
+    ADMIN_BEHAVIOR_START,
+    ADMIN_BEHAVIOR_REGISTRATION,
+    ADMIN_BEHAVIOR_ONBOARDING,
     ADMIN_STATS_BUTTON,
     ADMIN_DEBUG_BUTTON,
     ADMIN_SETTINGS_BUTTON,
@@ -252,6 +277,123 @@ async def set_content_value(key: str, value: str) -> None:
 async def list_content_keys_db() -> list[str]:
     rows = await fetch("SELECT key FROM content ORDER BY key ASC")
     return [r["key"] for r in rows] if rows else []
+
+
+async def get_onboarding_steps() -> list[str]:
+    """Возвращает список шагов онбординга из БД либо YAML по умолчанию."""
+    rows = await fetch(
+        """
+        SELECT key, value
+        FROM content
+        WHERE key LIKE $1
+        ORDER BY (regexp_replace(key, '^onboarding\\.', ''))::int
+        """,
+        "onboarding.%",
+    )
+    if rows:
+        steps: list[str] = []
+        for row in rows:
+            value = row.get("value") or ""
+            steps.append(str(value))
+        return steps
+
+    yaml_content = _load_yaml_content()
+    yaml_steps = yaml_content.get("onboarding", []) if isinstance(yaml_content, dict) else []
+    return [str(step) for step in (yaml_steps or [])]
+
+
+async def save_onboarding_steps(steps: list[str]) -> None:
+    """Перезаписывает шаги онбординга в таблице content."""
+    cleaned_steps = [sanitize_html(step or "") for step in steps]
+    await execute("DELETE FROM content WHERE key LIKE $1", "onboarding.%")
+    for idx, step in enumerate(cleaned_steps):
+        await set_content_value(f"onboarding.{idx}", step)
+
+
+def format_onboarding_summary(steps: list[str]) -> str:
+    if not steps:
+        return "Пока нет активных шагов. Добавь первый."
+
+    lines: list[str] = []
+    for idx, step in enumerate(steps, start=1):
+        lines.append(f"{idx}. {step.strip() or '(пусто)'}")
+    return "\n".join(lines)
+
+
+_BROADCAST_SLUG_RE = re.compile(r"[^\w]+", re.UNICODE)
+
+
+async def _generate_broadcast_slug(title: str) -> str:
+    base = _BROADCAST_SLUG_RE.sub("-", (title or "").strip().lower()).strip("-")
+    if not base:
+        base = "template"
+    base = base[:50]
+    candidate = base
+    suffix = 1
+    while await fetchrow("SELECT 1 FROM broadcast_templates WHERE slug=$1", candidate):
+        candidate = f"{base}-{suffix}"[:60]
+        suffix += 1
+    return candidate
+
+
+async def upsert_broadcast_template(title: str, segment: str, body: str) -> dict:
+    sanitized_body = sanitize_html(body or "")
+    existing = await fetchrow("SELECT slug FROM broadcast_templates WHERE title=$1", title)
+    if existing:
+        slug = existing["slug"]
+    else:
+        slug = await _generate_broadcast_slug(title)
+
+    await execute(
+        """
+        INSERT INTO broadcast_templates (slug, title, segment, body, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, NOW(), NOW())
+        ON CONFLICT(slug)
+        DO UPDATE SET
+            title = EXCLUDED.title,
+            segment = EXCLUDED.segment,
+            body = EXCLUDED.body,
+            updated_at = NOW()
+        """,
+        slug,
+        title,
+        segment,
+        sanitized_body,
+    )
+
+    return {
+        "slug": slug,
+        "title": title,
+        "segment": segment,
+        "body": sanitized_body,
+    }
+
+
+async def list_broadcast_templates() -> list[dict]:
+    rows = await fetch(
+        """
+        SELECT slug, title, segment, body
+        FROM broadcast_templates
+        ORDER BY created_at ASC, title ASC
+        """
+    )
+    return [dict(row) for row in rows] if rows else []
+
+
+async def get_broadcast_template_by_title(title: str) -> Optional[dict]:
+    row = await fetchrow(
+        "SELECT slug, title, segment, body FROM broadcast_templates WHERE title=$1",
+        title,
+    )
+    return dict(row) if row else None
+
+
+async def delete_broadcast_template(title: str) -> bool:
+    row = await fetchrow(
+        "DELETE FROM broadcast_templates WHERE title=$1 RETURNING slug",
+        title,
+    )
+    return bool(row)
 def _flatten_yaml_keys(src: dict, prefix: str = "") -> Iterable[str]:
     for k, v in (src or {}).items():
         full = f"{prefix}.{k}" if prefix else str(k)
@@ -272,7 +414,11 @@ class HWStates(StatesGroup):
     waiting_answer = State()  # ждём текстовый ответ на ДЗ ({"lesson_num": int})
     waiting_feedback = State() # ждём обратную связь после урока
 class BroadcastStates(StatesGroup):
-    waiting_body = State()    # ждём текст рассылки ({"segment": str})
+    waiting_segment = State()   # ждём выбор сегмента в мастере
+    waiting_body = State()      # ждём текст рассылки ({"segment": str})
+    waiting_confirm = State()   # подтверждение рассылки
+    waiting_template_title = State()  # название шаблона
+    waiting_template_delete = State() # выбор шаблона для удаления
 class ProfileStates(StatesGroup):
     waiting_email = State()
     waiting_phone = State()
@@ -283,6 +429,13 @@ class AdminContentStates(StatesGroup):
     waiting_custom_key = State()
     waiting_custom_value = State()
     waiting_view_key = State()
+
+
+class AdminBehaviorStates(StatesGroup):
+    waiting_start_text = State()
+    waiting_registration_text = State()
+    waiting_onboarding_text = State()
+    waiting_onboarding_delete = State()
 # ──────────────────────────────────────────────────────────────────────────────
 # Улучшенные клавиатуры
 # ──────────────────────────────────────────────────────────────────────────────
@@ -355,6 +508,26 @@ _ADMIN_TEXT_PLACEHOLDERS: dict[str, list[str]] = {
 }
 
 _CONTENT_KEY_PATTERN = re.compile(r"^[A-Za-z0-9_.-]{3,}$")
+
+
+_BROADCAST_SEGMENT_LABELS: dict[str, str] = {
+    "all": "Все пользователи",
+    "lead_funnel": "Лиды без доступа",
+    "member_active": "Активные участницы",
+    "member_expired": "Доступ истёк",
+}
+
+_BROADCAST_BUTTON_SEGMENTS: dict[str, str] = {
+    BROADCAST_ALL_BUTTON: "all",
+    BROADCAST_LEADS_BUTTON: "lead_funnel",
+    BROADCAST_MEMBERS_BUTTON: "member_active",
+    BROADCAST_EXPIRED_BUTTON: "member_expired",
+}
+
+_TEMPLATE_BUTTON_PREFIX = "📄 "
+_TEMPLATE_DELETE_PREFIX = "🗑️ "
+_ONBOARDING_EDIT_PREFIX = "✏️ Шаг "
+_ONBOARDING_DELETE_PREFIX = "🗑️ Шаг "
 
 
 def _admin_text_labels(group_title: str) -> list[str]:
@@ -1020,6 +1193,78 @@ async def send_admin_settings(
     keyboard = admin_settings_keyboard(flags, _ADMIN_SETTINGS_LABELS)
 
     await message.answer(text, reply_markup=keyboard)
+
+
+async def send_admin_behavior_menu(message: types.Message) -> None:
+    text = (
+        "<b>Логика бота</b>\n\n"
+        "Здесь можно быстро настроить ключевые сценарии:\n"
+        "• Изменить приветствие при /start.\n"
+        "• Обновить сообщение после регистрации.\n"
+        "• Управлять шагами онбординга для новых участниц.\n\n"
+        "Выбирай нужный раздел — бот попросит только текст, остальное он сделает сам."
+    )
+    await message.answer(
+        text,
+        reply_markup=admin_behavior_keyboard(),
+        disable_web_page_preview=True,
+    )
+
+
+async def send_admin_onboarding_menu(message: types.Message) -> None:
+    steps = await get_onboarding_steps()
+    summary = format_onboarding_summary(steps)
+    text = (
+        "<b>Шаги онбординга</b>\n\n"
+        "Эти сообщения бот отправляет новым участницам после оплаты.\n"
+        "Можно редактировать существующие шаги, добавлять новые и удалять лишние.\n\n"
+        f"<b>Текущий сценарий:</b>\n{html.escape(summary)}"
+    )
+    await message.answer(
+        text,
+        reply_markup=admin_onboarding_steps_keyboard(steps),
+        disable_web_page_preview=True,
+    )
+
+
+async def send_admin_broadcast_menu(message: types.Message) -> None:
+    text = (
+        "<b>Рассылка</b>\n\n"
+        "Выберите сегмент, напишите текст — бот покажет предпросмотр и спросит подтверждение.\n"
+        "Можно сохранять тексты как шаблоны и переиспользовать их позже."
+    )
+    await message.answer(
+        text,
+        reply_markup=admin_broadcast_keyboard(),
+        disable_web_page_preview=True,
+    )
+
+
+async def send_admin_broadcast_templates(message: types.Message) -> None:
+    templates = await list_broadcast_templates()
+    titles = [tpl["title"] for tpl in templates]
+    if not templates:
+        text = (
+            "<b>Шаблоны рассылок</b>\n\n"
+            "Пока шаблонов нет. Сохрани любой текст после предпросмотра — и он появится здесь."
+        )
+    else:
+        lines = [
+            "<b>Шаблоны рассылок</b>",
+            "",
+        ]
+        for tpl in templates:
+            segment = tpl.get("segment") or "all"
+            segment_label = _BROADCAST_SEGMENT_LABELS.get(segment, segment)
+            preview = _preview_text_for_admin(tpl.get("body", ""), limit=200)
+            lines.append(f"• <b>{html.escape(tpl['title'])}</b> — {segment_label}\n{preview}")
+        text = "\n".join(lines)
+
+    await message.answer(
+        text,
+        reply_markup=admin_broadcast_templates_keyboard(titles),
+        disable_web_page_preview=True,
+    )
 
 
 async def send_admin_content_menu(message: types.Message) -> None:
@@ -2103,6 +2348,46 @@ async def cancel_handler(message: types.Message, state: FSMContext):
         )
         return
 
+    if (
+        current_state
+        in {
+            AdminBehaviorStates.waiting_start_text.state,
+            AdminBehaviorStates.waiting_registration_text.state,
+        }
+        and is_admin
+    ):
+        await message.answer(
+            "Изменения не сохранены.",
+            reply_markup=admin_behavior_keyboard(),
+            disable_web_page_preview=True,
+        )
+        return
+
+    if (
+        current_state
+        in {
+            AdminBehaviorStates.waiting_onboarding_text.state,
+            AdminBehaviorStates.waiting_onboarding_delete.state,
+        }
+        and is_admin
+    ):
+        await send_admin_onboarding_menu(message)
+        return
+
+    if (
+        current_state
+        in {
+            BroadcastStates.waiting_body.state,
+            BroadcastStates.waiting_confirm.state,
+            BroadcastStates.waiting_template_title.state,
+            BroadcastStates.waiting_template_delete.state,
+            BroadcastStates.waiting_segment.state,
+        }
+        and is_admin
+    ):
+        await send_admin_broadcast_menu(message)
+        return
+
     kb = await build_menu_keyboard(user=user, is_admin=is_admin, section="root")
     await message.answer("Действие отменено. Возвращаюсь в главное меню...", reply_markup=kb)
 
@@ -2123,6 +2408,304 @@ def _admin_toggle_key_from_text(text: str | None) -> str | None:
     return None
 
 
+def _parse_onboarding_index(text: str | None, prefix: str) -> Optional[int]:
+    if not text or not prefix:
+        return None
+    if not text.startswith(prefix):
+        return None
+    tail = text[len(prefix):].strip()
+    if not tail.isdigit():
+        return None
+    idx = int(tail) - 1
+    return idx if idx >= 0 else None
+
+
+@router.message(F.text == BACK_TO_BEHAVIOR)
+async def admin_back_to_behavior(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+    await _reset_state_if_needed(state)
+    await send_admin_behavior_menu(message)
+
+
+@router.message(F.text == ADMIN_BEHAVIOR_BUTTON)
+async def admin_behavior_entry(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+    await _reset_state_if_needed(state)
+    await send_admin_behavior_menu(message)
+
+
+@router.message(F.text == ADMIN_BEHAVIOR_START)
+async def admin_behavior_start_prompt(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+    await _reset_state_if_needed(state)
+    current = await get_content(
+        "menu.start",
+        "Добро пожаловать в CODE: Магнетизм, {name}!",
+    )
+    preview = _preview_text_for_admin(current)
+    placeholders = _ADMIN_TEXT_PLACEHOLDERS.get("menu.start", [])
+    placeholders_line = ""
+    if placeholders:
+        placeholders_line = "\nДоступные плейсхолдеры: " + ", ".join(
+            f"<code>{html.escape(token)}</code>" for token in placeholders
+        )
+
+    await state.set_state(AdminBehaviorStates.waiting_start_text)
+    await message.answer(
+        "<b>Приветствие /start</b>\n\n"
+        "Текущий текст:\n"
+        f"{preview}\n\n"
+        "Пришли новый вариант одним сообщением — бот сохранит его и начнёт показывать новичкам." + placeholders_line +
+        "\n\nДля отмены нажми «Отмена».",
+        reply_markup=cancel_keyboard(),
+        disable_web_page_preview=True,
+    )
+
+
+@router.message(AdminBehaviorStates.waiting_start_text, F.text.len() > 0)
+async def admin_behavior_start_receive(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        await state.clear()
+        return
+
+    new_text = sanitize_html(message.text.strip())
+    await set_content_value("menu.start", new_text)
+    await log_admin_action(
+        message.from_user.id,
+        "behavior_start_update",
+        {"length": len(new_text)},
+    )
+
+    sample_name = (
+        message.from_user.full_name
+        or message.from_user.first_name
+        or "друг"
+    )
+    preview = render_content(
+        new_text,
+        name=sample_name,
+        NAME=sample_name,
+        support=SUPPORT_CONTACT,
+        SUPPORT_CONTACT=SUPPORT_CONTACT,
+        support_contact=SUPPORT_CONTACT,
+    )
+
+    await message.answer(
+        "<b>Так увидит пользователь:</b>",
+        disable_web_page_preview=True,
+    )
+    await message.answer(
+        preview,
+        parse_mode=ParseMode.HTML,
+        disable_web_page_preview=True,
+    )
+    await state.clear()
+    await message.answer(
+        "Приветствие обновлено ✅",
+        reply_markup=admin_behavior_keyboard(),
+        disable_web_page_preview=True,
+    )
+
+
+@router.message(F.text == ADMIN_BEHAVIOR_REGISTRATION)
+async def admin_behavior_registration_prompt(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+    await _reset_state_if_needed(state)
+    current = await get_content(
+        "menu.registration_complete",
+        "Регистрация завершена, {name}!",
+    )
+    preview = _preview_text_for_admin(current)
+    placeholders = _ADMIN_TEXT_PLACEHOLDERS.get("menu.registration_complete", [])
+    placeholders_line = ""
+    if placeholders:
+        placeholders_line = "\nДоступные плейсхолдеры: " + ", ".join(
+            f"<code>{html.escape(token)}</code>" for token in placeholders
+        )
+
+    await state.set_state(AdminBehaviorStates.waiting_registration_text)
+    await message.answer(
+        "<b>Сообщение после регистрации</b>\n\n"
+        "Текущий текст:\n"
+        f"{preview}\n\n"
+        "Пришли новый вариант одним сообщением." + placeholders_line +
+        "\n\nДля отмены нажми «Отмена».",
+        reply_markup=cancel_keyboard(),
+        disable_web_page_preview=True,
+    )
+
+
+@router.message(AdminBehaviorStates.waiting_registration_text, F.text.len() > 0)
+async def admin_behavior_registration_receive(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        await state.clear()
+        return
+
+    new_text = sanitize_html(message.text.strip())
+    await set_content_value("menu.registration_complete", new_text)
+    await log_admin_action(
+        message.from_user.id,
+        "behavior_registration_update",
+        {"length": len(new_text)},
+    )
+
+    sample_name = (
+        message.from_user.full_name
+        or message.from_user.first_name
+        or "друг"
+    )
+    preview = render_content(
+        new_text,
+        name=sample_name,
+        NAME=sample_name,
+        support=SUPPORT_CONTACT,
+        SUPPORT_CONTACT=SUPPORT_CONTACT,
+        support_contact=SUPPORT_CONTACT,
+    )
+
+    await message.answer(
+        "<b>Сообщение обновлено. Предпросмотр:</b>",
+        disable_web_page_preview=True,
+    )
+    await message.answer(
+        preview,
+        parse_mode=ParseMode.HTML,
+        disable_web_page_preview=True,
+    )
+    await state.clear()
+    await message.answer(
+        "Готово!", reply_markup=admin_behavior_keyboard(), disable_web_page_preview=True
+    )
+
+
+@router.message(F.text == ADMIN_BEHAVIOR_ONBOARDING)
+async def admin_behavior_onboarding_menu(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+    await _reset_state_if_needed(state)
+    await send_admin_onboarding_menu(message)
+
+
+@router.message(F.text == BACK_TO_ONBOARDING)
+async def admin_behavior_back_to_onboarding(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+    await _reset_state_if_needed(state)
+    await send_admin_onboarding_menu(message)
+
+
+@router.message(F.text == ADD_ONBOARDING_STEP)
+async def admin_onboarding_add_step(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+    steps = await get_onboarding_steps()
+    await _reset_state_if_needed(state)
+    await state.set_state(AdminBehaviorStates.waiting_onboarding_text)
+    await state.update_data(onboarding_mode="add", onboarding_index=len(steps))
+    await message.answer(
+        "Пришли текст нового шага онбординга. Он появится в конце списка.",
+        reply_markup=cancel_keyboard(),
+    )
+
+
+@router.message(F.text.func(lambda text: text and text.startswith(_ONBOARDING_EDIT_PREFIX)))
+async def admin_onboarding_edit_step(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+    idx = _parse_onboarding_index(message.text, _ONBOARDING_EDIT_PREFIX)
+    if idx is None:
+        return
+    steps = await get_onboarding_steps()
+    if idx >= len(steps):
+        await message.answer("Не удалось найти этот шаг. Обнови список и попробуй снова.")
+        return
+
+    await _reset_state_if_needed(state)
+    await state.set_state(AdminBehaviorStates.waiting_onboarding_text)
+    await state.update_data(onboarding_mode="edit", onboarding_index=idx)
+    current = _preview_text_for_admin(steps[idx])
+    await message.answer(
+        f"<b>Редактирование шага {idx + 1}</b>\n\nТекущий текст:\n{current}\n\nПришли новый вариант.",
+        reply_markup=cancel_keyboard(),
+        disable_web_page_preview=True,
+    )
+
+
+@router.message(AdminBehaviorStates.waiting_onboarding_text, F.text.len() > 0)
+async def admin_onboarding_receive_text(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        await state.clear()
+        return
+
+    data = await state.get_data()
+    mode = (data or {}).get("onboarding_mode", "edit")
+    idx = (data or {}).get("onboarding_index")
+    steps = await get_onboarding_steps()
+
+    new_text = sanitize_html(message.text.strip())
+    if mode == "add" or idx is None or idx >= len(steps):
+        steps.append(new_text)
+    else:
+        steps[idx] = new_text
+
+    await save_onboarding_steps(steps)
+    await log_admin_action(
+        message.from_user.id,
+        "behavior_onboarding_update",
+        {"mode": mode, "index": idx, "count": len(steps)},
+    )
+
+    await state.clear()
+    await message.answer("Шаги сохранены ✅", disable_web_page_preview=True)
+    await send_admin_onboarding_menu(message)
+
+
+@router.message(F.text == DELETE_ONBOARDING_STEP)
+async def admin_onboarding_delete_prompt(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+    steps = await get_onboarding_steps()
+    if not steps:
+        await message.answer("Удалять нечего — список пуст.")
+        return
+    await _reset_state_if_needed(state)
+    await state.set_state(AdminBehaviorStates.waiting_onboarding_delete)
+    await message.answer(
+        "Выбери шаг, который нужно удалить.",
+        reply_markup=admin_onboarding_delete_keyboard(steps),
+    )
+
+
+@router.message(AdminBehaviorStates.waiting_onboarding_delete, F.text.func(lambda text: text and text.startswith(_ONBOARDING_DELETE_PREFIX)))
+async def admin_onboarding_delete_step(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        await state.clear()
+        return
+    idx = _parse_onboarding_index(message.text, _ONBOARDING_DELETE_PREFIX)
+    if idx is None:
+        await message.answer("Не удалось определить шаг. Попробуй снова.")
+        return
+    steps = await get_onboarding_steps()
+    if idx >= len(steps):
+        await state.clear()
+        await send_admin_onboarding_menu(message)
+        return
+    removed = steps.pop(idx)
+    await save_onboarding_steps(steps)
+    await log_admin_action(
+        message.from_user.id,
+        "behavior_onboarding_delete",
+        {"index": idx, "text_length": len(removed or "")},
+    )
+    await state.clear()
+    await message.answer("Шаг удалён.")
+    await send_admin_onboarding_menu(message)
+
+
 @router.message(F.text == ADMIN_USERS_BUTTON)
 async def admin_users_help(message: types.Message):
     if not is_admin_id(message.from_user.id):
@@ -2140,18 +2723,134 @@ async def admin_users_help(message: types.Message):
 
 
 @router.message(F.text == ADMIN_BROADCAST_BUTTON)
-async def admin_broadcast_help(message: types.Message):
+async def admin_broadcast_menu_entry(message: types.Message, state: FSMContext):
     if not is_admin_id(message.from_user.id):
         return
-    text = (
-        "<b>📢 Рассылка</b>\n\n"
-        "Команда:\n"
-        "/broadcast <code>segment</code> [--html] — отправить сообщение пользователям.\n\n"
-        "Сегменты: <code>all</code>, <code>lead_funnel</code>, <code>member_active</code>, <code>member_expired</code>, <code>expired</code>.\n"
-        "Добавь флаг <code>--html</code>, если в тексте есть теги оформления."
-    )
-    await message.answer(text, reply_markup=admin_main_keyboard(), disable_web_page_preview=True)
+    await _reset_state_if_needed(state)
+    await send_admin_broadcast_menu(message)
 
+
+@router.message(F.text == BACK_TO_BROADCAST)
+async def admin_broadcast_back_to_menu(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+    await _reset_state_if_needed(state)
+    await send_admin_broadcast_menu(message)
+
+
+@router.message(F.text == BROADCAST_TEMPLATES_BUTTON)
+async def admin_broadcast_templates(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+    await _reset_state_if_needed(state)
+    await send_admin_broadcast_templates(message)
+
+
+@router.message(F.text == DELETE_BROADCAST_TEMPLATE_BUTTON)
+async def admin_broadcast_delete_prompt(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+    templates = await list_broadcast_templates()
+    if not templates:
+        await message.answer(
+            "Пока нет сохранённых шаблонов.",
+            reply_markup=admin_broadcast_keyboard(),
+        )
+        return
+    titles = [tpl["title"] for tpl in templates]
+    await _reset_state_if_needed(state)
+    await state.set_state(BroadcastStates.waiting_template_delete)
+    await message.answer(
+        "Выбери шаблон, который нужно удалить.",
+        reply_markup=admin_broadcast_delete_keyboard(titles),
+    )
+
+
+@router.message(BroadcastStates.waiting_template_delete, F.text.func(lambda text: text and text.startswith(_TEMPLATE_DELETE_PREFIX)))
+async def admin_broadcast_delete_template(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        await state.clear()
+        return
+    title = message.text[len(_TEMPLATE_DELETE_PREFIX):].strip()
+    if not title:
+        await message.answer("Не удалось определить шаблон. Попробуй снова.")
+        return
+    success = await delete_broadcast_template(title)
+    await log_admin_action(
+        message.from_user.id,
+        "broadcast_template_delete",
+        {"title": title, "success": success},
+    )
+    await state.clear()
+    if success:
+        await message.answer("Шаблон удалён.")
+    else:
+        await message.answer("Шаблон не найден — возможно, его уже удалили.")
+    await send_admin_broadcast_templates(message)
+
+
+@router.message(F.text.func(lambda text: text and text in _BROADCAST_BUTTON_SEGMENTS))
+async def admin_broadcast_choose_segment(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+    segment = _BROADCAST_BUTTON_SEGMENTS[message.text]
+    current_state = await state.get_state()
+    data = await state.get_data()
+
+    if current_state == BroadcastStates.waiting_segment.state and (data or {}).get("change_segment"):
+        await state.update_data(segment=segment, change_segment=False)
+        body = (data or {}).get("body")
+        template_title = (data or {}).get("template_title")
+        if body:
+            await _broadcast_preview(
+                message,
+                state,
+                segment=segment,
+                body=body,
+                template_title=template_title,
+            )
+            await state.set_state(BroadcastStates.waiting_confirm)
+        else:
+            await state.set_state(BroadcastStates.waiting_body)
+            await message.answer(
+                "Пришли текст рассылки для нового сегмента.",
+                reply_markup=cancel_keyboard(),
+            )
+        return
+
+    await _reset_state_if_needed(state)
+    await state.set_state(BroadcastStates.waiting_body)
+    await state.update_data(segment=segment, interactive=True, template_title=None)
+    segment_label = _BROADCAST_SEGMENT_LABELS.get(segment, segment)
+    await message.answer(
+        f"Сегмент: {segment_label}.\n\nПришли текст рассылки одним сообщением. Можно использовать плейсхолдер <code>{{name}}</code> для имени участницы.",
+        reply_markup=cancel_keyboard(),
+        disable_web_page_preview=True,
+    )
+
+
+@router.message(F.text.func(lambda text: text and text.startswith(_TEMPLATE_BUTTON_PREFIX)))
+async def admin_broadcast_use_template(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+    title = message.text[len(_TEMPLATE_BUTTON_PREFIX):].strip()
+    if not title:
+        return
+    template = await get_broadcast_template_by_title(title)
+    if not template:
+        await message.answer("Не удалось найти шаблон. Обнови список и попробуй снова.")
+        return
+    await _reset_state_if_needed(state)
+    body = template.get("body") or ""
+    segment = template.get("segment") or "all"
+    await state.set_state(BroadcastStates.waiting_confirm)
+    await _broadcast_preview(
+        message,
+        state,
+        segment=segment,
+        body=body,
+        template_title=template.get("title"),
+    )
 
 @router.message(F.text == ADMIN_CONTENT_MENU)
 async def admin_content_menu(message: types.Message, state: FSMContext):
@@ -2808,70 +3507,174 @@ async def cmd_content_set(message: types.Message, command: CommandObject):
 # ──────────────────────────────────────────────────────────────────────────────
 async def _select_segment_users(segment: str) -> list[dict]:
     segment = (segment or "").lower().strip()
+    base_query = "SELECT tg_user_id, name, full_name, username FROM users"
     if segment == "all":
-        rows = await fetch("SELECT tg_user_id FROM users")
+        rows = await fetch(base_query)
     elif segment == "lead_funnel":
-        rows = await fetch("SELECT tg_user_id FROM users WHERE status='lead_funnel'")
+        rows = await fetch(f"{base_query} WHERE status='lead_funnel'")
     elif segment in ("member_active", "member"):
-        rows = await fetch("SELECT tg_user_id FROM users WHERE status='member_active' AND (access_until IS NULL OR access_until > NOW())")
+        rows = await fetch(
+            f"{base_query} WHERE status='member_active' AND (access_until IS NULL OR access_until > NOW())"
+        )
     elif segment in ("member_expired", "expired"):
-        rows = await fetch("SELECT tg_user_id FROM users WHERE status='member_expired' OR (access_until IS NOT NULL AND access_until <= NOW())")
+        rows = await fetch(
+            f"{base_query} WHERE status='member_expired' OR (access_until IS NOT NULL AND access_until <= NOW())"
+        )
     else:
         rows = []
-    return rows or []
+    return [dict(row) for row in rows] if rows else []
 
-async def _broadcast(bot, tg_ids: list[int], text: str, chunk: int = 25, pause: float = 0.06) -> tuple[int, int]:
+
+async def _broadcast(
+    bot,
+    users: list[dict],
+    text: str,
+    *,
+    chunk: int = 25,
+    pause: float = 0.06,
+    parse_mode: ParseMode | None = ParseMode.HTML,
+) -> tuple[int, int]:
     ok = fail = 0
     backoff = 1
-    
-    for i in range(0, len(tg_ids), chunk):
-        for uid in tg_ids[i:i+chunk]:
+
+    safe_text = text or ""
+
+    for i in range(0, len(users), chunk):
+        for user in users[i:i + chunk]:
+            tg_id = user.get("tg_user_id") if isinstance(user, dict) else None
+            if not tg_id:
+                continue
+            display_name = (
+                (user.get("name") if isinstance(user, dict) else None)
+                or (user.get("full_name") if isinstance(user, dict) else None)
+                or (user.get("username") if isinstance(user, dict) else None)
+                or "друг"
+            )
+            message_text = render_content(
+                safe_text,
+                name=display_name,
+                NAME=display_name,
+                support=SUPPORT_CONTACT,
+                SUPPORT_CONTACT=SUPPORT_CONTACT,
+                support_contact=SUPPORT_CONTACT,
+            )
             try:
-                await bot.send_message(uid, text)
+                await bot.send_message(
+                    tg_id,
+                    message_text,
+                    parse_mode=parse_mode if parse_mode else None,
+                    disable_web_page_preview=True,
+                )
                 ok += 1
             except TelegramRetryAfter as e:
                 logger.warning(f"Rate limit hit, waiting {e.retry_after} seconds")
                 await asyncio.sleep(e.retry_after)
                 try:
-                    await bot.send_message(uid, text)
+                    await bot.send_message(
+                        tg_id,
+                        message_text,
+                        parse_mode=parse_mode if parse_mode else None,
+                        disable_web_page_preview=True,
+                    )
                     ok += 1
                 except Exception as e:
                     fail += 1
-                    logger.warning(f"broadcast fail uid=%s err=%s", uid, e)
+                    logger.warning(f"broadcast fail uid=%s err=%s", tg_id, e)
             except Exception as e:
                 fail += 1
-                logger.warning(f"broadcast fail uid=%s err=%s", uid, e)
-        
+                logger.warning(f"broadcast fail uid=%s err=%s", tg_id, e)
+
         await asyncio.sleep(pause * backoff)
         backoff = min(backoff * 1.5, 5)
-    
+
     return ok, fail
+
+
+async def _broadcast_preview(
+    message: types.Message,
+    state: FSMContext,
+    *,
+    segment: str,
+    body: str,
+    template_title: str | None = None,
+) -> None:
+    users = await _select_segment_users(segment)
+    recipients = [u for u in users if u.get("tg_user_id")]
+    sample_name = (
+        message.from_user.full_name
+        or message.from_user.first_name
+        or "подруга"
+    )
+    preview = render_content(
+        body,
+        name=sample_name,
+        NAME=sample_name,
+        support=SUPPORT_CONTACT,
+        SUPPORT_CONTACT=SUPPORT_CONTACT,
+        support_contact=SUPPORT_CONTACT,
+    )
+
+    await message.answer(
+        preview,
+        parse_mode=ParseMode.HTML,
+        disable_web_page_preview=True,
+    )
+
+    segment_label = _BROADCAST_SEGMENT_LABELS.get(segment, segment)
+    lines = ["<b>Проверь рассылку</b>"]
+    if template_title:
+        lines.append(f"Шаблон: <b>{html.escape(template_title)}</b>")
+    lines.extend(
+        [
+            "",
+            f"Сегмент: <code>{segment_label}</code>",
+            f"Получателей сейчас: {len(recipients)}",
+            "",
+            "Если всё верно — нажми «🚀 Отправить». Можно изменить текст, сегмент или сохранить шаблон.",
+        ]
+    )
+
+    await message.answer(
+        "\n".join(lines),
+        reply_markup=admin_broadcast_confirm_keyboard(include_change_segment=True),
+        disable_web_page_preview=True,
+    )
+
+    await state.update_data(
+        segment=segment,
+        body=body,
+        recipients=len(recipients),
+        interactive=True,
+        template_title=template_title,
+        change_segment=False,
+    )
 
 @router.message(Command("broadcast"))
 async def cmd_broadcast(message: types.Message, command: CommandObject, state: FSMContext):
     if not is_admin_id(message.from_user.id):
         return
-    
+
     if not command.args:
         await message.answer(
             "Рассылка пользователям\n\n"
             "Использование: /broadcast <code>segment</code> [--html]\n\n"
             "Сегменты: all, lead_funnel, member_active, member_expired, expired\n\n"
-            "Текст пришли ответом (reply) на эту команду."
+            "Текст пришли ответом (reply) на эту команду.\n"
+            "Подсказка: в админке есть кнопка «📢 Рассылка» с мастером и шаблонами."
         )
         return
-    
+
     args = command.args.strip().split()
     segment = args[0].lower()
     use_html = "--html" in args
-    
+
     if segment not in {"all", "lead_funnel", "member_active", "member_expired", "expired"}:
         await message.answer("Неизвестный сегмент. Разрешены: all, lead_funnel, member_active, member_expired, expired")
         return
-    
+
     if not message.reply_to_message or not (message.reply_to_message.text or message.reply_to_message.caption):
         await state.set_state(BroadcastStates.waiting_body)
-        await state.update_data(segment=segment, use_html=use_html)
+        await state.update_data(segment=segment, use_html=use_html, interactive=False)
         await message.answer(
             f"Отправь текст рассылки\n\n"
             f"Сегмент: <code>{segment}</code>\n"
@@ -2879,61 +3682,221 @@ async def cmd_broadcast(message: types.Message, command: CommandObject, state: F
             "Пришли текст рассылки одним сообщением (это сообщение должно быть ответом на твою команду)."
         )
         return
-    
-    body = message.reply_to_message.text or message.reply_to_message.caption
-    rows = await _select_segment_users(segment)
-    tg_ids = [r["tg_user_id"] for r in rows if r.get("tg_user_id")]
-    
-    await message.answer(f"Стартую рассылку по сегменту <b>{segment}</b>, получателей: {len(tg_ids)}…")
-    
-    ok, fail = await _broadcast(message.bot, tg_ids, body)
-    
+
+    body_source = message.reply_to_message.text or message.reply_to_message.caption or ""
+    body = body_source if use_html else sanitize_html(body_source)
+    users = await _select_segment_users(segment)
+    await message.answer(
+        f"Стартую рассылку по сегменту <b>{segment}</b>, получателей: {len(users)}…",
+        disable_web_page_preview=True,
+    )
+
+    ok, fail = await _broadcast(
+        message.bot,
+        users,
+        body,
+        parse_mode=ParseMode.HTML,
+    )
+
     await log_admin_action(
         message.from_user.id,
         "broadcast",
         {
             "segment": segment,
-            "recipients": len(tg_ids),
+            "recipients": len(users),
             "ok": ok,
             "fail": fail,
-            "use_html": use_html
-        }
+            "use_html": use_html,
+        },
     )
-    
-    await message.answer(f"Готово! доставлено: {ok}, ошибок: {fail}")
+
+    await message.answer(
+        f"Готово! доставлено: {ok}, ошибок: {fail}",
+        disable_web_page_preview=True,
+    )
+
 
 @router.message(BroadcastStates.waiting_body, F.text.len() > 0)
 async def broadcast_receive_body(message: types.Message, state: FSMContext):
     if not is_admin_id(message.from_user.id):
         await state.clear()
         return
-    
+
     data = await state.get_data()
     segment = data.get("segment", "all")
+    interactive = data.get("interactive", False)
+    body_text = (message.text or "").strip()
+
+    if interactive:
+        sanitized = sanitize_html(body_text)
+        template_title = data.get("template_title")
+        await _broadcast_preview(
+            message,
+            state,
+            segment=segment,
+            body=sanitized,
+            template_title=template_title,
+        )
+        await state.set_state(BroadcastStates.waiting_confirm)
+        return
+
     use_html = data.get("use_html", False)
-    body = message.text.strip()
-    
-    rows = await _select_segment_users(segment)
-    tg_ids = [r["tg_user_id"] for r in rows if r.get("tg_user_id")]
-    
-    await message.answer(f"Стартую рассылку по сегменту <b>{segment}</b>, получателей: {len(tg_ids)}…")
-    
-    ok, fail = await _broadcast(message.bot, tg_ids, body)
-    
+    prepared_text = body_text if use_html else sanitize_html(body_text)
+    users = await _select_segment_users(segment)
+
+    await message.answer(
+        f"Стартую рассылку по сегменту <b>{segment}</b>, получателей: {len(users)}…",
+        disable_web_page_preview=True,
+    )
+
+    ok, fail = await _broadcast(
+        message.bot,
+        users,
+        prepared_text,
+        parse_mode=ParseMode.HTML,
+    )
+
     await log_admin_action(
         message.from_user.id,
         "broadcast",
         {
             "segment": segment,
-            "recipients": len(tg_ids),
+            "recipients": len(users),
             "ok": ok,
             "fail": fail,
-            "use_html": use_html
-        }
+            "use_html": use_html,
+        },
     )
-    
-    await message.answer(f"Готово! доставлено: {ok}, ошибок: {fail}")
+
+    await message.answer(
+        f"Готово! доставлено: {ok}, ошибок: {fail}",
+        disable_web_page_preview=True,
+    )
     await state.clear()
+
+
+@router.message(BroadcastStates.waiting_confirm, F.text == SEND_BROADCAST_BUTTON)
+async def admin_broadcast_send(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        await state.clear()
+        return
+
+    data = await state.get_data()
+    segment = data.get("segment", "all")
+    body = (data or {}).get("body")
+    if not body:
+        await message.answer("Нет текста для отправки. Пришли сообщение заново.")
+        await state.set_state(BroadcastStates.waiting_body)
+        await state.update_data(interactive=True)
+        return
+
+    users = await _select_segment_users(segment)
+    await message.answer(
+        f"Отправляю рассылку. Получателей: {len(users)}…",
+        disable_web_page_preview=True,
+    )
+    ok, fail = await _broadcast(
+        message.bot,
+        users,
+        body,
+        parse_mode=ParseMode.HTML,
+    )
+
+    await log_admin_action(
+        message.from_user.id,
+        "broadcast",
+        {
+            "segment": segment,
+            "recipients": len(users),
+            "ok": ok,
+            "fail": fail,
+            "template": data.get("template_title"),
+        },
+    )
+
+    await message.answer(
+        f"Готово! доставлено: {ok}, ошибок: {fail}",
+        disable_web_page_preview=True,
+    )
+    await state.clear()
+    await send_admin_broadcast_menu(message)
+
+
+@router.message(BroadcastStates.waiting_confirm, F.text == EDIT_BROADCAST_BUTTON)
+async def admin_broadcast_edit(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        await state.clear()
+        return
+
+    data = await state.get_data()
+    segment = data.get("segment", "all")
+    await state.set_state(BroadcastStates.waiting_body)
+    await state.update_data(interactive=True, segment=segment)
+    await message.answer(
+        "Пришли новый текст рассылки одним сообщением.",
+        reply_markup=cancel_keyboard(),
+    )
+
+
+@router.message(BroadcastStates.waiting_confirm, F.text == SAVE_BROADCAST_TEMPLATE_BUTTON)
+async def admin_broadcast_save_template_prompt(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        await state.clear()
+        return
+
+    data = await state.get_data()
+    if not (data or {}).get("body"):
+        await message.answer("Нет текста для сохранения. Сначала напиши сообщение.")
+        return
+
+    await state.set_state(BroadcastStates.waiting_template_title)
+    await message.answer(
+        "Как назвать шаблон? Отправь короткое название (до 60 символов).",
+        reply_markup=cancel_keyboard(),
+    )
+
+
+@router.message(BroadcastStates.waiting_confirm, F.text == CHANGE_BROADCAST_SEGMENT_BUTTON)
+async def admin_broadcast_change_segment(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        await state.clear()
+        return
+    await state.set_state(BroadcastStates.waiting_segment)
+    await state.update_data(change_segment=True)
+    await message.answer(
+        "Выбери новый сегмент для рассылки.",
+        reply_markup=admin_broadcast_keyboard(),
+    )
+
+
+@router.message(BroadcastStates.waiting_template_title, F.text.len() > 0)
+async def admin_broadcast_save_template(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        await state.clear()
+        return
+
+    title = (message.text or "").strip()
+    if len(title) < 3:
+        await message.answer("Название слишком короткое. Попробуй ещё раз.", reply_markup=cancel_keyboard())
+        return
+
+    data = await state.get_data()
+    segment = data.get("segment", "all")
+    body = data.get("body", "")
+    template = await upsert_broadcast_template(title, segment, body)
+    await log_admin_action(
+        message.from_user.id,
+        "broadcast_template_save",
+        {"title": template["title"], "segment": segment},
+    )
+
+    await state.set_state(BroadcastStates.waiting_confirm)
+    await state.update_data(template_title=template["title"])
+    await message.answer(
+        "Шаблон сохранён ✅",
+        reply_markup=admin_broadcast_confirm_keyboard(include_change_segment=True),
+        disable_web_page_preview=True,
+    )
 # ──────────────────────────────────────────────────────────────────────────────
 # Диагностика
 # ──────────────────────────────────────────────────────────────────────────────
