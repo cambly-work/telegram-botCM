@@ -25,6 +25,14 @@ from aiogram.enums import ParseMode
 # ──────────────────────────────────────────────────────────────────────────────
 load_dotenv()
 
+
+def _env_flag(name: str, default: str = "0") -> bool:
+    value = os.getenv(name, default)
+    if value is None:
+        return False
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "https://example.com").rstrip("/")
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "change_me")
@@ -36,6 +44,11 @@ TIME_SEND_LESSONS = os.getenv("TIME_SEND_LESSONS", "10:00")
 
 AT_WEBHOOK_SHARED_SECRET = os.getenv("AT_WEBHOOK_SHARED_SECRET", "")
 TELEGRAM_WEBHOOK_PATH = "/telegram/webhook"
+
+SKIP_DB_INIT = _env_flag("SKIP_DB_INIT")
+SKIP_SCHEDULER = _env_flag("SKIP_SCHEDULER")
+SKIP_WEBHOOK_SETUP = _env_flag("SKIP_WEBHOOK")
+SKIP_ADMIN_NOTIFICATIONS = _env_flag("SKIP_ADMIN_NOTIFICATIONS")
 
 # Клуб/ссылки
 WELCOME_POST_URL = os.getenv("WELCOME_POST_URL", "https://t.me/")
@@ -98,6 +111,10 @@ def compute_hmac_sha256(secret: str, body_bytes: bytes) -> str:
 
 async def notify_admins(text: str, max_retries: int = MAX_RETRIES) -> None:
     """Отправка уведомления всем администраторам с повторными попытками"""
+    if SKIP_ADMIN_NOTIFICATIONS:
+        logger.info("Skipping admin notification (disabled): %s", text)
+        return
+
     if not ADMIN_IDS:
         logger.warning("No admin IDs configured")
         return
@@ -157,6 +174,10 @@ async def gen_invite_link(max_retries: int = MAX_RETRIES) -> str:
 
 async def set_webhook(max_retries: int = MAX_RETRIES) -> bool:
     """Установка вебхука с повторными попытками"""
+    if SKIP_WEBHOOK_SETUP:
+        logger.info("Skipping Telegram webhook setup (disabled via SKIP_WEBHOOK)")
+        return True
+
     url = f"{PUBLIC_BASE_URL}{TELEGRAM_WEBHOOK_PATH}?secret={WEBHOOK_SECRET}"
     logger.info("Setting Telegram webhook to: %s", url)
 
@@ -214,44 +235,55 @@ def normalize_phone(phone: str) -> str:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Startup: инициализация БД/планировщика/вебхука...")
-    
-    try:
-        await init_db(DB_DSN)
-        logger.info("Database initialized successfully")
-    except Exception as e:
-        logger.error("Failed to initialize database: %s", e)
-        await notify_admins(f"❌ Ошибка инициализации БД: {e}")
-        raise
-    
-    try:
-        await setup_scheduler(bot=bot, timezone_name=BOT_TIMEZONE, time_send_lessons=TIME_SEND_LESSONS)
-        logger.info("Scheduler initialized successfully")
-    except Exception as e:
-        logger.error("Failed to initialize scheduler: %s", e)
-        await notify_admins(f"❌ Ошибка инициализации планировщика: {e}")
-    
-    try:
-        webhook_ok = await set_webhook()
-        if not webhook_ok:
-            logger.warning("Webhook setup had issues, but continuing startup")
-    except Exception as e:
-        logger.error("Failed to set webhook: %s", e)
-        await notify_admins(f"❌ Ошибка установки вебхука: {e}")
-    
+
+    if SKIP_DB_INIT:
+        logger.info("Startup: SKIP_DB_INIT=1 — пропускаем инициализацию БД")
+    else:
+        try:
+            await init_db(DB_DSN)
+            logger.info("Database initialized successfully")
+        except Exception as e:
+            logger.error("Failed to initialize database: %s", e)
+            await notify_admins(f"❌ Ошибка инициализации БД: {e}")
+            raise
+
+    if SKIP_SCHEDULER:
+        logger.info("Startup: SKIP_SCHEDULER=1 — пропускаем запуск планировщика")
+    else:
+        try:
+            await setup_scheduler(bot=bot, timezone_name=BOT_TIMEZONE, time_send_lessons=TIME_SEND_LESSONS)
+            logger.info("Scheduler initialized successfully")
+        except Exception as e:
+            logger.error("Failed to initialize scheduler: %s", e)
+            await notify_admins(f"❌ Ошибка инициализации планировщика: {e}")
+
+    if SKIP_WEBHOOK_SETUP:
+        logger.info("Startup: SKIP_WEBHOOK=1 — пропускаем установку вебхука")
+    else:
+        try:
+            webhook_ok = await set_webhook()
+            if not webhook_ok:
+                logger.warning("Webhook setup had issues, but continuing startup")
+        except Exception as e:
+            logger.error("Failed to set webhook: %s", e)
+            await notify_admins(f"❌ Ошибка установки вебхука: {e}")
+
     logger.info("Startup завершён.")
     try:
         yield
     finally:
         logger.info("Shutdown: останавливаем планировщик/закрываем БД...")
         try:
-            await shutdown_scheduler()
-            logger.info("Scheduler stopped successfully")
+            if not SKIP_SCHEDULER:
+                await shutdown_scheduler()
+                logger.info("Scheduler stopped successfully")
         except Exception as e:
             logger.error("Error stopping scheduler: %s", e)
-        
+
         try:
-            await close_db()
-            logger.info("Database closed successfully")
+            if not SKIP_DB_INIT:
+                await close_db()
+                logger.info("Database closed successfully")
         except Exception as e:
             logger.error("Error closing database: %s", e)
         
@@ -268,18 +300,24 @@ app = FastAPI(title="CODE: Magnetism — Bot API", version="1.2.0", lifespan=lif
 @app.get("/health")
 async def health() -> dict:
     """Проверка здоровья приложения с проверкой БД"""
-    db_status = await is_db_connected()
-    scheduler_status = get_scheduler_status()
-    
+    db_status = True if SKIP_DB_INIT else await is_db_connected()
+    scheduler_status = {"status": "disabled", "jobs": 0} if SKIP_SCHEDULER else get_scheduler_status()
+
     status_code = status.HTTP_200_OK if db_status else status.HTTP_503_SERVICE_UNAVAILABLE
-    
+
     return JSONResponse(
         content={
             "status": "ok" if db_status else "error",
             "service": "code-magnetism-bot",
             "version": app.version,
-            "database": "connected" if db_status else "disconnected",
+            "database": "skipped" if SKIP_DB_INIT else ("connected" if db_status else "disconnected"),
             "scheduler": scheduler_status,
+            "flags": {
+                "skip_db_init": SKIP_DB_INIT,
+                "skip_scheduler": SKIP_SCHEDULER,
+                "skip_webhook": SKIP_WEBHOOK_SETUP,
+                "skip_admin_notifications": SKIP_ADMIN_NOTIFICATIONS,
+            },
             "timestamp": now_utc().isoformat()
         },
         status_code=status_code
