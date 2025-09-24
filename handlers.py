@@ -17,7 +17,7 @@ from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
 from urllib.parse import parse_qs
 from aiogram.dispatcher.middlewares.base import BaseMiddleware
 from db import fetchrow, fetch, execute
-from keyboards import main_menu, lesson_keyboard, after_lesson_keyboard, cancel_button
+from keyboards import lesson_keyboard, after_lesson_keyboard, cancel_button
 # ──────────────────────────────────────────────────────────────────────────────
 # Логгер
 # ──────────────────────────────────────────────────────────────────────────────
@@ -204,26 +204,31 @@ class ProfileStates(StatesGroup):
 # ──────────────────────────────────────────────────────────────────────────────
 # Улучшенные клавиатуры
 # ──────────────────────────────────────────────────────────────────────────────
-_MAIN_MENU_BASE_BUTTONS: list[list[tuple[str, str]]] = [
-    [("О клубе", "about"), ("FAQ", "faq")],
-    [("Бесплатные уроки", "funnel"), ("Мой прогресс", "progress")],
-    [("Поддержка", "support"), ("Правила", "rules")],
-    [("Записаться на разбор", "analysis"), ("Пройти тест", "test")],
-]
-_MEMBER_MENU_BUTTONS: list[tuple[str, str]] = [
-    ("Материалы недели", "weekly"),
-    ("Расписание", "schedule"),
-]
-_PAY_MENU_BUTTON = ("Оплатить доступ", "pay")
-_ADMIN_MENU_BUTTON = ("Админ-панель", "admin")
-
-MAIN_MENU_ACTIONS: dict[str, str] = {
-    text.casefold(): action for row in _MAIN_MENU_BASE_BUTTONS for text, action in row
+_MENU_SECTION_PROMPTS: dict[str, tuple[str, str]] = {
+    "root": ("menu.prompts.root", "Главное меню\n\nВыбери раздел, чтобы продолжить."),
+    "info": ("menu.prompts.info", "Раздел «О клубе».\n\nВыбери интересующий пункт."),
+    "learning": ("menu.prompts.learning", "Раздел «Обучение».\n\nВыбери, с чего продолжить."),
+    "materials": ("menu.prompts.materials", "Раздел «Материалы».\n\nДоступ к материалам зависит от статуса участия."),
+    "profile": ("menu.prompts.profile", "Раздел «Профиль».\n\nУправляй своими данными и доступами."),
 }
-for text, action in _MEMBER_MENU_BUTTONS:
-    MAIN_MENU_ACTIONS[text.casefold()] = action
-MAIN_MENU_ACTIONS[_PAY_MENU_BUTTON[0].casefold()] = _PAY_MENU_BUTTON[1]
-MAIN_MENU_ACTIONS[_ADMIN_MENU_BUTTON[0].casefold()] = _ADMIN_MENU_BUTTON[1]
+
+_ADMIN_SETTINGS_DEFAULTS: dict[str, bool] = {
+    "payments_open": True,
+    "show_weekly_materials": True,
+    "show_schedule": True,
+}
+
+_ADMIN_SETTINGS_LABELS: dict[str, str] = {
+    "payments_open": "Окно оплаты",
+    "show_weekly_materials": "Материалы недели",
+    "show_schedule": "Расписание",
+}
+
+_PROFILE_STATUS_TITLES: dict[str, str] = {
+    "lead_funnel": "Без подписки",
+    "member_active": "Активный доступ",
+    "member_expired": "Доступ истёк",
+}
 
 
 def create_main_menu_keyboard(
@@ -231,29 +236,128 @@ def create_main_menu_keyboard(
     is_member: bool = False,
     has_pay: bool = False,
     is_admin: bool = False,
+    payments_open: bool = True,
+    weekly_enabled: bool = True,
+    schedule_enabled: bool = True,
+    section: str = "root",
 ) -> types.InlineKeyboardMarkup:
-    """Создает клавиатуру главного меню на инлайн-кнопках."""
-    keyboard_layout: list[list[tuple[str, str]]] = [list(row) for row in _MAIN_MENU_BASE_BUTTONS]
+    """Создает инлайн-клавиатуру для выбранного раздела меню."""
 
-    if is_member:
-        keyboard_layout.append(list(_MEMBER_MENU_BUTTONS))
+    normalized_section = section if section in _MENU_SECTION_PROMPTS else "root"
 
-    if has_pay:
-        keyboard_layout.append([_PAY_MENU_BUTTON])
+    def _button(text: str, callback: str) -> types.InlineKeyboardButton:
+        return types.InlineKeyboardButton(text=text, callback_data=callback)
 
-    if is_admin:
-        keyboard_layout.append([_ADMIN_MENU_BUTTON])
+    layout: list[list[tuple[str, str]]] = []
 
-    inline_keyboard: list[list[types.InlineKeyboardButton]] = []
-    for row in keyboard_layout:
-        inline_keyboard.append(
-            [
-                types.InlineKeyboardButton(text=label, callback_data=f"menu:{action}")
-                for label, action in row
-            ]
+    if normalized_section == "root":
+        layout.extend([
+            [("ℹ️ О клубе", "menu:section:info"), ("🎓 Обучение", "menu:section:learning")],
+            [("📦 Материалы", "menu:section:materials"), ("👤 Профиль", "menu:section:profile")],
+        ])
+
+        support_row: list[tuple[str, str]] = [("🆘 Поддержка", "menu:support")]
+        if has_pay:
+            pay_label = "💳 Оплата" if payments_open else "🔒 Оплата"
+            support_row.append((pay_label, "menu:pay"))
+        layout.append(support_row)
+
+        if is_admin:
+            layout.append([("⚙️ Админка", "menu:admin")])
+
+    elif normalized_section == "info":
+        layout.extend([
+            [("О клубе", "menu:about"), ("FAQ", "menu:faq")],
+            [("Правила", "menu:rules")],
+            [("⬅️ Главное меню", "menu:main")],
+        ])
+
+    elif normalized_section == "learning":
+        layout.extend([
+            [("Бесплатные уроки", "menu:funnel"), ("Мой прогресс", "menu:progress")],
+            [("Записаться на разбор", "menu:analysis"), ("Пройти тест", "menu:test")],
+            [("⬅️ Главное меню", "menu:main")],
+        ])
+
+    elif normalized_section == "materials":
+        weekly_label = "Материалы недели" if weekly_enabled else "Материалы недели 🔒"
+        schedule_label = "Расписание" if schedule_enabled else "Расписание 🔒"
+        layout.extend([
+            [(weekly_label, "menu:weekly")],
+            [(schedule_label, "menu:schedule")],
+            [("⬅️ Главное меню", "menu:main")],
+        ])
+
+    elif normalized_section == "profile":
+        profile_rows: list[list[tuple[str, str]]] = [
+            [("Мой профиль", "menu:profile")],
+            [("Изменить email", "profile:email"), ("Изменить телефон", "profile:phone")],
+        ]
+        if has_pay:
+            pay_label = "💳 Оплата" if payments_open else "🔒 Оплата"
+            profile_rows.append([(pay_label, "menu:pay")])
+        profile_rows.append([("⬅️ Главное меню", "menu:main")])
+        layout.extend(profile_rows)
+
+    else:
+        # На всякий случай возвращаем главное меню
+        return create_main_menu_keyboard(
+            is_member=is_member,
+            has_pay=has_pay,
+            is_admin=is_admin,
+            payments_open=payments_open,
+            weekly_enabled=weekly_enabled,
+            schedule_enabled=schedule_enabled,
+            section="root",
         )
 
+    inline_keyboard: list[list[types.InlineKeyboardButton]] = []
+    for row in layout:
+        buttons = [_button(text, callback) for text, callback in row if text]
+        if buttons:
+            inline_keyboard.append(buttons)
+
     return types.InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
+
+
+async def get_bool_setting(key: str, default: bool = True) -> bool:
+    raw_value = await get_content(f"settings.{key}", "true" if default else "false")
+    normalized = str(raw_value).strip().lower()
+    if normalized in {"1", "true", "yes", "on", "y", "да"}:
+        return True
+    if normalized in {"0", "false", "no", "off", "n", "нет"}:
+        return False
+    return default
+
+
+async def set_bool_setting(key: str, value: bool) -> None:
+    await set_content_value(f"settings.{key}", "true" if value else "false")
+
+
+async def get_menu_flags() -> dict[str, bool]:
+    flags: dict[str, bool] = {}
+    for setting_key, default in _ADMIN_SETTINGS_DEFAULTS.items():
+        flags[setting_key] = await get_bool_setting(setting_key, default)
+    return flags
+
+
+async def build_menu_keyboard(
+    *,
+    user: Optional[dict],
+    is_admin: bool,
+    section: str = "root",
+) -> types.InlineKeyboardMarkup:
+    flags = await get_menu_flags()
+    is_member_flag = await is_member(user) if user else False
+    return create_main_menu_keyboard(
+        is_member=is_member_flag,
+        has_pay=bool(AT_PRODUCT_ID_CLUB),
+        is_admin=is_admin,
+        payments_open=flags.get("payments_open", True),
+        weekly_enabled=flags.get("show_weekly_materials", True),
+        schedule_enabled=flags.get("show_schedule", True),
+        section=section,
+    )
 
 
 async def answer_with_main_menu(
@@ -262,20 +366,45 @@ async def answer_with_main_menu(
     is_admin: bool,
     text: str,
     *,
+    section: str = "root",
     from_callback: bool = False,
 ) -> None:
     """Отправляет или обновляет сообщение с главным меню."""
     user_row = user or await get_user_with_id(message.from_user.id)
-    is_member_flag = await is_member(user_row) if user_row else False
-    kb = create_main_menu_keyboard(
-        is_member=is_member_flag,
-        has_pay=bool(AT_PRODUCT_ID_CLUB),
-        is_admin=is_admin,
-    )
+    kb = await build_menu_keyboard(user=user_row, is_admin=is_admin, section=section)
     if from_callback:
         await safe_edit_text(message, text, reply_markup=kb)
     else:
         await message.answer(text, reply_markup=kb)
+
+
+async def send_menu_section(
+    message: types.Message,
+    user: Optional[dict],
+    is_admin: bool,
+    section: str,
+    *,
+    from_callback: bool = False,
+) -> None:
+    """Показывает выбранный раздел меню с соответствующей клавиатурой."""
+
+    prompt_key, default_text = _MENU_SECTION_PROMPTS.get(
+        section, _MENU_SECTION_PROMPTS["root"]
+    )
+
+    user_row = user
+    if not user_row:
+        chat_id = getattr(getattr(message, "chat", None), "id", None)
+        if chat_id:
+            user_row = await get_user_with_id(chat_id)
+
+    prompt_text = await get_content(prompt_key, default_text)
+    keyboard = await build_menu_keyboard(user=user_row, is_admin=is_admin, section=section)
+
+    if from_callback:
+        await safe_edit_text(message, prompt_text, reply_markup=keyboard)
+    else:
+        await message.answer(prompt_text, reply_markup=keyboard)
 
 
 async def send_about_section(
@@ -303,6 +432,7 @@ async def send_about_section(
         user,
         is_admin,
         about_text,
+        section="info",
         from_callback=from_callback,
     )
 
@@ -328,6 +458,7 @@ async def send_faq_section(
         user,
         is_admin,
         faq_text,
+        section="info",
         from_callback=from_callback,
     )
 
@@ -355,6 +486,7 @@ async def send_rules_section(
         user,
         is_admin,
         rules_text,
+        section="info",
         from_callback=from_callback,
     )
 
@@ -378,6 +510,7 @@ async def send_analysis_section(
         user,
         is_admin,
         analysis_text,
+        section="learning",
         from_callback=from_callback,
     )
 
@@ -401,6 +534,7 @@ async def send_test_section(
         user,
         is_admin,
         test_text,
+        section="learning",
         from_callback=from_callback,
     )
 
@@ -422,8 +556,84 @@ async def send_support_section(
         user,
         is_admin,
         support_text,
+        section="root",
         from_callback=from_callback,
     )
+
+
+async def send_profile_overview(
+    message: types.Message,
+    user: Optional[dict],
+    is_admin: bool,
+    *,
+    from_callback: bool = False,
+) -> None:
+    user_row = user or await get_user_with_id(message.from_user.id)
+    if not user_row:
+        await answer_with_main_menu(
+            message,
+            user_row,
+            is_admin,
+            "Профиль не найден. Перезапусти /start, чтобы обновить данные.",
+            section="profile",
+            from_callback=from_callback,
+        )
+        return
+
+    status_key = user_row.get("status") or "lead_funnel"
+    status_label = _PROFILE_STATUS_TITLES.get(status_key, "—")
+
+    access_until = user_row.get("access_until")
+    access_line = "Доступ пока не активирован."
+    if status_key == "member_active":
+        if access_until:
+            dt = access_until
+            if isinstance(dt, str):
+                try:
+                    dt = datetime.fromisoformat(dt.replace("Z", "+00:00"))
+                except ValueError:
+                    dt = None
+            if isinstance(dt, datetime):
+                access_line = f"Доступ активен до {tz_aware_msk(dt)}"
+            else:
+                access_line = "Доступ активен."
+        else:
+            access_line = "Доступ активен."
+    elif status_key == "member_expired":
+        if access_until:
+            dt = access_until
+            if isinstance(dt, str):
+                try:
+                    dt = datetime.fromisoformat(dt.replace("Z", "+00:00"))
+                except ValueError:
+                    dt = None
+            if isinstance(dt, datetime):
+                access_line = f"Доступ истёк {tz_aware_msk(dt)}"
+            else:
+                access_line = "Доступ истёк."
+        else:
+            access_line = "Доступ истёк."
+
+    email_value = user_row.get("email") or "—"
+    phone_value = user_row.get("phone") or "—"
+    name_value = user_row.get("name") or (user_row.get("full_name") or "—")
+
+    profile_text = (
+        "<b>Твой профиль</b>\n\n"
+        f"Имя: {html.escape(name_value)}\n"
+        f"Email: {html.escape(email_value)}\n"
+        f"Телефон: {html.escape(phone_value)}\n\n"
+        f"Статус: {status_label}\n"
+        f"{access_line}\n\n"
+        "Используй кнопки ниже, чтобы обновить контакты."
+    )
+
+    keyboard = create_profile_overview_keyboard()
+
+    if from_callback:
+        await safe_edit_text(message, profile_text, reply_markup=keyboard)
+    else:
+        await message.answer(profile_text, reply_markup=keyboard)
 
 
 async def send_weekly_materials_section(
@@ -434,6 +644,24 @@ async def send_weekly_materials_section(
     from_callback: bool = False,
 ) -> None:
     user_row = user or await get_user_with_id(message.from_user.id)
+
+    weekly_enabled = await get_bool_setting(
+        "show_weekly_materials", _ADMIN_SETTINGS_DEFAULTS["show_weekly_materials"]
+    )
+    if not weekly_enabled:
+        disabled_text = await get_content(
+            "menu.weekly.disabled",
+            "Раздел «Материалы недели» временно закрыт. Загляни позже — мы сообщим о новых материалах дополнительно.",
+        )
+        await answer_with_main_menu(
+            message,
+            user_row,
+            is_admin,
+            disabled_text,
+            section="materials",
+            from_callback=from_callback,
+        )
+        return
 
     if not user_row or not await is_member(user_row):
         locked_text = await get_content(
@@ -446,6 +674,7 @@ async def send_weekly_materials_section(
             user_row,
             is_admin,
             locked_text,
+            section="materials",
             from_callback=from_callback,
         )
         return
@@ -464,6 +693,7 @@ async def send_weekly_materials_section(
         user_row,
         is_admin,
         weekly_text,
+        section="materials",
         from_callback=from_callback,
     )
 
@@ -477,6 +707,24 @@ async def send_schedule_section(
 ) -> None:
     user_row = user or await get_user_with_id(message.from_user.id)
 
+    schedule_enabled = await get_bool_setting(
+        "show_schedule", _ADMIN_SETTINGS_DEFAULTS["show_schedule"]
+    )
+    if not schedule_enabled:
+        disabled_text = await get_content(
+            "menu.schedule.disabled",
+            "Расписание временно недоступно. Мы обновляем расписание и пришлём уведомление, как только оно появится.",
+        )
+        await answer_with_main_menu(
+            message,
+            user_row,
+            is_admin,
+            disabled_text,
+            section="materials",
+            from_callback=from_callback,
+        )
+        return
+
     if not user_row or not await is_member(user_row):
         locked_text = await get_content(
             "menu.schedule.locked",
@@ -488,6 +736,7 @@ async def send_schedule_section(
             user_row,
             is_admin,
             locked_text,
+            section="materials",
             from_callback=from_callback,
         )
         return
@@ -505,6 +754,7 @@ async def send_schedule_section(
         user_row,
         is_admin,
         schedule_text,
+        section="materials",
         from_callback=from_callback,
     )
 
@@ -557,6 +807,7 @@ async def send_progress_section(
         user,
         is_admin,
         progress_text,
+        section="learning",
         from_callback=from_callback,
     )
 
@@ -574,6 +825,25 @@ async def send_pay_section(
             user,
             is_admin,
             "Сейчас доступ в клуб бесплатный.",
+            section="root",
+            from_callback=from_callback,
+        )
+        return
+
+    payments_open = await get_bool_setting(
+        "payments_open", _ADMIN_SETTINGS_DEFAULTS["payments_open"]
+    )
+    if not payments_open:
+        closed_text = await get_content(
+            "menu.pay.closed",
+            "Оплата временно закрыта. Мы сообщим о новом окне, как только оно откроется.",
+        )
+        await answer_with_main_menu(
+            message,
+            user,
+            is_admin,
+            closed_text,
+            section="root",
             from_callback=from_callback,
         )
         return
@@ -592,6 +862,7 @@ async def send_pay_section(
         user,
         is_admin,
         pay_text,
+        section="root",
         from_callback=from_callback,
     )
 
@@ -615,7 +886,13 @@ async def send_funnel_section(
         if from_callback:
             await safe_edit_text(message, completed_text)
         else:
-            await answer_with_main_menu(message, user, is_admin, completed_text)
+            await answer_with_main_menu(
+                message,
+                user,
+                is_admin,
+                completed_text,
+                section="learning",
+            )
         return
 
     access_text = (
@@ -646,6 +923,27 @@ async def send_admin_menu(
     else:
         await message.answer(admin_text, reply_markup=create_admin_keyboard())
 
+
+async def send_admin_settings(
+    message: types.Message,
+    *,
+    from_callback: bool = False,
+) -> None:
+    flags = await get_menu_flags()
+    text = (
+        "Тонкие настройки бота\n\n"
+        f"Окно оплаты: {'открыто' if flags.get('payments_open', True) else 'закрыто'}\n"
+        f"Материалы недели: {'доступны' if flags.get('show_weekly_materials', True) else 'скрыты'}\n"
+        f"Расписание: {'показывается' if flags.get('show_schedule', True) else 'скрыто'}\n\n"
+        "Используй кнопки ниже, чтобы включать и выключать опции мгновенно."
+    )
+    keyboard = create_admin_settings_keyboard(flags)
+
+    if from_callback:
+        await safe_edit_text(message, text, reply_markup=keyboard)
+    else:
+        await message.answer(text, reply_markup=keyboard)
+
 def create_admin_keyboard() -> types.InlineKeyboardMarkup:
     """Создает клавиатуру для админ-панели"""
     return types.InlineKeyboardMarkup(
@@ -660,8 +958,40 @@ def create_admin_keyboard() -> types.InlineKeyboardMarkup:
             ],
             [
                 types.InlineKeyboardButton(text="Диагностика", callback_data="admin:debug"),
-                types.InlineKeyboardButton(text="Назад", callback_data="menu:main")
-            ]
+                types.InlineKeyboardButton(text="Тонкие настройки", callback_data="admin:settings")
+            ],
+            [types.InlineKeyboardButton(text="⬅️ Главное меню", callback_data="menu:main")]
+        ]
+    )
+
+
+def create_admin_settings_keyboard(flags: dict[str, bool]) -> types.InlineKeyboardMarkup:
+    def _label(key: str) -> str:
+        status = "✅" if flags.get(key, True) else "❌"
+        return f"{status} {_ADMIN_SETTINGS_LABELS.get(key, key)}"
+
+    return types.InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                types.InlineKeyboardButton(
+                    text=_label("payments_open"), callback_data="admin:toggle:payments_open"
+                )
+            ],
+            [
+                types.InlineKeyboardButton(
+                    text=_label("show_weekly_materials"),
+                    callback_data="admin:toggle:show_weekly_materials",
+                )
+            ],
+            [
+                types.InlineKeyboardButton(
+                    text=_label("show_schedule"), callback_data="admin:toggle:show_schedule"
+                )
+            ],
+            [
+                types.InlineKeyboardButton(text="⬅️ В админ-панель", callback_data="menu:admin"),
+                types.InlineKeyboardButton(text="🏠 Главное меню", callback_data="menu:main"),
+            ],
         ]
     )
 
@@ -673,7 +1003,7 @@ def create_access_type_keyboard() -> types.InlineKeyboardMarkup:
                 types.InlineKeyboardButton(text="Бесплатный доступ", callback_data="access:free"),
                 types.InlineKeyboardButton(text="Платный доступ", callback_data="access:paid")
             ],
-            [types.InlineKeyboardButton(text="Назад", callback_data="menu:back")]
+            [types.InlineKeyboardButton(text="Назад", callback_data="menu:section:learning")]
         ]
     )
 def create_back_button() -> types.InlineKeyboardMarkup:
@@ -715,6 +1045,22 @@ def create_feedback_keyboard(lesson_num: int) -> types.InlineKeyboardMarkup:
             ],
             [types.InlineKeyboardButton(text="Написать отзыв", callback_data=f"feedback:custom:{lesson_num}")],
             [types.InlineKeyboardButton(text="Пропустить", callback_data=f"feedback:skip:{lesson_num}")]
+        ]
+    )
+
+
+def create_profile_overview_keyboard() -> types.InlineKeyboardMarkup:
+    """Клавиатура профиля с быстрыми действиями"""
+    return types.InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                types.InlineKeyboardButton(text="✉️ Изменить email", callback_data="profile:email"),
+                types.InlineKeyboardButton(text="📞 Изменить телефон", callback_data="profile:phone"),
+            ],
+            [
+                types.InlineKeyboardButton(text="⬅️ К разделу профиля", callback_data="menu:section:profile"),
+                types.InlineKeyboardButton(text="🏠 Главное меню", callback_data="menu:main"),
+            ],
         ]
     )
 
@@ -945,7 +1291,7 @@ async def on_start(message: types.Message, state: FSMContext):
     
     # Показываем главное меню
     is_admin = str(message.from_user.id) in ADMIN_IDS
-    kb = create_main_menu_keyboard(is_member=await is_member(user), has_pay=bool(AT_PRODUCT_ID_CLUB), is_admin=is_admin)
+    kb = await build_menu_keyboard(user=user, is_admin=is_admin, section="root")
     
     welcome_text = (
         "Добро пожаловать в CODE: Магнетизм. Это пространство для развития и перемен. Выбери раздел в меню, чтобы начать."
@@ -1013,9 +1359,9 @@ async def registration_receive_phone(message: types.Message, state: FSMContext):
     # Получаем обновленные данные пользователя
     user = await get_user_with_id(message.from_user.id)
     is_admin = str(message.from_user.id) in ADMIN_IDS
-    
+
     # Показываем главное меню
-    kb = create_main_menu_keyboard(is_member=await is_member(user), has_pay=bool(AT_PRODUCT_ID_CLUB), is_admin=is_admin)
+    kb = await build_menu_keyboard(user=user, is_admin=is_admin, section="root")
     
     welcome_text = (
         f"Регистрация завершена, {user.get('name')}!\n\n"
@@ -1028,52 +1374,12 @@ async def registration_receive_phone(message: types.Message, state: FSMContext):
 
     await message.answer(welcome_text, reply_markup=kb)
 
-# Обработка текстовых сообщений для главного меню
-@router.message(F.text.func(lambda text: text and text.casefold() in MAIN_MENU_ACTIONS))
-async def handle_main_menu_buttons(message: types.Message):
-    action_key = (message.text or "").casefold()
-    user = await get_user_with_id(message.from_user.id)
-
-    if not user:
-        await message.answer("Перезапусти /start для меню.")
-        return
-
-    is_admin = str(message.from_user.id) in ADMIN_IDS
-    action = MAIN_MENU_ACTIONS.get(action_key)
-
-    if action == "about":
-        await send_about_section(message, user, is_admin)
-    elif action == "faq":
-        await send_faq_section(message, user, is_admin)
-    elif action == "funnel":
-        await send_funnel_section(message, user, is_admin)
-    elif action == "progress":
-        await send_progress_section(message, user, is_admin)
-    elif action == "support":
-        await send_support_section(message, user, is_admin)
-    elif action == "rules":
-        await send_rules_section(message, user, is_admin)
-    elif action == "analysis":
-        await send_analysis_section(message, user, is_admin)
-    elif action == "test":
-        await send_test_section(message, user, is_admin)
-    elif action == "weekly":
-        await send_weekly_materials_section(message, user, is_admin)
-    elif action == "schedule":
-        await send_schedule_section(message, user, is_admin)
-    elif action == "pay":
-        await send_pay_section(message, user, is_admin)
-    elif action == "admin":
-        if is_admin:
-            await send_admin_menu(message)
-        else:
-            await message.answer("Доступ запрещен.")
-
 # Fallback — если не матчится ни на один хэндлер (и не мешаем FSM)
 @router.message(
-    ~F.via_bot
-    & ~F.text.startswith("/")
-    & F.text.func(lambda text: not text or text.casefold() not in MAIN_MENU_ACTIONS)
+    ~F.via_bot,
+    F.text,
+    ~F.text.startswith("/"),
+    F.text.func(lambda text: text.strip().lower() != "отмена"),
 )
 async def fallback(message: types.Message, state: FSMContext):
     cur = await state.get_state()
@@ -1081,26 +1387,59 @@ async def fallback(message: types.Message, state: FSMContext):
                 RegistrationStates.waiting_name, RegistrationStates.waiting_email, RegistrationStates.waiting_phone,
                 ProfileStates.waiting_email, ProfileStates.waiting_phone):
         return
-    await message.answer("Набери /start для меню.")
+    await message.answer("Используй кнопки меню ниже. Если клавиатура пропала — набери /start.")
 # ──────────────────────────────────────────────────────────────────────────────
 # Меню
 # ──────────────────────────────────────────────────────────────────────────────
+async def _reset_state_if_needed(state: FSMContext) -> bool:
+    """Сбрасывает активный FSM-стейт, если он есть."""
+    if state is None:
+        return False
+
+    current_state = await state.get_state()
+    if current_state:
+        await state.clear()
+        return True
+    return False
+
+
+@router.callback_query(F.data.startswith("menu:section:"))
+async def cb_menu_section(cb: types.CallbackQuery, state: FSMContext):
+    section = cb.data.split(":", 2)[2] if cb.data.count(":") >= 2 else "root"
+    if section not in _MENU_SECTION_PROMPTS:
+        await cb.answer("Раздел недоступен", show_alert=True)
+        return
+
+    await _reset_state_if_needed(state)
+
+    user = await get_user_with_id(cb.from_user.id)
+    is_admin = str(cb.from_user.id) in ADMIN_IDS
+    await send_menu_section(cb.message, user, is_admin, section, from_callback=True)
+    await cb.answer()
+
+
 @router.callback_query(F.data == "menu:about")
-async def cb_about(cb: types.CallbackQuery):
+async def cb_about(cb: types.CallbackQuery, state: FSMContext):
+    await _reset_state_if_needed(state)
+
     user = await get_user_with_id(cb.from_user.id)
     is_admin = str(cb.from_user.id) in ADMIN_IDS
     await send_about_section(cb.message, user, is_admin, from_callback=True)
     await cb.answer()
 
 @router.callback_query(F.data == "menu:faq")
-async def cb_faq(cb: types.CallbackQuery):
+async def cb_faq(cb: types.CallbackQuery, state: FSMContext):
+    await _reset_state_if_needed(state)
+
     user = await get_user_with_id(cb.from_user.id)
     is_admin = str(cb.from_user.id) in ADMIN_IDS
     await send_faq_section(cb.message, user, is_admin, from_callback=True)
     await cb.answer()
 
 @router.callback_query(F.data == "menu:pay")
-async def cb_pay(cb: types.CallbackQuery):
+async def cb_pay(cb: types.CallbackQuery, state: FSMContext):
+    await _reset_state_if_needed(state)
+
     user = await get_user_with_id(cb.from_user.id)
     is_admin = str(cb.from_user.id) in ADMIN_IDS
 
@@ -1112,7 +1451,9 @@ async def cb_pay(cb: types.CallbackQuery):
     await cb.answer()
 
 @router.callback_query(F.data == "menu:progress")
-async def cb_progress(cb: types.CallbackQuery):
+async def cb_progress(cb: types.CallbackQuery, state: FSMContext):
+    await _reset_state_if_needed(state)
+
     user = await get_user_with_id(cb.from_user.id)
     is_admin = str(cb.from_user.id) in ADMIN_IDS
 
@@ -1123,7 +1464,9 @@ async def cb_progress(cb: types.CallbackQuery):
     await cb.answer()
 
 @router.callback_query(F.data == "menu:funnel")
-async def cb_funnel(cb: types.CallbackQuery):
+async def cb_funnel(cb: types.CallbackQuery, state: FSMContext):
+    await _reset_state_if_needed(state)
+
     user = await ensure_user(cb.from_user)
     is_admin = str(cb.from_user.id) in ADMIN_IDS
     await send_funnel_section(cb.message, user, is_admin, from_callback=True)
@@ -1299,10 +1642,10 @@ async def cb_funnel_skip(cb: types.CallbackQuery):
     
     await cb.message.answer(
         f"Урок «{lesson_titles.get(lesson_num, f'Урок {lesson_num}')}» пропущен. К нему можно вернуться в «Мой прогресс».",
-        reply_markup=create_main_menu_keyboard(
-            is_member=await is_member(user),
-            has_pay=bool(AT_PRODUCT_ID_CLUB),
+        reply_markup=await build_menu_keyboard(
+            user=user,
             is_admin=str(cb.from_user.id) in ADMIN_IDS,
+            section="learning",
         ),
     )
     await cb.answer()
@@ -1406,6 +1749,55 @@ async def feedback_receive_text(message: types.Message, state: FSMContext):
         reply_markup=create_after_lesson_keyboard(lesson_num)
     )
 
+
+@router.message(ProfileStates.waiting_email, F.text.len() > 0)
+async def profile_receive_email(message: types.Message, state: FSMContext):
+    email = (message.text or "").strip()
+
+    if not validate_email(email):
+        await message.answer(
+            "Формат email неверный. Пример: name@mail.com",
+            reply_markup=cancel_button(),
+        )
+        return
+
+    await execute(
+        "UPDATE users SET email=$2, updated_at=NOW() WHERE tg_user_id=$1",
+        message.from_user.id,
+        email,
+    )
+    await state.clear()
+
+    await message.answer("Email обновлён ✅")
+    user = await get_user_with_id(message.from_user.id)
+    is_admin = str(message.from_user.id) in ADMIN_IDS
+    await send_profile_overview(message, user, is_admin)
+
+
+@router.message(ProfileStates.waiting_phone, F.text.len() > 0)
+async def profile_receive_phone(message: types.Message, state: FSMContext):
+    raw_phone = (message.text or "").strip()
+
+    if not validate_phone(raw_phone):
+        await message.answer(
+            "Номер не распознан. Укажи телефон в формате +79991234567.",
+            reply_markup=cancel_button(),
+        )
+        return
+
+    normalized = normalize_phone(raw_phone)
+    await execute(
+        "UPDATE users SET phone=$2, updated_at=NOW() WHERE tg_user_id=$1",
+        message.from_user.id,
+        normalized,
+    )
+    await state.clear()
+
+    await message.answer("Телефон обновлён ✅")
+    user = await get_user_with_id(message.from_user.id)
+    is_admin = str(message.from_user.id) in ADMIN_IDS
+    await send_profile_overview(message, user, is_admin)
+
 @router.callback_query(F.data.startswith("funnel:next:"))
 async def cb_funnel_next(cb: types.CallbackQuery):
     prev = int(cb.data.split(":")[-1])  # для логов/аналитики
@@ -1423,10 +1815,10 @@ async def cb_funnel_next(cb: types.CallbackQuery):
         )
         await cb.message.answer(
             offer,
-            reply_markup=create_main_menu_keyboard(
-                is_member=await is_member(user),
-                has_pay=bool(AT_PRODUCT_ID_CLUB),
+            reply_markup=await build_menu_keyboard(
+                user=user,
                 is_admin=is_admin,
+                section="learning",
             ),
         )
     else:
@@ -1436,134 +1828,138 @@ async def cb_funnel_next(cb: types.CallbackQuery):
 # Новые кнопки меню: правила, запись на разбор, тест
 # ──────────────────────────────────────────────────────────────────────────────
 @router.callback_query(F.data == "menu:rules")
-async def cb_rules(cb: types.CallbackQuery):
+async def cb_rules(cb: types.CallbackQuery, state: FSMContext):
+    await _reset_state_if_needed(state)
+
     user = await get_user_with_id(cb.from_user.id)
     is_admin = str(cb.from_user.id) in ADMIN_IDS
     await send_rules_section(cb.message, user, is_admin, from_callback=True)
     await cb.answer()
 
 @router.callback_query(F.data == "menu:analysis")
-async def cb_analysis(cb: types.CallbackQuery):
+async def cb_analysis(cb: types.CallbackQuery, state: FSMContext):
+    await _reset_state_if_needed(state)
+
     user = await get_user_with_id(cb.from_user.id)
     is_admin = str(cb.from_user.id) in ADMIN_IDS
     await send_analysis_section(cb.message, user, is_admin, from_callback=True)
     await cb.answer()
 
+
+@router.callback_query(F.data == "menu:profile")
+async def cb_profile(cb: types.CallbackQuery, state: FSMContext):
+    await _reset_state_if_needed(state)
+
+    user = await get_user_with_id(cb.from_user.id)
+    is_admin = str(cb.from_user.id) in ADMIN_IDS
+    await send_profile_overview(cb.message, user, is_admin, from_callback=True)
+    await cb.answer()
+
 @router.callback_query(F.data == "menu:test")
-async def cb_test(cb: types.CallbackQuery):
+async def cb_test(cb: types.CallbackQuery, state: FSMContext):
+    await _reset_state_if_needed(state)
+
     user = await get_user_with_id(cb.from_user.id)
     is_admin = str(cb.from_user.id) in ADMIN_IDS
     await send_test_section(cb.message, user, is_admin, from_callback=True)
     await cb.answer()
 
 
-@router.callback_query(F.data == "menu:weekly")
-async def cb_weekly(cb: types.CallbackQuery):
+@router.callback_query(F.data == "profile:email")
+async def cb_profile_email(cb: types.CallbackQuery, state: FSMContext):
     user = await get_user_with_id(cb.from_user.id)
-
     if not user:
         await cb.answer("Перезапусти /start", show_alert=True)
         return
 
-    member = await is_member(user)
-    if not member:
-        await cb.answer("Раздел доступен участницам клуба", show_alert=True)
+    await state.set_state(ProfileStates.waiting_email)
+    await cb.message.answer(
+        "Введи новый email. Если передумала — нажми «Отмена».",
+        reply_markup=cancel_button(),
+    )
+    await cb.answer()
+
+
+@router.callback_query(F.data == "profile:phone")
+async def cb_profile_phone(cb: types.CallbackQuery, state: FSMContext):
+    user = await get_user_with_id(cb.from_user.id)
+    if not user:
+        await cb.answer("Перезапусти /start", show_alert=True)
         return
 
-    is_admin = str(cb.from_user.id) in ADMIN_IDS
-
-    weekly_text = await get_content(
-        "weekly_materials",
-        "📚 Материалы недели:\n"
-        "• Подкаст: [ссылка]\n"
-        "• Практика: [ссылка]\n"
-        "• Челлендж: [описание]\n"
-        "• Дневник: [шаблон]",
+    await state.set_state(ProfileStates.waiting_phone)
+    await cb.message.answer(
+        "Введи номер в международном формате (например +79991234567). Для отмены — кнопка ниже.",
+        reply_markup=cancel_button(),
     )
+    await cb.answer()
 
-    try:
-        await safe_edit_text(
-            cb.message,
-            weekly_text,
-            reply_markup=create_main_menu_keyboard(
-                is_member=member,
-                has_pay=bool(AT_PRODUCT_ID_CLUB),
-                is_admin=is_admin,
-            ),
-        )
-    except TelegramBadRequest as e:
-        if "message is not modified" not in str(e):
-            logger.error(f"Error in cb_weekly: {e}", exc_info=True)
 
+@router.callback_query(F.data == "menu:weekly")
+async def cb_weekly(cb: types.CallbackQuery, state: FSMContext):
+    await _reset_state_if_needed(state)
+
+    user = await get_user_with_id(cb.from_user.id)
+    is_admin = str(cb.from_user.id) in ADMIN_IDS
+    await send_weekly_materials_section(cb.message, user, is_admin, from_callback=True)
     await cb.answer()
 
 
 @router.callback_query(F.data == "menu:schedule")
-async def cb_schedule(cb: types.CallbackQuery):
+async def cb_schedule(cb: types.CallbackQuery, state: FSMContext):
+    await _reset_state_if_needed(state)
+
     user = await get_user_with_id(cb.from_user.id)
-
-    if not user:
-        await cb.answer("Перезапусти /start", show_alert=True)
-        return
-
-    member = await is_member(user)
-    if not member:
-        await cb.answer("Расписание доступно участницам клуба", show_alert=True)
-        return
-
     is_admin = str(cb.from_user.id) in ADMIN_IDS
-
-    schedule_text = await get_content(
-        "schedule",
-        "🗓️ Расписание эфиров:\n"
-        "• Понедельник 20:00 — Вводный эфир\n"
-        "• Четверг 19:00 — Практика в группе\n"
-        "• Воскресенье 18:00 — Подведение итогов",
-    )
-
-    try:
-        await safe_edit_text(
-            cb.message,
-            schedule_text,
-            reply_markup=create_main_menu_keyboard(
-                is_member=member,
-                has_pay=bool(AT_PRODUCT_ID_CLUB),
-                is_admin=is_admin,
-            ),
-        )
-    except TelegramBadRequest as e:
-        if "message is not modified" not in str(e):
-            logger.error(f"Error in cb_schedule: {e}", exc_info=True)
-
+    await send_schedule_section(cb.message, user, is_admin, from_callback=True)
     await cb.answer()
 # ──────────────────────────────────────────────────────────────────────────────
 # Поддержка и помощь
 # ──────────────────────────────────────────────────────────────────────────────
 @router.message(Command("support"))
-async def cmd_support(message: types.Message):
+async def cmd_support(message: types.Message, state: FSMContext):
+    await _reset_state_if_needed(state)
+
     is_admin = str(message.from_user.id) in ADMIN_IDS
+    user = await get_user_with_id(message.from_user.id)
     await message.answer(
         f"Поддержка.\n\n"
         f"Если есть вопросы или сложности — пиши сюда: {SUPPORT_CONTACT}. Мы отвечаем лично и максимально быстро.",
-        reply_markup=create_main_menu_keyboard(is_member=False, has_pay=bool(AT_PRODUCT_ID_CLUB), is_admin=is_admin)
+        reply_markup=await build_menu_keyboard(user=user, is_admin=is_admin, section="root"),
     )
 
 @router.message(Command("id"))
-async def cmd_id(message: types.Message):
+async def cmd_id(message: types.Message, state: FSMContext):
+    await _reset_state_if_needed(state)
+
     uid = message.from_user.id
     uname = f"@{message.from_user.username}" if message.from_user.username else "—"
     is_admin = str(message.from_user.id) in ADMIN_IDS
+    user = await get_user_with_id(message.from_user.id)
     await message.answer(
         f"Твои данные:\n\n"
         f"Telegram ID: <code>{uid}</code>\n"
         f"Username: {uname}\n\n"
         f"Эти данные могут понадобиться при обращении в поддержку.",
-        reply_markup=create_main_menu_keyboard(is_member=False, has_pay=bool(AT_PRODUCT_ID_CLUB), is_admin=is_admin)
+        reply_markup=await build_menu_keyboard(user=user, is_admin=is_admin, section="root"),
     )
 
-@router.message(Command("help"))
-async def cmd_help(message: types.Message):
+
+@router.message(Command("profile"))
+async def cmd_profile(message: types.Message, state: FSMContext):
+    await _reset_state_if_needed(state)
+
+    user = await get_user_with_id(message.from_user.id)
     is_admin = str(message.from_user.id) in ADMIN_IDS
+    await send_profile_overview(message, user, is_admin)
+
+
+@router.message(Command("help"))
+async def cmd_help(message: types.Message, state: FSMContext):
+    await _reset_state_if_needed(state)
+
+    is_admin = str(message.from_user.id) in ADMIN_IDS
+    user = await get_user_with_id(message.from_user.id)
     await message.answer(
         "Справка по боту.\n\n"
         "Команды:\n"
@@ -1578,36 +1974,36 @@ async def cmd_help(message: types.Message):
         "Оплата доступа\n"
         "Правила клуба\n"
         "Тест и разбор",
-        reply_markup=create_main_menu_keyboard(is_member=False, has_pay=bool(AT_PRODUCT_ID_CLUB), is_admin=is_admin)
+        reply_markup=await build_menu_keyboard(user=user, is_admin=is_admin, section="root"),
     )
 # ──────────────────────────────────────────────────────────────────────────────
 # Навигация по меню
 # ──────────────────────────────────────────────────────────────────────────────
 @router.callback_query(F.data == "menu:back")
-async def cb_back(cb: types.CallbackQuery):
+async def cb_back(cb: types.CallbackQuery, state: FSMContext):
     """Возврат в предыдущее меню"""
+    await _reset_state_if_needed(state)
+
     user = await get_user_with_id(cb.from_user.id)
     is_admin = str(cb.from_user.id) in ADMIN_IDS
-    await safe_edit_text(
-        cb.message,
-        "Главное меню\n\nВыбери раздел, чтобы продолжить:"
-    )
+    await send_menu_section(cb.message, user, is_admin, "root", from_callback=True)
     await cb.answer()
 
 @router.callback_query(F.data == "menu:main")
-async def cb_main(cb: types.CallbackQuery):
+async def cb_main(cb: types.CallbackQuery, state: FSMContext):
     """Возврат в главное меню"""
+    await _reset_state_if_needed(state)
+
     user = await get_user_with_id(cb.from_user.id)
     is_admin = str(cb.from_user.id) in ADMIN_IDS
-    await safe_edit_text(
-        cb.message,
-        "Главное меню\n\nВыбери раздел, чтобы продолжить:"
-    )
+    await send_menu_section(cb.message, user, is_admin, "root", from_callback=True)
     await cb.answer()
 
 @router.callback_query(F.data == "menu:support")
-async def cb_support(cb: types.CallbackQuery):
+async def cb_support(cb: types.CallbackQuery, state: FSMContext):
     """Раздел поддержки"""
+    await _reset_state_if_needed(state)
+
     user = await get_user_with_id(cb.from_user.id)
     is_admin = str(cb.from_user.id) in ADMIN_IDS
     await send_support_section(cb.message, user, is_admin, from_callback=True)
@@ -1628,36 +2024,63 @@ async def cancel_handler(message: types.Message | types.CallbackQuery, state: FS
     if isinstance(message, types.CallbackQuery):
         user = await get_user_with_id(message.from_user.id)
         is_admin = str(message.from_user.id) in ADMIN_IDS
-        kb = create_main_menu_keyboard(is_member=await is_member(user), has_pay=bool(AT_PRODUCT_ID_CLUB), is_admin=is_admin)
+        kb = await build_menu_keyboard(user=user, is_admin=is_admin, section="root")
         await message.message.answer(text + "Возвращаюсь в главное меню...", reply_markup=kb)
         await message.answer()
     else:
         user = await get_user_with_id(message.from_user.id)
         is_admin = str(message.from_user.id) in ADMIN_IDS
-        kb = create_main_menu_keyboard(is_member=await is_member(user), has_pay=bool(AT_PRODUCT_ID_CLUB), is_admin=is_admin)
+        kb = await build_menu_keyboard(user=user, is_admin=is_admin, section="root")
         await message.answer(text + "Возвращаюсь в главное меню...", reply_markup=kb)
 # ──────────────────────────────────────────────────────────────────────────────
 # Админ-панель
 # ──────────────────────────────────────────────────────────────────────────────
 @router.callback_query(F.data == "menu:admin")
-async def cb_admin_menu(cb: types.CallbackQuery):
+async def cb_admin_menu(cb: types.CallbackQuery, state: FSMContext):
     """Обработка кнопки админ-панели"""
     if str(cb.from_user.id) not in ADMIN_IDS:
         await cb.answer("Доступ запрещен", show_alert=True)
         return
 
+    await _reset_state_if_needed(state)
+
     await send_admin_menu(cb.message, from_callback=True)
     await cb.answer()
 
 @router.callback_query(F.data.startswith("admin:"))
-async def cb_admin_actions(cb: types.CallbackQuery):
+async def cb_admin_actions(cb: types.CallbackQuery, state: FSMContext):
     """Обработка действий админ-панели"""
     if str(cb.from_user.id) not in ADMIN_IDS:
         await cb.answer("Доступ запрещен", show_alert=True)
         return
-    
-    action = cb.data.split(":")[1]
-    
+
+    await _reset_state_if_needed(state)
+
+    parts = cb.data.split(":")
+    action = parts[1] if len(parts) > 1 else ""
+
+    if action == "settings":
+        await send_admin_settings(cb.message, from_callback=True)
+        await cb.answer()
+        return
+
+    if action == "toggle" and len(parts) >= 3:
+        setting_key = parts[2]
+        if setting_key not in _ADMIN_SETTINGS_DEFAULTS:
+            await cb.answer("Неизвестный переключатель", show_alert=True)
+            return
+        current_value = await get_bool_setting(setting_key, _ADMIN_SETTINGS_DEFAULTS[setting_key])
+        new_value = not current_value
+        await set_bool_setting(setting_key, new_value)
+        await log_admin_action(
+            cb.from_user.id,
+            "toggle_setting",
+            {"key": setting_key, "value": new_value},
+        )
+        await send_admin_settings(cb.message, from_callback=True)
+        await cb.answer("Готово")
+        return
+
     if action == "users":
         text = (
             "Управление пользователями\n\n"
@@ -1722,10 +2145,12 @@ def is_admin_id(uid: int) -> bool:
 # Админка: доступ/помощь
 # ──────────────────────────────────────────────────────────────────────────────
 @router.message(Command("admin"))
-async def cmd_admin(message: types.Message, command: CommandObject):
+async def cmd_admin(message: types.Message, command: CommandObject, state: FSMContext):
     if not is_admin_id(message.from_user.id):
         return
-    
+
+    await _reset_state_if_needed(state)
+
     if not command.args:
         admin_text = (
             "Админ-панель\n\n"
