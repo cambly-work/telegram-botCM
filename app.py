@@ -76,7 +76,7 @@ logger = logging.getLogger("code-magnetism")
 # Локальные модули
 # ──────────────────────────────────────────────────────────────────────────────
 from db import init_db, close_db, fetchrow, fetch, execute, is_db_connected  # базовые хелперы БД
-from handlers import router as bot_router
+from handlers import router as bot_router, tz_aware_msk
 from scheduler import setup_scheduler, shutdown_scheduler, get_scheduler_status
 
 # ──────────────────────────────────────────────────────────────────────────────
