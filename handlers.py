@@ -2789,8 +2789,109 @@ async def cb_admin_menu(cb: types.CallbackQuery, state: FSMContext):
     """Обработка кнопки админ-панели"""
     if str(cb.from_user.id) not in ADMIN_IDS:
         await cb.answer("Доступ запрещен", show_alert=True)
+>>>>>>> main
         return
+    text = (
+        "Управление пользователями\n\n"
+        "Команды:\n"
+        "/admin user <code>username или tg_id</code> — информация о пользователе\n"
+        "/admin set_paid <code>username</code> [days или YYYY-MM-DD] — установить оплату\n"
+        "/admin bind <code>username или tg_id</code> email=<code>email</code> phone=<code>phone</code> — привязать контакты\n"
+        "/admin access <code>username</code> [revoke или status] — управление доступом"
+    )
+    await message.answer(text, reply_markup=admin_main_keyboard())
 
+<<<<<<< HEAD
+
+@router.message(F.text == "Рассылка")
+async def admin_broadcast_help(message: types.Message):
+    if not is_admin_id(message.from_user.id):
+        return
+    text = (
+        "Рассылка\n\n"
+        "Команда:\n"
+        "/broadcast <code>segment</code> [--html] — рассылка пользователям\n\n"
+        "Сегменты: all, lead_funnel, member_active, member_expired, expired"
+    )
+    await message.answer(text, reply_markup=admin_main_keyboard())
+
+
+@router.message(F.text == "Управление контентом")
+async def admin_content_help(message: types.Message):
+    if not is_admin_id(message.from_user.id):
+        return
+    text = (
+        "Управление контентом\n\n"
+        "/content_keys — показать ключи\n"
+        "/content_get <code>key</code> — показать текст\n"
+        "/content_set <code>key</code> — сохранить текст (ответом)"
+    )
+    await message.answer(text, reply_markup=admin_main_keyboard())
+
+
+@router.message(F.text == "Статистика")
+async def admin_stats(message: types.Message):
+    if not is_admin_id(message.from_user.id):
+        return
+    users_count = (await fetchrow("SELECT COUNT(*) as count FROM users"))["count"]
+    active_users = (await fetchrow("SELECT COUNT(*) as count FROM users WHERE status='member_active' AND access_until > NOW()"))["count"]
+    lessons_completed = (await fetchrow("SELECT COUNT(*) as count FROM funnel_progress WHERE hw_status='submitted'"))["count"]
+    feedback_count = (await fetchrow("SELECT COUNT(*) as count FROM lesson_feedback"))["count"]
+    stats_text = (
+        f"Статистика\n\n"
+        f"Всего пользователей: {users_count}\n"
+        f"Активных участниц: {active_users}\n"
+        f"Выполнено уроков: {lessons_completed}\n"
+        f"Оставлено отзывов: {feedback_count}"
+    )
+    await message.answer(stats_text, reply_markup=admin_main_keyboard())
+
+
+@router.message(F.text == "Диагностика")
+async def admin_debug(message: types.Message):
+    if not is_admin_id(message.from_user.id):
+        return
+    config_text = (
+        "Конфигурация бота\n\n"
+        f"Версия: {BOT_VERSION}\n"
+        f"Часовой пояс: {BOT_TIMEZONE}\n"
+        f"Поддержка: {SUPPORT_CONTACT}\n"
+        f"Продукт ID: {AT_PRODUCT_ID_CLUB or 'Не задан'}\n"
+        f"Чат клуба: {CLUB_CHAT_ID or 'Не задан'}"
+    )
+    await message.answer(config_text, reply_markup=admin_main_keyboard())
+
+
+@router.message(F.text == "Тонкие настройки")
+async def admin_settings_menu(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+    await _reset_state_if_needed(state)
+    await send_admin_settings(message)
+
+
+@router.message(F.text == BACK_TO_ADMIN)
+async def admin_back(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+    await _reset_state_if_needed(state)
+    await send_admin_menu(message)
+
+
+@router.message(F.text.func(lambda text: _admin_toggle_key_from_text(text) is not None))
+async def admin_toggle_settings(message: types.Message):
+    if not is_admin_id(message.from_user.id):
+        return
+    key = _admin_toggle_key_from_text(message.text)
+    if not key:
+        return
+    current = await get_bool_setting(key, _ADMIN_SETTINGS_DEFAULTS[key])
+    new_value = not current
+    await set_bool_setting(key, new_value)
+    await log_admin_action(message.from_user.id, "toggle_setting", {"key": key, "value": new_value})
+    await send_admin_settings(message)
+
+=======
     await _reset_state_if_needed(state)
 
     await send_admin_menu(cb.message, from_callback=True)
