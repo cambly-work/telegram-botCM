@@ -30,6 +30,7 @@ ADMIN_TEXTS_ENTRY = "📄 Тексты экранов"
 ADMIN_CONTENT_MENU = "🧾 Контент и тексты"
 ADMIN_CONTENT_VIEW = "🔍 Посмотреть текст"
 ADMIN_CONTENT_CREATE = "➕ Добавить или обновить текст"
+ADMIN_CONTENT_TAGS_HELP = "ℹ️ Форматирование текста"
 ADMIN_CONTENT_SUGGEST_MORE = "🔁 Ещё варианты"
 ADMIN_USERS_BUTTON = "👥 Пользователи"
 ADMIN_BROADCAST_BUTTON = "📢 Рассылка"
@@ -50,6 +51,7 @@ BROADCAST_LEADS_BUTTON = "🎯 Лиды"
 BROADCAST_MEMBERS_BUTTON = "🔥 Активные"
 BROADCAST_EXPIRED_BUTTON = "🧊 Завершившие"
 BROADCAST_TEMPLATES_BUTTON = "🗂 Шаблоны рассылок"
+BROADCAST_TEMPLATE_PREFIX = "🗂 Шаблон: "
 
 SEND_BROADCAST_BUTTON = "🚀 Отправить"
 EDIT_BROADCAST_BUTTON = "✏️ Изменить текст"
@@ -298,7 +300,7 @@ def admin_broadcast_confirm_keyboard(include_change_segment: bool = True) -> Rep
 def admin_broadcast_templates_keyboard(titles: list[str]) -> ReplyKeyboardMarkup:
     rows: list[list[KeyboardButton]] = []
     for title in titles:
-        rows.append([KeyboardButton(text=f"📄 {title}")])
+        rows.append([KeyboardButton(text=f"{BROADCAST_TEMPLATE_PREFIX}{title}")])
     if titles:
         rows.append([KeyboardButton(text=DELETE_BROADCAST_TEMPLATE_BUTTON)])
     rows.append([KeyboardButton(text=BACK_TO_BROADCAST), KeyboardButton(text=BACK_TO_ADMIN)])
@@ -338,6 +340,7 @@ def admin_content_keyboard() -> ReplyKeyboardMarkup:
             KeyboardButton(text=ADMIN_CONTENT_VIEW),
             KeyboardButton(text=ADMIN_CONTENT_CREATE),
         ],
+        [KeyboardButton(text=ADMIN_CONTENT_TAGS_HELP)],
         [KeyboardButton(text=BACK_TO_ADMIN), KeyboardButton(text=BACK_TO_MAIN)],
     ]
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
