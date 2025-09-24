@@ -5545,3 +5545,118 @@ asyncpg.exceptions.UndefinedColumnError: столбец "action" не сущес
 2025-09-24 06:59:43,247 | INFO | code-magnetism | Shutdown завершён.
 2025-09-24 06:59:43,256 | INFO | uvicorn.error | Application shutdown complete.
 2025-09-24 06:59:43,276 | INFO | uvicorn.error | Finished server process [4832]
+2025-09-24 09:37:23,184 | INFO | code-magnetism | Routers attached: ['main-router']
+2025-09-24 09:37:25,248 | INFO | uvicorn.error | Started server process [2780]
+2025-09-24 09:37:25,248 | INFO | uvicorn.error | Waiting for application startup.
+2025-09-24 09:37:25,303 | INFO | code-magnetism | Startup: инициализация БД/планировщика/вебхука...
+2025-09-24 09:37:25,305 | INFO | db | Connecting PostgreSQL: postgresql://magnet:***@localhost:5432/magnetism
+2025-09-24 09:37:26,618 | INFO | db | PostgreSQL pool created
+2025-09-24 09:37:26,621 | INFO | db | Applying schema from: C:\Users\Tim\source\repos\cambly-work\telegram-botCM\schema.sql
+2025-09-24 09:37:27,667 | INFO | db | Schema applied successfully.
+2025-09-24 09:37:27,669 | INFO | db | Schema applied from C:\Users\Tim\source\repos\cambly-work\telegram-botCM\schema.sql
+2025-09-24 09:37:27,676 | INFO | code-magnetism | Database initialized successfully
+2025-09-24 09:37:27,858 | INFO | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2025-09-24 09:37:27,861 | INFO | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2025-09-24 09:37:27,868 | INFO | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2025-09-24 09:37:27,891 | INFO | apscheduler.scheduler | Added job "job_daily_lessons" to job store "default"
+2025-09-24 09:37:27,892 | INFO | apscheduler.scheduler | Added job "job_soft_reminders" to job store "default"
+2025-09-24 09:37:27,896 | INFO | apscheduler.scheduler | Added job "job_access_expiry_reminders" to job store "default"
+2025-09-24 09:37:27,897 | INFO | apscheduler.scheduler | Scheduler started
+2025-09-24 09:37:27,899 | INFO | scheduler | APScheduler started with timezone=Europe/Moscow; lessons at 10:00
+2025-09-24 09:37:27,900 | INFO | code-magnetism | Scheduler initialized successfully
+2025-09-24 09:37:27,901 | INFO | code-magnetism | Setting Telegram webhook to: https://5ef43a4597d2.ngrok-free.app/telegram/webhook?secret=change_me
+2025-09-24 09:37:29,005 | INFO | code-magnetism | Old webhook deleted
+2025-09-24 09:37:29,231 | INFO | code-magnetism | Telegram webhook установлен: https://5ef43a4597d2.ngrok-free.app/telegram/webhook?secret=change_me
+2025-09-24 09:37:29,251 | INFO | code-magnetism | Startup завершён.
+2025-09-24 09:37:29,259 | INFO | uvicorn.error | Application startup complete.
+2025-09-24 09:37:29,263 | INFO | uvicorn.error | Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+2025-09-24 09:38:16,650 | INFO | code-magnetism | Incoming update 822055166
+2025-09-24 09:38:16,651 | INFO | code-magnetism | Message from 815370781 (@goldfinger_uk): /start
+2025-09-24 09:38:17,908 | INFO | aiogram.event | Update id=822055166 is handled. Duration 1169 ms by bot id=8485537220
+2025-09-24 09:38:17,910 | INFO | code-magnetism | Update 822055166 processed successfully
+2025-09-24 09:38:17,918 | INFO | uvicorn.access | 91.108.5.36:0 - "POST /telegram/webhook?secret=change_me HTTP/1.1" 200
+2025-09-24 09:38:29,687 | INFO | code-magnetism | Incoming update 822055167
+2025-09-24 09:38:29,688 | INFO | code-magnetism | Callback from 815370781 (@goldfinger_uk): menu:admin
+2025-09-24 09:38:30,373 | INFO | aiogram.event | Update id=822055167 is handled. Duration 678 ms by bot id=8485537220
+2025-09-24 09:38:30,375 | INFO | code-magnetism | Update 822055167 processed successfully
+2025-09-24 09:38:30,379 | INFO | uvicorn.access | 91.108.5.36:0 - "POST /telegram/webhook?secret=change_me HTTP/1.1" 200
+2025-09-24 09:38:31,662 | INFO | code-magnetism | Incoming update 822055168
+2025-09-24 09:38:31,672 | INFO | code-magnetism | Callback from 815370781 (@goldfinger_uk): menu:main
+2025-09-24 09:38:32,318 | INFO | aiogram.event | Update id=822055168 is handled. Duration 637 ms by bot id=8485537220
+2025-09-24 09:38:32,323 | INFO | code-magnetism | Update 822055168 processed successfully
+2025-09-24 09:38:32,326 | INFO | uvicorn.access | 91.108.5.36:0 - "POST /telegram/webhook?secret=change_me HTTP/1.1" 200
+2025-09-24 09:38:33,789 | INFO | code-magnetism | Incoming update 822055169
+2025-09-24 09:38:33,790 | INFO | code-magnetism | Callback from 815370781 (@goldfinger_uk): menu:section:info
+2025-09-24 09:38:34,510 | INFO | aiogram.event | Update id=822055169 is handled. Duration 710 ms by bot id=8485537220
+2025-09-24 09:38:34,512 | INFO | code-magnetism | Update 822055169 processed successfully
+2025-09-24 09:38:34,520 | INFO | uvicorn.access | 91.108.5.36:0 - "POST /telegram/webhook?secret=change_me HTTP/1.1" 200
+2025-09-24 09:38:36,168 | INFO | code-magnetism | Incoming update 822055170
+2025-09-24 09:38:36,178 | INFO | code-magnetism | Callback from 815370781 (@goldfinger_uk): menu:main
+2025-09-24 09:38:36,847 | INFO | aiogram.event | Update id=822055170 is handled. Duration 660 ms by bot id=8485537220
+2025-09-24 09:38:36,856 | INFO | code-magnetism | Update 822055170 processed successfully
+2025-09-24 09:38:36,860 | INFO | uvicorn.access | 91.108.5.36:0 - "POST /telegram/webhook?secret=change_me HTTP/1.1" 200
+2025-09-24 09:38:37,803 | INFO | code-magnetism | Incoming update 822055171
+2025-09-24 09:38:37,804 | INFO | code-magnetism | Callback from 815370781 (@goldfinger_uk): menu:section:learning
+2025-09-24 09:38:38,378 | INFO | aiogram.event | Update id=822055171 is handled. Duration 565 ms by bot id=8485537220
+2025-09-24 09:38:38,379 | INFO | code-magnetism | Update 822055171 processed successfully
+2025-09-24 09:38:38,387 | INFO | uvicorn.access | 91.108.5.36:0 - "POST /telegram/webhook?secret=change_me HTTP/1.1" 200
+2025-09-24 09:38:40,793 | INFO | code-magnetism | Incoming update 822055172
+2025-09-24 09:38:40,795 | INFO | code-magnetism | Callback from 815370781 (@goldfinger_uk): menu:funnel
+2025-09-24 09:38:41,664 | INFO | aiogram.event | Update id=822055172 is handled. Duration 858 ms by bot id=8485537220
+2025-09-24 09:38:41,673 | INFO | code-magnetism | Update 822055172 processed successfully
+2025-09-24 09:38:41,679 | INFO | uvicorn.access | 91.108.5.36:0 - "POST /telegram/webhook?secret=change_me HTTP/1.1" 200
+2025-09-24 09:38:46,351 | INFO | code-magnetism | Incoming update 822055173
+2025-09-24 09:38:46,352 | INFO | code-magnetism | Message from 815370781 (@goldfinger_uk): Админ-панель
+2025-09-24 09:38:46,657 | INFO | aiogram.event | Update id=822055173 is handled. Duration 277 ms by bot id=8485537220
+2025-09-24 09:38:46,659 | INFO | code-magnetism | Update 822055173 processed successfully
+2025-09-24 09:38:46,666 | INFO | uvicorn.access | 91.108.5.36:0 - "POST /telegram/webhook?secret=change_me HTTP/1.1" 200
+2025-09-24 09:38:48,350 | INFO | code-magnetism | Incoming update 822055174
+2025-09-24 09:38:48,350 | INFO | code-magnetism | Message from 815370781 (@goldfinger_uk): /start
+2025-09-24 09:38:48,796 | INFO | aiogram.event | Update id=822055174 is handled. Duration 439 ms by bot id=8485537220
+2025-09-24 09:38:48,811 | INFO | code-magnetism | Update 822055174 processed successfully
+2025-09-24 09:38:48,817 | INFO | uvicorn.access | 91.108.5.36:0 - "POST /telegram/webhook?secret=change_me HTTP/1.1" 200
+2025-09-24 09:38:50,431 | INFO | code-magnetism | Incoming update 822055175
+2025-09-24 09:38:50,433 | INFO | code-magnetism | Callback from 815370781 (@goldfinger_uk): menu:admin
+2025-09-24 09:38:51,092 | INFO | aiogram.event | Update id=822055175 is handled. Duration 650 ms by bot id=8485537220
+2025-09-24 09:38:51,093 | INFO | code-magnetism | Update 822055175 processed successfully
+2025-09-24 09:38:51,101 | INFO | uvicorn.access | 91.108.5.36:0 - "POST /telegram/webhook?secret=change_me HTTP/1.1" 200
+2025-09-24 09:38:52,897 | INFO | code-magnetism | Incoming update 822055176
+2025-09-24 09:38:52,898 | INFO | code-magnetism | Callback from 815370781 (@goldfinger_uk): admin:content
+2025-09-24 09:38:53,489 | INFO | aiogram.event | Update id=822055176 is handled. Duration 581 ms by bot id=8485537220
+2025-09-24 09:38:53,496 | INFO | code-magnetism | Update 822055176 processed successfully
+2025-09-24 09:38:53,499 | INFO | uvicorn.access | 91.108.5.36:0 - "POST /telegram/webhook?secret=change_me HTTP/1.1" 200
+2025-09-24 09:39:01,881 | INFO | code-magnetism | Incoming update 822055177
+2025-09-24 09:39:01,882 | INFO | code-magnetism | Callback from 815370781 (@goldfinger_uk): admin:settings
+2025-09-24 09:39:02,425 | INFO | aiogram.event | Update id=822055177 is handled. Duration 537 ms by bot id=8485537220
+2025-09-24 09:39:02,435 | INFO | code-magnetism | Update 822055177 processed successfully
+2025-09-24 09:39:02,441 | INFO | uvicorn.access | 91.108.5.36:0 - "POST /telegram/webhook?secret=change_me HTTP/1.1" 200
+2025-09-24 09:39:04,744 | INFO | code-magnetism | Incoming update 822055178
+2025-09-24 09:39:04,755 | INFO | code-magnetism | Callback from 815370781 (@goldfinger_uk): admin:toggle:payments_open
+2025-09-24 09:39:05,003 | INFO | handlers | content: set key=settings.payments_open len=5
+2025-09-24 09:39:05,029 | ERROR | handlers | Failed to log admin action: invalid input for query argument $3: {'key': 'payments_open', 'value': False} (expected str, got dict)
+2025-09-24 09:39:05,756 | INFO | aiogram.event | Update id=822055178 is handled. Duration 992 ms by bot id=8485537220
+2025-09-24 09:39:05,766 | INFO | code-magnetism | Update 822055178 processed successfully
+2025-09-24 09:39:05,771 | INFO | uvicorn.access | 91.108.5.36:0 - "POST /telegram/webhook?secret=change_me HTTP/1.1" 200
+2025-09-24 09:39:06,762 | INFO | code-magnetism | Incoming update 822055179
+2025-09-24 09:39:06,772 | INFO | code-magnetism | Callback from 815370781 (@goldfinger_uk): admin:toggle:payments_open
+2025-09-24 09:39:06,811 | INFO | handlers | content: set key=settings.payments_open len=4
+2025-09-24 09:39:06,815 | ERROR | handlers | Failed to log admin action: invalid input for query argument $3: {'key': 'payments_open', 'value': True} (expected str, got dict)
+2025-09-24 09:39:07,457 | INFO | aiogram.event | Update id=822055179 is handled. Duration 679 ms by bot id=8485537220
+2025-09-24 09:39:07,459 | INFO | code-magnetism | Update 822055179 processed successfully
+2025-09-24 09:39:07,466 | INFO | uvicorn.access | 91.108.5.36:0 - "POST /telegram/webhook?secret=change_me HTTP/1.1" 200
+2025-09-24 09:39:10,674 | INFO | code-magnetism | Incoming update 822055180
+2025-09-24 09:39:10,688 | INFO | code-magnetism | Callback from 815370781 (@goldfinger_uk): menu:main
+2025-09-24 09:39:11,236 | INFO | aiogram.event | Update id=822055180 is handled. Duration 539 ms by bot id=8485537220
+2025-09-24 09:39:11,238 | INFO | code-magnetism | Update 822055180 processed successfully
+2025-09-24 09:39:11,246 | INFO | uvicorn.access | 91.108.5.36:0 - "POST /telegram/webhook?secret=change_me HTTP/1.1" 200
+2025-09-24 09:43:17,688 | INFO | uvicorn.error | Shutting down
+2025-09-24 09:43:17,805 | INFO | uvicorn.error | Waiting for application shutdown.
+2025-09-24 09:43:17,807 | INFO | code-magnetism | Shutdown: останавливаем планировщик/закрываем БД...
+2025-09-24 09:43:17,815 | INFO | scheduler | APScheduler shut down
+2025-09-24 09:43:17,820 | INFO | code-magnetism | Scheduler stopped successfully
+2025-09-24 09:43:17,823 | INFO | apscheduler.scheduler | Scheduler has been shut down
+2025-09-24 09:43:17,837 | INFO | db | PostgreSQL pool closed
+2025-09-24 09:43:17,841 | INFO | code-magnetism | Database closed successfully
+2025-09-24 09:43:17,844 | INFO | code-magnetism | Shutdown завершён.
+2025-09-24 09:43:17,846 | INFO | uvicorn.error | Application shutdown complete.
+2025-09-24 09:43:17,847 | INFO | uvicorn.error | Finished server process [2780]
