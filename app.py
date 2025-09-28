@@ -229,7 +229,15 @@ if NGROK_FETCH_ATTEMPTED and not NGROK_FETCH_SUCCEEDED:
 # ──────────────────────────────────────────────────────────────────────────────
 # Локальные модули
 # ──────────────────────────────────────────────────────────────────────────────
-from db import init_db, close_db, fetchrow, fetch, execute, is_db_connected  # базовые хелперы БД
+from db import (
+    init_db,
+    close_db,
+    fetchrow,
+    fetch,
+    fetchval,
+    execute,
+    is_db_connected,
+)  # базовые хелперы БД
 from handlers import router as bot_router, tz_aware_msk
 from scheduler import setup_scheduler, shutdown_scheduler, get_scheduler_status
 
@@ -596,12 +604,17 @@ async def admin_stats(secret: str = Query(...)):
         """)
 
         # Пользователи, завершившие все 4 урока
-        done4 = await fetchrow("""
-            SELECT COUNT(DISTINCT user_id) AS c
-            FROM funnel_progress
-            WHERE hw_status='submitted'
-            GROUP BY user_id
-            HAVING COUNT(CASE WHEN lesson_num IN (1,2,3,4) AND hw_status='submitted' THEN 1 END) = 4
+        done4_total = await fetchval("""
+            SELECT COUNT(*) AS c
+            FROM (
+                SELECT user_id
+                FROM funnel_progress
+                WHERE hw_status = 'submitted'
+                GROUP BY user_id
+                HAVING COUNT(DISTINCT CASE
+                    WHEN lesson_num BETWEEN 1 AND 4 THEN lesson_num
+                END) = 4
+            ) AS completed
         """)
 
         # Статистика платежей
@@ -619,7 +632,7 @@ async def admin_stats(secret: str = Query(...)):
                 "member_expired": (expired or {}).get("c", 0),
             },
             "funnel": {
-                "completed_4of4": (done4 or {}).get("c", 0),
+                "completed_4of4": done4_total or 0,
                 "lesson_stats": lesson_stats or [],
             },
             "payments": payment_stats or [],
