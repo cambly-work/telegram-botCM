@@ -1998,6 +1998,17 @@ async def profile_receive_email(message: types.Message, state: FSMContext):
     await send_profile_overview(message, user, is_admin)
 
 
+@router.message(ProfileStates.waiting_phone, F.text.casefold() == CANCEL_TEXT.lower())
+async def profile_cancel_phone(message: types.Message, state: FSMContext):
+    await state.clear()
+
+    user = await get_user_with_id(message.from_user.id)
+    is_admin = str(message.from_user.id) in ADMIN_IDS
+
+    await message.answer("Изменение телефона отменено.")
+    await send_profile_overview(message, user, is_admin)
+
+
 @router.message(ProfileStates.waiting_phone, F.text.len() > 0)
 async def profile_receive_phone(message: types.Message, state: FSMContext):
     raw_phone = (message.text or "").strip()
