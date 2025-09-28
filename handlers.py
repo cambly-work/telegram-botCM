@@ -19,6 +19,7 @@ from aiogram.exceptions import TelegramRetryAfter
 from urllib.parse import parse_qs, urlparse
 from aiogram.dispatcher.middlewares.base import BaseMiddleware
 from db import fetchrow, fetch, execute
+from app import _admin_ids
 from keyboards import (
     main_menu_keyboard,
     info_menu_keyboard,
@@ -121,7 +122,7 @@ TEST_FORM_URL = os.getenv(
 SUPPORT_CONTACT = os.getenv("SUPPORT_CONTACT", "@Tokyo_tokyo")
 AT_PRODUCT_ID_CLUB = os.getenv("AT_PRODUCT_ID_CLUB", "")
 CLUB_CHAT_ID = os.getenv("CLUB_CHAT_ID", "")  # ID приватной группы/канала (опц.)
-ADMIN_IDS = os.getenv("ADMIN_IDS", "").split(",") if os.getenv("ADMIN_IDS") else []
+ADMIN_IDS = _admin_ids()
 BOT_VERSION = "1.0.0"
 
 
@@ -129,10 +130,9 @@ def is_admin_id(user_id: int | str | None) -> bool:
     if user_id is None:
         return False
     try:
-        uid_str = str(int(user_id))
+        return int(user_id) in ADMIN_IDS
     except (ValueError, TypeError):
-        uid_str = str(user_id)
-    return uid_str in ADMIN_IDS
+        return False
 # ──────────────────────────────────────────────────────────────────────────────
 # Мидлвара для throttling
 # ──────────────────────────────────────────────────────────────────────────────
@@ -2054,7 +2054,7 @@ async def on_start(message: types.Message, state: FSMContext):
         return
     
     # Показываем главное меню
-    is_admin = str(message.from_user.id) in ADMIN_IDS
+    is_admin = is_admin_id(message.from_user.id)
     kb = await build_menu_keyboard(user=user, is_admin=is_admin, section="root")
     
     welcome_template = await get_content(
@@ -2135,7 +2135,7 @@ async def registration_receive_phone(message: types.Message, state: FSMContext):
     
     # Получаем обновленные данные пользователя
     user = await get_user_with_id(message.from_user.id)
-    is_admin = str(message.from_user.id) in ADMIN_IDS
+    is_admin = is_admin_id(message.from_user.id)
 
     # Показываем главное меню
     kb = await build_menu_keyboard(user=user, is_admin=is_admin, section="root")
@@ -2269,7 +2269,7 @@ async def profile_receive_email(message: types.Message, state: FSMContext):
 
     await message.answer("Email обновлён ✅")
     user = await get_user_with_id(message.from_user.id)
-    is_admin = str(message.from_user.id) in ADMIN_IDS
+    is_admin = is_admin_id(message.from_user.id)
     await send_profile_overview(message, user, is_admin)
 
 
@@ -2278,7 +2278,7 @@ async def profile_cancel_phone(message: types.Message, state: FSMContext):
     await state.clear()
 
     user = await get_user_with_id(message.from_user.id)
-    is_admin = str(message.from_user.id) in ADMIN_IDS
+    is_admin = is_admin_id(message.from_user.id)
 
     await message.answer("Изменение телефона отменено.")
     await send_profile_overview(message, user, is_admin)
@@ -2305,7 +2305,7 @@ async def profile_receive_phone(message: types.Message, state: FSMContext):
 
     await message.answer("Телефон обновлён ✅")
     user = await get_user_with_id(message.from_user.id)
-    is_admin = str(message.from_user.id) in ADMIN_IDS
+    is_admin = is_admin_id(message.from_user.id)
     await send_profile_overview(message, user, is_admin)
 
 
@@ -2327,7 +2327,7 @@ async def profile_receive_phone(message: types.Message, state: FSMContext):
 async def cmd_support(message: types.Message, state: FSMContext):
     await _reset_state_if_needed(state)
 
-    is_admin = str(message.from_user.id) in ADMIN_IDS
+    is_admin = is_admin_id(message.from_user.id)
     user = await get_user_with_id(message.from_user.id)
     await message.answer(
         f"Поддержка.\n\n"
@@ -2421,7 +2421,7 @@ async def cmd_id(message: types.Message, state: FSMContext):
 
     uid = message.from_user.id
     uname = f"@{message.from_user.username}" if message.from_user.username else "—"
-    is_admin = str(message.from_user.id) in ADMIN_IDS
+    is_admin = is_admin_id(message.from_user.id)
     user = await get_user_with_id(message.from_user.id)
     await message.answer(
         f"Твои данные:\n\n"
@@ -2437,7 +2437,7 @@ async def cmd_profile(message: types.Message, state: FSMContext):
     await _reset_state_if_needed(state)
 
     user = await get_user_with_id(message.from_user.id)
-    is_admin = str(message.from_user.id) in ADMIN_IDS
+    is_admin = is_admin_id(message.from_user.id)
     await send_profile_overview(message, user, is_admin)
 
 
@@ -2445,7 +2445,7 @@ async def cmd_profile(message: types.Message, state: FSMContext):
 async def cmd_help(message: types.Message, state: FSMContext):
     await _reset_state_if_needed(state)
 
-    is_admin = str(message.from_user.id) in ADMIN_IDS
+    is_admin = is_admin_id(message.from_user.id)
     user = await get_user_with_id(message.from_user.id)
     await message.answer(
         "Справка по боту.\n\n"
@@ -2507,7 +2507,7 @@ async def cmd_form_done(
         FORM_SLUG=slug,
     )
 
-    is_admin = str(message.from_user.id) in ADMIN_IDS
+    is_admin = is_admin_id(message.from_user.id)
     await answer_with_main_menu(
         message,
         user,
@@ -2524,7 +2524,7 @@ async def cmd_id(message: types.Message, state: FSMContext):
 
     uid = message.from_user.id
     uname = f"@{message.from_user.username}" if message.from_user.username else "—"
-    is_admin = str(message.from_user.id) in ADMIN_IDS
+    is_admin = is_admin_id(message.from_user.id)
     user = await get_user_with_id(message.from_user.id)
     await message.answer(
         f"Твои данные:\n\n"
@@ -2540,7 +2540,7 @@ async def cmd_profile(message: types.Message, state: FSMContext):
     await _reset_state_if_needed(state)
 
     user = await get_user_with_id(message.from_user.id)
-    is_admin = str(message.from_user.id) in ADMIN_IDS
+    is_admin = is_admin_id(message.from_user.id)
     await send_profile_overview(message, user, is_admin)
 
 
@@ -2548,7 +2548,7 @@ async def cmd_profile(message: types.Message, state: FSMContext):
 async def cmd_help(message: types.Message, state: FSMContext):
     await _reset_state_if_needed(state)
 
-    is_admin = str(message.from_user.id) in ADMIN_IDS
+    is_admin = is_admin_id(message.from_user.id)
     user = await get_user_with_id(message.from_user.id)
     await message.answer(
         "Справка по боту.\n\n"
@@ -2571,7 +2571,7 @@ async def cmd_help(message: types.Message, state: FSMContext):
 # ──────────────────────────────────────────────────────────────────────────────
 async def _get_user_and_admin(message: types.Message) -> tuple[Optional[dict], bool]:
     user = await get_user_with_id(message.from_user.id)
-    return user, str(message.from_user.id) in ADMIN_IDS
+    return user, is_admin_id(message.from_user.id)
 
 
 @router.message(F.text == BACK_TO_MAIN)
@@ -2652,7 +2652,7 @@ async def menu_lessons(message: types.Message, state: FSMContext):
     user = await get_user_with_id(message.from_user.id)
     if not user:
         user = await ensure_user(message.from_user)
-    is_admin = str(message.from_user.id) in ADMIN_IDS
+    is_admin = is_admin_id(message.from_user.id)
     await send_funnel_section(message, user, is_admin)
 
 
@@ -2660,7 +2660,7 @@ async def menu_lessons(message: types.Message, state: FSMContext):
 async def menu_magnetism_window(message: types.Message, state: FSMContext):
     await _reset_state_if_needed(state)
     user = await get_user_with_id(message.from_user.id)
-    is_admin = str(message.from_user.id) in ADMIN_IDS
+    is_admin = is_admin_id(message.from_user.id)
     if not user:
         await message.answer("Перезапусти /start, чтобы загрузить профиль.")
         return
@@ -2746,7 +2746,7 @@ async def menu_back_to_lessons(message: types.Message, state: FSMContext):
     user = await get_user_with_id(message.from_user.id)
     if not user:
         user = await ensure_user(message.from_user)
-    is_admin = str(message.from_user.id) in ADMIN_IDS
+    is_admin = is_admin_id(message.from_user.id)
     await send_funnel_section(message, user, is_admin)
 
 
@@ -2802,7 +2802,7 @@ async def lesson_skip(message: types.Message, state: FSMContext):
     }
     reply = await build_menu_keyboard(
         user=user,
-        is_admin=str(message.from_user.id) in ADMIN_IDS,
+        is_admin=is_admin_id(message.from_user.id),
         section="learning",
     )
     await message.answer(
