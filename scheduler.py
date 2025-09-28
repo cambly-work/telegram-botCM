@@ -10,10 +10,10 @@ from apscheduler.triggers.cron import CronTrigger
 
 from aiogram import Bot, exceptions as tg_exc
 
-from db import fetch, fetchrow
+from db import fetch, fetchrow, execute
 from keyboards import lesson_keyboard
 # переиспользуем минимум логики из handlers, чтобы не дублировать
-from handlers import _load_yaml_content, upsert_funnel_delivery
+from handlers import _load_yaml_content, upsert_funnel_delivery, FORM_LABELS
 
 logger = logging.getLogger("scheduler")
 
@@ -209,6 +209,52 @@ async def job_soft_reminders(bot: Bot):
     logger.info("[job_soft_reminders] sent=%s errors=%s", sent, errors)
 
 
+async def job_form_reminders(bot: Bot):
+    """Раз в час напоминаем о незавершённых анкетах."""
+    rows = await fetch(
+        """
+        SELECT fs.id, fs.user_id, u.tg_user_id, fs.form_slug, fs.started_at, fs.last_reminder_at, fs.reminder_count
+        FROM form_sessions fs
+        JOIN users u ON u.id = fs.user_id
+        WHERE fs.completed_at IS NULL
+          AND fs.started_at <= (NOW() - INTERVAL '1 hour')
+          AND (fs.last_reminder_at IS NULL OR fs.last_reminder_at <= (NOW() - INTERVAL '1 hour'))
+        """
+    )
+
+    if not rows:
+        logger.info("[job_form_reminders] nothing to remind")
+        return
+
+    sent, errors = 0, 0
+    for r in rows:
+        try:
+            label = FORM_LABELS.get(r["form_slug"], r["form_slug"])
+            reminder_text = (
+                f"Напоминание: анкета «{label}» ждёт завершения.\n"
+                "Если уже отправила форму, просто игнорируй это сообщение."
+            )
+            ok = await _send_with_retries(bot, r["tg_user_id"], reminder_text)
+            if ok:
+                await execute(
+                    """
+                    UPDATE form_sessions
+                    SET last_reminder_at = NOW(),
+                        reminder_count = COALESCE(reminder_count, 0) + 1
+                    WHERE id = $1
+                    """,
+                    r["id"],
+                )
+                sent += 1
+            else:
+                errors += 1
+        except Exception as e:
+            logger.warning("[job_form_reminders] send failed for user_id=%s: %s", r["user_id"], e)
+            errors += 1
+
+    logger.info("[job_form_reminders] sent=%s errors=%s", sent, errors)
+
+
 async def job_access_expiry_reminders(bot: Bot):
     """
     Напоминания об окончании доступа: -7 / -3 / 0 дней.
@@ -345,6 +391,18 @@ async def setup_scheduler(bot: Bot, timezone_name: str, time_send_lessons: str):
         max_instances=1,
         coalesce=True,
         misfire_grace_time=60 * 10,
+    )
+
+    # Напоминания о незавершённых анкетах — каждый час
+    scheduler.add_job(
+        job_form_reminders,
+        trigger=CronTrigger(minute=mm),
+        kwargs={"bot": bot},
+        id="form_reminders",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=60 * 5,
     )
 
     # Напоминания об окончании доступа — каждый день в 11:00 по таймзоне

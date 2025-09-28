@@ -125,6 +125,23 @@ CREATE TABLE IF NOT EXISTS content (
 );
 CREATE INDEX IF NOT EXISTS idx_content_key ON content(key);
 
+-- FORM_SESSIONS
+CREATE TABLE IF NOT EXISTS form_sessions (
+  id               SERIAL PRIMARY KEY,
+  user_id          INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  form_slug        TEXT NOT NULL,
+  started_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  completed_at     TIMESTAMPTZ,
+  last_reminder_at TIMESTAMPTZ,
+  reminder_count   INT NOT NULL DEFAULT 0,
+  UNIQUE (user_id, form_slug)
+);
+
+CREATE INDEX IF NOT EXISTS idx_form_sessions_user_started
+  ON form_sessions(user_id, started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_form_sessions_incomplete
+  ON form_sessions(completed_at, started_at);
+
 -- BROADCAST_TEMPLATES
 CREATE TABLE IF NOT EXISTS broadcast_templates (
   id         SERIAL PRIMARY KEY,
