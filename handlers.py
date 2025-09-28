@@ -1050,17 +1050,10 @@ async def send_analysis_section(
     *,
     from_callback: bool = False,
 ) -> None:
-<<<<<<< HEAD
     user_row = user or await get_user_with_id(message.from_user.id)
     if not user_row:
         user_row = await ensure_user(message.from_user)
 
-    analysis_text = await get_content(
-        "menu.analysis",
-        "Персональный разбор.\n\n",
-        "Заполни форму → мы назначим время.\n\n",
-        "https://forms.example.com/analysis",
-=======
     default_url = "https://forms.example.com/analysis"
     template = await get_content(
         "menu.analysis",
@@ -1072,19 +1065,21 @@ async def send_analysis_section(
         template,
         analysis_url=default_url,
         ANALYSIS_URL=default_url,
->>>>>>> main
     )
 
     if user_row:
-        try:
-            await mark_form_started(user_row["id"], FORM_SLUG_ANALYSIS)
-        except Exception as e:
-            logger.warning(
-                "form_session: mark start failed user_id=%s slug=%s: %s",
-                user_row.get("id"),
-                FORM_SLUG_ANALYSIS,
-                e,
-            )
+        form_url = extract_first_url(analysis_text) or default_url
+        slug = resolve_form_slug(form_url, FORM_SLUG_ANALYSIS)
+        if slug:
+            try:
+                await mark_form_started(user_row["id"], slug)
+            except Exception as e:
+                logger.warning(
+                    "form_session: mark start failed user_id=%s slug=%s: %s",
+                    user_row.get("id"),
+                    slug,
+                    e,
+                )
 
     await answer_with_main_menu(
         message,
@@ -1095,12 +1090,6 @@ async def send_analysis_section(
         from_callback=from_callback,
     )
 
-    if user:
-        form_url = extract_first_url(analysis_text) or default_url
-        slug = resolve_form_slug(form_url, "analysis")
-        if slug:
-            await mark_form_started(user.get("id"), slug)
-
 
 async def send_test_section(
     message: types.Message,
@@ -1109,21 +1098,14 @@ async def send_test_section(
     *,
     from_callback: bool = False,
 ) -> None:
-<<<<<<< HEAD
     user_row = user or await get_user_with_id(message.from_user.id)
     if not user_row:
         user_row = await ensure_user(message.from_user)
 
-    test_text = await get_content(
-        "menu.test",
-        "Тест: определение уровня.\n\n",
-        "Ссылка: https://forms.example.com/test\n\n",
-=======
     template = await get_content(
         "menu.test",
         "Тест: определение уровня.\n\n",
         "Пройди тест и получи анализ: {test_url}\n\n",
->>>>>>> main
         "После теста ты получишь анализ, рекомендации и сможешь записаться на разбор.",
     )
     default_slug = resolve_form_slug(TEST_FORM_URL, "test")
@@ -1136,15 +1118,18 @@ async def send_test_section(
     )
 
     if user_row:
-        try:
-            await mark_form_started(user_row["id"], FORM_SLUG_TEST)
-        except Exception as e:
-            logger.warning(
-                "form_session: mark start failed user_id=%s slug=%s: %s",
-                user_row.get("id"),
-                FORM_SLUG_TEST,
-                e,
-            )
+        form_url = extract_first_url(test_text) or TEST_FORM_URL
+        slug = resolve_form_slug(form_url, default_slug or FORM_SLUG_TEST)
+        if slug:
+            try:
+                await mark_form_started(user_row["id"], slug)
+            except Exception as e:
+                logger.warning(
+                    "form_session: mark start failed user_id=%s slug=%s: %s",
+                    user_row.get("id"),
+                    slug,
+                    e,
+                )
 
     await answer_with_main_menu(
         message,
@@ -1154,12 +1139,6 @@ async def send_test_section(
         section="learning",
         from_callback=from_callback,
     )
-
-    if user:
-        form_url = extract_first_url(test_text) or TEST_FORM_URL
-        slug = resolve_form_slug(form_url, default_slug or "test")
-        if slug:
-            await mark_form_started(user.get("id"), slug)
 
 
 async def send_support_section(
