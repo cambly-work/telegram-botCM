@@ -92,6 +92,23 @@ from keyboards import (
 # Логгер
 # ──────────────────────────────────────────────────────────────────────────────
 logger = logging.getLogger("handlers")
+
+
+FORM_SLUG_ANALYSIS = "analysis"
+FORM_SLUG_TEST = "test"
+FORM_LABELS: dict[str, str] = {
+    FORM_SLUG_ANALYSIS: "заявка на разбор",
+    FORM_SLUG_TEST: "тест по уровню",
+}
+FORM_ALIASES: dict[str, str] = {
+    FORM_SLUG_ANALYSIS: FORM_SLUG_ANALYSIS,
+    FORM_SLUG_TEST: FORM_SLUG_TEST,
+    "разбор": FORM_SLUG_ANALYSIS,
+    "анкета": FORM_SLUG_ANALYSIS,
+    "analysis": FORM_SLUG_ANALYSIS,
+    "test": FORM_SLUG_TEST,
+    "тест": FORM_SLUG_TEST,
+}
 # ──────────────────────────────────────────────────────────────────────────────
 # Конфиг из окружения
 # ──────────────────────────────────────────────────────────────────────────────
@@ -1033,6 +1050,17 @@ async def send_analysis_section(
     *,
     from_callback: bool = False,
 ) -> None:
+<<<<<<< HEAD
+    user_row = user or await get_user_with_id(message.from_user.id)
+    if not user_row:
+        user_row = await ensure_user(message.from_user)
+
+    analysis_text = await get_content(
+        "menu.analysis",
+        "Персональный разбор.\n\n",
+        "Заполни форму → мы назначим время.\n\n",
+        "https://forms.example.com/analysis",
+=======
     default_url = "https://forms.example.com/analysis"
     template = await get_content(
         "menu.analysis",
@@ -1044,11 +1072,23 @@ async def send_analysis_section(
         template,
         analysis_url=default_url,
         ANALYSIS_URL=default_url,
+>>>>>>> main
     )
+
+    if user_row:
+        try:
+            await mark_form_started(user_row["id"], FORM_SLUG_ANALYSIS)
+        except Exception as e:
+            logger.warning(
+                "form_session: mark start failed user_id=%s slug=%s: %s",
+                user_row.get("id"),
+                FORM_SLUG_ANALYSIS,
+                e,
+            )
 
     await answer_with_main_menu(
         message,
-        user,
+        user_row,
         is_admin,
         analysis_text,
         section="learning",
@@ -1069,10 +1109,21 @@ async def send_test_section(
     *,
     from_callback: bool = False,
 ) -> None:
+<<<<<<< HEAD
+    user_row = user or await get_user_with_id(message.from_user.id)
+    if not user_row:
+        user_row = await ensure_user(message.from_user)
+
+    test_text = await get_content(
+        "menu.test",
+        "Тест: определение уровня.\n\n",
+        "Ссылка: https://forms.example.com/test\n\n",
+=======
     template = await get_content(
         "menu.test",
         "Тест: определение уровня.\n\n",
         "Пройди тест и получи анализ: {test_url}\n\n",
+>>>>>>> main
         "После теста ты получишь анализ, рекомендации и сможешь записаться на разбор.",
     )
     default_slug = resolve_form_slug(TEST_FORM_URL, "test")
@@ -1084,9 +1135,20 @@ async def send_test_section(
         TEST_SLUG=default_slug or "",
     )
 
+    if user_row:
+        try:
+            await mark_form_started(user_row["id"], FORM_SLUG_TEST)
+        except Exception as e:
+            logger.warning(
+                "form_session: mark start failed user_id=%s slug=%s: %s",
+                user_row.get("id"),
+                FORM_SLUG_TEST,
+                e,
+            )
+
     await answer_with_main_menu(
         message,
-        user,
+        user_row,
         is_admin,
         test_text,
         section="learning",
@@ -1741,6 +1803,84 @@ async def save_lesson_feedback(user_id: int, lesson_num: int, feedback_type: str
         user_id, lesson_num, feedback_type, feedback_text
     )
     logger.info("feedback saved: user_id=%s lesson=%s type=%s", user_id, lesson_num, feedback_type)
+
+
+def resolve_form_slug(raw: str | None) -> Optional[str]:
+    if not raw:
+        return None
+    slug = raw.strip().lower().replace("-", "_")
+    slug = re.sub(r"\s+", "_", slug)
+    return FORM_ALIASES.get(slug, slug if slug in FORM_LABELS else None)
+
+
+async def mark_form_started(user_id: int, form_slug: str) -> None:
+    slug = resolve_form_slug(form_slug)
+    if not slug:
+        return
+
+    await execute(
+        """
+        INSERT INTO form_sessions (user_id, form_slug, started_at, completed_at, last_reminder_at, reminder_count)
+        VALUES ($1, $2, NOW(), NULL, NULL, 0)
+        ON CONFLICT (user_id, form_slug) DO UPDATE
+        SET started_at = CASE
+                WHEN form_sessions.completed_at IS NOT NULL THEN EXCLUDED.started_at
+                ELSE form_sessions.started_at
+            END,
+            completed_at = NULL,
+            last_reminder_at = CASE
+                WHEN form_sessions.completed_at IS NOT NULL THEN NULL
+                ELSE form_sessions.last_reminder_at
+            END,
+            reminder_count = CASE
+                WHEN form_sessions.completed_at IS NOT NULL THEN 0
+                ELSE form_sessions.reminder_count
+            END
+        """,
+        user_id,
+        slug,
+    )
+    logger.info("form_session: started user_id=%s slug=%s", user_id, slug)
+
+
+async def mark_form_completed(user_id: int, form_slug: str) -> tuple[Optional[dict], bool]:
+    slug = resolve_form_slug(form_slug)
+    if not slug:
+        return None, False
+
+    existing = await fetchrow(
+        "SELECT * FROM form_sessions WHERE user_id=$1 AND form_slug=$2",
+        user_id,
+        slug,
+    )
+    if existing and existing.get("completed_at"):
+        return existing, False
+
+    if existing:
+        row = await fetchrow(
+            """
+            UPDATE form_sessions
+            SET completed_at = NOW(),
+                last_reminder_at = NULL
+            WHERE id = $1
+            RETURNING *
+            """,
+            existing["id"],
+        )
+        logger.info("form_session: completed user_id=%s slug=%s (existing)", user_id, slug)
+        return row, True
+
+    row = await fetchrow(
+        """
+        INSERT INTO form_sessions (user_id, form_slug, started_at, completed_at, last_reminder_at, reminder_count)
+        VALUES ($1, $2, NOW(), NOW(), NULL, 0)
+        RETURNING *
+        """,
+        user_id,
+        slug,
+    )
+    logger.info("form_session: completed user_id=%s slug=%s (new)", user_id, slug)
+    return row, True
 async def get_user_with_id(tg_user_id: int) -> Optional[dict]:
     return await fetchrow("SELECT * FROM users WHERE tg_user_id=$1", tg_user_id)
 async def next_lesson_to_deliver(user_id: int) -> int:
@@ -2195,6 +2335,86 @@ async def cmd_support(message: types.Message, state: FSMContext):
         reply_markup=await build_menu_keyboard(user=user, is_admin=is_admin, section="root"),
     )
 
+@router.message(Command("form_done"))
+async def cmd_form_done(message: types.Message, command: CommandObject, state: FSMContext):
+    await _reset_state_if_needed(state)
+
+    is_admin = is_admin_id(message.from_user.id)
+    raw_arg = (command.args or "").strip() if command else ""
+    slug = resolve_form_slug(raw_arg) if raw_arg else FORM_SLUG_ANALYSIS
+
+    user_row = await get_user_with_id(message.from_user.id)
+    if not user_row:
+        user_row = await ensure_user(message.from_user)
+
+    keyboard = await build_menu_keyboard(user=user_row, is_admin=is_admin, section="root")
+
+    if raw_arg and not slug:
+        await message.answer(
+            "Не удалось определить, какую анкету завершить. Используй варианты: разбор или тест.",
+            reply_markup=keyboard,
+        )
+        return
+
+    if not slug:
+        await message.answer("Не удалось определить тип анкеты. Попробуй ещё раз позже.", reply_markup=keyboard)
+        return
+
+    try:
+        _, newly_completed = await mark_form_completed(user_row["id"], slug)
+    except Exception:
+        logger.exception("form_session: mark completion failed user_id=%s slug=%s", user_row["id"], slug)
+        await message.answer("Не получилось обновить статус анкеты. Попробуй позже или напиши в поддержку.", reply_markup=keyboard)
+        return
+
+    label = FORM_LABELS.get(slug, slug)
+    response_lines: list[str] = []
+
+    if newly_completed:
+        response_lines.append(f"Спасибо! Анкета «{label}» отмечена как завершённая.")
+
+        invite_text = ""
+        gen_invite_link = None
+        notify_admins = None
+        try:
+            from app import gen_invite_link as _gen_invite_link, notify_admins as _notify_admins
+
+            gen_invite_link = _gen_invite_link
+            notify_admins = _notify_admins
+        except Exception:
+            gen_invite_link = None
+            notify_admins = None
+
+        if gen_invite_link:
+            try:
+                invite_payload = await gen_invite_link()
+                if invite_payload:
+                    if invite_payload.startswith("http"):
+                        invite_text = f"Твоя персональная ссылка: {invite_payload}"
+                    else:
+                        invite_text = invite_payload
+            except Exception as exc:
+                logger.warning("form_session: gen_invite_link failed user_id=%s slug=%s: %s", user_row["id"], slug, exc)
+
+        if invite_text:
+            response_lines.append(invite_text)
+        else:
+            response_lines.append("Мы передали заявку администраторам и свяжемся с тобой в ближайшее время.")
+            if notify_admins:
+                username = message.from_user.username
+                display = f"@{username}" if username else message.from_user.full_name or message.from_user.id
+                try:
+                    await notify_admins(
+                        f"✅ Завершена анкета «{label}»\nПользователь: {display} (tg_id={message.from_user.id})"
+                    )
+                except Exception as exc:
+                    logger.warning("form_session: notify_admins failed user_id=%s slug=%s: %s", user_row["id"], slug, exc)
+    else:
+        response_lines.append(f"Анкета «{label}» уже отмечена как завершённая.")
+
+    await message.answer("\n\n".join(response_lines), reply_markup=keyboard)
+
+
 @router.message(Command("id"))
 async def cmd_id(message: types.Message, state: FSMContext):
     await _reset_state_if_needed(state)
@@ -2298,18 +2518,6 @@ async def cmd_form_done(
 # ──────────────────────────────────────────────────────────────────────────────
 # Поддержка и помощь
 # ──────────────────────────────────────────────────────────────────────────────
-@router.message(Command("support"))
-async def cmd_support(message: types.Message, state: FSMContext):
-    await _reset_state_if_needed(state)
-
-    is_admin = str(message.from_user.id) in ADMIN_IDS
-    user = await get_user_with_id(message.from_user.id)
-    await message.answer(
-        f"Поддержка.\n\n"
-        f"Если есть вопросы или сложности — пиши сюда: {SUPPORT_CONTACT}. Мы отвечаем лично и максимально быстро.",
-        reply_markup=await build_menu_keyboard(user=user, is_admin=is_admin, section="root"),
-    )
-
 @router.message(Command("id"))
 async def cmd_id(message: types.Message, state: FSMContext):
     await _reset_state_if_needed(state)
