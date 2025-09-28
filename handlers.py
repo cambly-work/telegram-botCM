@@ -97,6 +97,10 @@ logger = logging.getLogger("handlers")
 # ──────────────────────────────────────────────────────────────────────────────
 BOT_TIMEZONE = os.getenv("BOT_TIMEZONE", "Europe/Moscow")
 WELCOME_POST_URL = os.getenv("WELCOME_POST_URL", "https://t.me/")
+TEST_FORM_URL = os.getenv(
+    "TEST_FORM_URL",
+    "https://forms.gle/iNcUGfiLGNkLW1dc8",
+)
 SUPPORT_CONTACT = os.getenv("SUPPORT_CONTACT", "@Tokyo_tokyo")
 AT_PRODUCT_ID_CLUB = os.getenv("AT_PRODUCT_ID_CLUB", "")
 CLUB_CHAT_ID = os.getenv("CLUB_CHAT_ID", "")  # ID приватной группы/канала (опц.)
@@ -957,11 +961,16 @@ async def send_test_section(
     *,
     from_callback: bool = False,
 ) -> None:
-    test_text = await get_content(
+    template = await get_content(
         "menu.test",
         "Тест: определение уровня.\n\n"
-        "Ссылка: https://forms.example.com/test\n\n"
+        "Пройди тест и получи анализ: {test_url}\n\n"
         "После теста ты получишь анализ, рекомендации и сможешь записаться на разбор.",
+    )
+    test_text = render_content(
+        template,
+        test_url=TEST_FORM_URL,
+        TEST_FORM_URL=TEST_FORM_URL,
     )
 
     await answer_with_main_menu(
