@@ -16,7 +16,7 @@ from aiogram.fsm.state import StatesGroup, State
 from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.utils.chat_action import ChatActionSender
 from aiogram.exceptions import TelegramRetryAfter
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, urlparse
 from aiogram.dispatcher.middlewares.base import BaseMiddleware
 from db import fetchrow, fetch, execute
 from keyboards import (
@@ -180,6 +180,61 @@ _SHORTCUT_UNDERLINE_RE = re.compile(r"(?<!\\)__(.+?)__(?!_)", re.S)
 _SHORTCUT_ITALIC_RE = re.compile(r"(?<!\\)(?<!_)_(?!_)(.+?)(?<!_)_(?!_)", re.S)
 _SHORTCUT_ESCAPE_RE = re.compile(r"\\([*_`\[\]()])")
 
+_URL_RE = re.compile(r"https?://[^\s<>\]\)]+", re.IGNORECASE)
+_FORM_SLUG_SANITIZE_RE = re.compile(r"[^a-z0-9_-]+", re.IGNORECASE)
+
+
+def _sanitize_form_slug(candidate: str) -> str:
+    cleaned = (candidate or "").strip()
+    if not cleaned:
+        return ""
+    cleaned = cleaned.replace("=", " ").replace("/", " ").replace("\u202f", " ")
+    cleaned = cleaned.lower().replace(" ", "-")
+    cleaned = _FORM_SLUG_SANITIZE_RE.sub("-", cleaned)
+    return cleaned.strip("-")[:64]
+
+
+def extract_first_url(text: str) -> Optional[str]:
+    if not text:
+        return None
+    match = _URL_RE.search(text)
+    if not match:
+        return None
+    url = match.group(0).rstrip("),.;]")
+    return url
+
+
+def resolve_form_slug(raw_value: Optional[str], fallback: Optional[str] = None) -> Optional[str]:
+    candidates: list[str] = []
+    raw = (raw_value or "").strip()
+    if raw:
+        if raw.startswith(("http://", "https://")):
+            try:
+                parsed = urlparse(raw)
+                query = parse_qs(parsed.query or "")
+                for key in ("form_slug", "slug", "form", "f"):
+                    values = query.get(key)
+                    if values:
+                        candidates.extend(values)
+                if parsed.fragment:
+                    candidates.append(parsed.fragment)
+            except Exception:
+                candidates.append(raw)
+        else:
+            if "=" in raw:
+                _, _, value = raw.partition("=")
+                if value:
+                    candidates.append(value)
+            candidates.append(raw)
+    if fallback:
+        candidates.append(fallback)
+
+    for candidate in candidates:
+        slug = _sanitize_form_slug(candidate)
+        if slug:
+            return slug
+    return None
+
 
 def apply_formatting_shortcuts(text: str) -> str:
     """Преобразует простые маркдауно-подобные сокращения в HTML-теги."""
@@ -277,6 +332,47 @@ async def log_admin_action(admin_id: int, action: str, payload: dict = None):
         logger.info(f"Admin action logged: {action} by {admin_id}")
     except Exception as e:
         logger.error(f"Failed to log admin action: {e}")
+
+
+async def mark_form_started(user_id: int, slug: Optional[str]) -> None:
+    normalized = resolve_form_slug(slug)
+    if not user_id or not normalized:
+        return
+    try:
+        await execute(
+            """
+            INSERT INTO form_sessions (user_id, slug, started_at, created_at, updated_at)
+            VALUES ($1, $2, NOW(), NOW(), NOW())
+            ON CONFLICT (user_id, slug) DO UPDATE
+            SET started_at = COALESCE(form_sessions.started_at, EXCLUDED.started_at),
+                updated_at = NOW()
+            """,
+            user_id,
+            normalized,
+        )
+    except Exception as e:
+        logger.warning("mark_form_started failed: user_id=%s slug=%s err=%s", user_id, normalized, e)
+
+
+async def mark_form_completed(user_id: int, slug: Optional[str]) -> None:
+    normalized = resolve_form_slug(slug)
+    if not user_id or not normalized:
+        return
+    try:
+        await execute(
+            """
+            INSERT INTO form_sessions (user_id, slug, started_at, completed_at, created_at, updated_at)
+            VALUES ($1, $2, NOW(), NOW(), NOW(), NOW())
+            ON CONFLICT (user_id, slug) DO UPDATE
+            SET completed_at = NOW(),
+                started_at = COALESCE(form_sessions.started_at, EXCLUDED.started_at),
+                updated_at = NOW()
+            """,
+            user_id,
+            normalized,
+        )
+    except Exception as e:
+        logger.warning("mark_form_completed failed: user_id=%s slug=%s err=%s", user_id, normalized, e)
 # ──────────────────────────────────────────────────────────────────────────────
 # Контент: content.yaml + БД content (fallback-логика)
 # ──────────────────────────────────────────────────────────────────────────────
@@ -937,11 +1033,17 @@ async def send_analysis_section(
     *,
     from_callback: bool = False,
 ) -> None:
-    analysis_text = await get_content(
+    default_url = "https://forms.example.com/analysis"
+    template = await get_content(
         "menu.analysis",
-        "Персональный разбор.\n\n"
-        "Заполни форму → мы назначим время.\n\n"
-        "https://forms.example.com/analysis",
+        "Персональный разбор.\n\n",
+        "Заполни форму → мы назначим время.\n\n",
+        "{analysis_url}",
+    )
+    analysis_text = render_content(
+        template,
+        analysis_url=default_url,
+        ANALYSIS_URL=default_url,
     )
 
     await answer_with_main_menu(
@@ -953,6 +1055,12 @@ async def send_analysis_section(
         from_callback=from_callback,
     )
 
+    if user:
+        form_url = extract_first_url(analysis_text) or default_url
+        slug = resolve_form_slug(form_url, "analysis")
+        if slug:
+            await mark_form_started(user.get("id"), slug)
+
 
 async def send_test_section(
     message: types.Message,
@@ -963,14 +1071,17 @@ async def send_test_section(
 ) -> None:
     template = await get_content(
         "menu.test",
-        "Тест: определение уровня.\n\n"
-        "Пройди тест и получи анализ: {test_url}\n\n"
+        "Тест: определение уровня.\n\n",
+        "Пройди тест и получи анализ: {test_url}\n\n",
         "После теста ты получишь анализ, рекомендации и сможешь записаться на разбор.",
     )
+    default_slug = resolve_form_slug(TEST_FORM_URL, "test")
     test_text = render_content(
         template,
         test_url=TEST_FORM_URL,
         TEST_FORM_URL=TEST_FORM_URL,
+        test_slug=default_slug or "",
+        TEST_SLUG=default_slug or "",
     )
 
     await answer_with_main_menu(
@@ -981,6 +1092,12 @@ async def send_test_section(
         section="learning",
         from_callback=from_callback,
     )
+
+    if user:
+        form_url = extract_first_url(test_text) or TEST_FORM_URL
+        slug = resolve_form_slug(form_url, default_slug or "test")
+        if slug:
+            await mark_form_started(user.get("id"), slug)
 
 
 async def send_support_section(
@@ -1217,18 +1334,24 @@ async def send_magnetism_window_section(
     *,
     from_callback: bool = False,
 ) -> None:
-    form_url = "https://forms.gle/iNcUGfiLGNkLW1dc8"
+    default_form_url = "https://forms.gle/iNcUGfiLGNkLW1dc8"
     template = await get_content(
         "menu.learning.magnetism_window",
-        "Окно в Магнетизм.\n\n"
-        "Заполни форму и получи доступ к следующему шагу.\n\n"
+        "Окно в Магнетизм.\n\n",
+        "Заполни форму и получи доступ к следующему шагу.\n\n",
         "{form_url}",
     )
+    default_slug = resolve_form_slug(default_form_url, "magnetism-window")
     message_text = render_content(
         template,
-        form_url=form_url,
-        FORM_URL=form_url,
+        form_url=default_form_url,
+        FORM_URL=default_form_url,
+        form_slug=default_slug or "",
+        FORM_SLUG=default_slug or "",
     )
+
+    displayed_form_url = extract_first_url(message_text) or default_form_url
+    slug = resolve_form_slug(displayed_form_url, default_slug or "magnetism-window")
 
     await answer_with_main_menu(
         message,
@@ -1238,6 +1361,9 @@ async def send_magnetism_window_section(
         section="learning",
         from_callback=from_callback,
     )
+
+    if slug:
+        await mark_form_started(user.get("id"), slug)
 
 
 async def send_pay_section(
@@ -2116,6 +2242,58 @@ async def cmd_help(message: types.Message, state: FSMContext):
         "Правила клуба\n"
         "Тест и разбор",
         reply_markup=await build_menu_keyboard(user=user, is_admin=is_admin, section="root"),
+    )
+
+
+@router.message(Command("form_done"))
+async def cmd_form_done(
+    message: types.Message, command: CommandObject, state: FSMContext
+):
+    await _reset_state_if_needed(state)
+
+    user = await get_user_with_id(message.from_user.id)
+    if not user:
+        await message.answer(
+            "Перезапусти /start, чтобы зарегистрироваться и продолжить работу с формами."
+        )
+        return
+
+    raw_slug = command.args if command else None
+    slug = resolve_form_slug(raw_slug)
+    if not slug and message.text:
+        parts = message.text.split(maxsplit=1)
+        if len(parts) > 1:
+            slug = resolve_form_slug(parts[1])
+
+    if not slug:
+        await message.answer(
+            "Укажи идентификатор формы, например: /form_done magnetism-window."
+        )
+        return
+
+    await mark_form_completed(user.get("id"), slug)
+
+    confirmation_template = await get_content(f"forms.completed.{slug}", "")
+    if not confirmation_template:
+        confirmation_template = await get_content(
+            "forms.completed",
+            "Спасибо! Мы отметили форму «{form_slug}» заполненной.",
+        )
+
+    confirmation_text = render_content(
+        confirmation_template,
+        slug=slug,
+        form_slug=slug,
+        FORM_SLUG=slug,
+    )
+
+    is_admin = str(message.from_user.id) in ADMIN_IDS
+    await answer_with_main_menu(
+        message,
+        user,
+        is_admin,
+        confirmation_text,
+        section="learning",
     )
 # ──────────────────────────────────────────────────────────────────────────────
 # Поддержка и помощь

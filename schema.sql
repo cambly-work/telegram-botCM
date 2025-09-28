@@ -96,6 +96,28 @@ CREATE TABLE IF NOT EXISTS lesson_feedback (
 );
 CREATE INDEX IF NOT EXISTS idx_feedback_user ON lesson_feedback(user_id);
 
+-- FORM_SESSIONS
+CREATE TABLE IF NOT EXISTS form_sessions (
+  id            SERIAL PRIMARY KEY,
+  user_id       INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  slug          TEXT NOT NULL,
+  started_at    TIMESTAMPTZ,
+  completed_at  TIMESTAMPTZ,
+  created_at    TIMESTAMPTZ DEFAULT NOW(),
+  updated_at    TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS ux_form_sessions_user_slug
+  ON form_sessions(user_id, slug);
+CREATE INDEX IF NOT EXISTS idx_form_sessions_completed
+  ON form_sessions(completed_at);
+
+ALTER TABLE form_sessions
+  ADD COLUMN IF NOT EXISTS started_at   TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS created_at   TIMESTAMPTZ DEFAULT NOW(),
+  ADD COLUMN IF NOT EXISTS updated_at   TIMESTAMPTZ DEFAULT NOW();
+
 -- PAYMENTS (опционально, совместимость)
 CREATE TABLE IF NOT EXISTS payments (
   id            SERIAL PRIMARY KEY,
