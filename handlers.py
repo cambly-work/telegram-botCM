@@ -1201,54 +1201,31 @@ async def send_schedule_section(
     )
 
 
-async def send_progress_section(
+async def send_magnetism_window_section(
     message: types.Message,
     user: dict,
     is_admin: bool,
     *,
     from_callback: bool = False,
 ) -> None:
-    rows = await fetch(
-        "SELECT lesson_num, hw_status FROM funnel_progress WHERE user_id=$1 ORDER BY lesson_num",
-        user["id"],
+    form_url = "https://forms.gle/iNcUGfiLGNkLW1dc8"
+    template = await get_content(
+        "menu.learning.magnetism_window",
+        "Окно в Магнетизм.\n\n"
+        "Заполни форму и получи доступ к следующему шагу.\n\n"
+        "{form_url}",
     )
-
-    status_map = {r["lesson_num"]: r["hw_status"] for r in rows} if rows else {}
-
-    lesson_titles = {
-        1: "Внимание",
-        2: "Мысли",
-        3: "Слова",
-        4: "Эмоции",
-    }
-
-    status_texts = {
-        "submitted": "Выполнено",
-        "skipped": "Пропущено",
-        "pending": "В процессе",
-    }
-
-    progress_lines = ["Мой прогресс.\n"]
-    for i in range(1, 5):
-        st = status_map.get(i, "—")
-        human_status = status_texts.get(st, "Не начато")
-        progress_lines.append(f"Урок {i}: {lesson_titles.get(i, f'Урок {i}')} — {human_status}")
-
-    completed = sum(1 for st in status_map.values() if st == "submitted")
-    if completed == 0:
-        progress_lines.append("\nНачни с первого урока.")
-    elif completed < 4:
-        progress_lines.append(f"\nПройдено {completed} из 4 уроков.")
-    else:
-        progress_lines.append("\nВсе уроки завершены. Пора на следующий уровень.")
-
-    progress_text = "\n".join(progress_lines)
+    message_text = render_content(
+        template,
+        form_url=form_url,
+        FORM_URL=form_url,
+    )
 
     await answer_with_main_menu(
         message,
         user,
         is_admin,
-        progress_text,
+        message_text,
         section="learning",
         from_callback=from_callback,
     )
@@ -2273,15 +2250,15 @@ async def menu_lessons(message: types.Message, state: FSMContext):
     await send_funnel_section(message, user, is_admin)
 
 
-@router.message(F.text == "Мой прогресс")
-async def menu_progress(message: types.Message, state: FSMContext):
+@router.message(F.text == "Окно в Магнетизм")
+async def menu_magnetism_window(message: types.Message, state: FSMContext):
     await _reset_state_if_needed(state)
     user = await get_user_with_id(message.from_user.id)
     is_admin = str(message.from_user.id) in ADMIN_IDS
     if not user:
         await message.answer("Перезапусти /start, чтобы загрузить профиль.")
         return
-    await send_progress_section(message, user, is_admin)
+    await send_magnetism_window_section(message, user, is_admin)
 
 
 @router.message(F.text == "Записаться на разбор")
