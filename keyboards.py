@@ -115,7 +115,10 @@ def info_menu_keyboard() -> ReplyKeyboardMarkup:
 
 def learning_menu_keyboard() -> ReplyKeyboardMarkup:
     rows = [
-        [KeyboardButton(text="Бесплатные уроки"), KeyboardButton(text="Мой прогресс")],
+        [
+            KeyboardButton(text="Бесплатные уроки"),
+            KeyboardButton(text="Окно в Магнетизм"),
+        ],
         [KeyboardButton(text="Записаться на разбор"), KeyboardButton(text="Пройти тест")],
         [KeyboardButton(text=BACK_TO_MAIN)],
     ]
