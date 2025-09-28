@@ -734,6 +734,23 @@ def _normalize_at_payload(data: dict) -> dict:
     }
 
 
+PAYMENT_STATUS_ALIASES = {
+    "paid": "paid",
+    "renew": "renew",
+    "refund": "refund",
+    "failed": "failed",
+}
+
+
+def _resolve_payment_status(*candidates: Optional[str]) -> str:
+    """Возвращает допустимый статус платежа на основе списка кандидатов."""
+    for raw in candidates:
+        normalized = (raw or "").strip().lower()
+        if normalized in PAYMENT_STATUS_ALIASES:
+            return PAYMENT_STATUS_ALIASES[normalized]
+    return "failed"
+
+
 async def _find_user_by_contacts(email: str, phone: str) -> Optional[dict]:
     """Поиск пользователя по email или телефону с нормализацией"""
     # Поиск по email (точное совпадение)
@@ -761,6 +778,14 @@ async def _find_user_by_contacts(email: str, phone: str) -> Optional[dict]:
 
 async def _upsert_payment(payload: dict, event: str, at_user_id: Optional[str] = None, access_until: Optional[datetime] = None):
     """Создание или обновление записи о платеже"""
+    status = _resolve_payment_status(event, payload.get("status"))
+    if status == "failed" and (event or payload.get("status")):
+        logger.warning(
+            "Нераспознанный статус платежа %s/%s для заказа %s — сохраняем как 'failed'",
+            event,
+            payload.get("status"),
+            payload.get("order_id") or "",
+        )
     try:
         await execute(
             """INSERT INTO payments(order_id, at_user_id, email, phone, product_id, status, paid_at, access_until, raw_payload, created_at)
@@ -772,13 +797,13 @@ async def _upsert_payment(payload: dict, event: str, at_user_id: Optional[str] =
             payload.get("email"),
             payload.get("phone"),
             payload.get("product_id"),
-            event,
+            status,
             access_until,
             json.dumps(payload.get("raw") or {}, ensure_ascii=False),
         )
         logger.info("Payment record upserted for order %s", payload.get("order_id"))
     except Exception as e:
-        logger.error("Не удалось записать payment (%s): %s", event, e)
+        logger.error("Не удалось записать payment (%s): %s", status, e)
         await notify_admins(f"❌ Ошибка записи платежа {payload.get('order_id')}: {e}")
 
 

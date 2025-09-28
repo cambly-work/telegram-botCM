@@ -126,7 +126,7 @@ CREATE TABLE IF NOT EXISTS payments (
   email         TEXT,
   phone         TEXT,
   product_id    TEXT,
-  status        TEXT CHECK (status IN ('paid','refund','failed')),
+  status        TEXT CHECK (status IN ('paid','renew','refund','failed')),
   paid_at       TIMESTAMPTZ,
   access_until  TIMESTAMPTZ,
   raw_payload   JSONB,
