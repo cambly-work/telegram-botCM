@@ -151,6 +151,23 @@ CREATE TABLE IF NOT EXISTS form_sessions (
   reminder_count   INT NOT NULL DEFAULT 0
 );
 
+-- Legacy compatibility: remove the old index and rename slug → form_slug when needed.
+DROP INDEX IF EXISTS ux_form_sessions_user_slug;
+
+DO $$
+BEGIN
+  IF EXISTS (
+      SELECT 1
+      FROM information_schema.columns
+      WHERE table_schema = 'public'
+        AND table_name = 'form_sessions'
+        AND column_name = 'slug'
+  ) THEN
+      EXECUTE 'ALTER TABLE form_sessions RENAME COLUMN slug TO form_slug';
+  END IF;
+END
+$$;
+
 CREATE UNIQUE INDEX IF NOT EXISTS ux_form_sessions_user_form_slug
   ON form_sessions(user_id, form_slug);
 CREATE INDEX IF NOT EXISTS idx_form_sessions_completed
