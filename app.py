@@ -18,6 +18,8 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, validator
 from dotenv import load_dotenv
 
+load_dotenv()
+
 from aiogram import Bot, Dispatcher, types
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
@@ -26,7 +28,6 @@ from settings import ADMIN_IDS
 # ──────────────────────────────────────────────────────────────────────────────
 # Конфиг/окружение
 # ──────────────────────────────────────────────────────────────────────────────
-load_dotenv()
 
 
 def _env_flag(name: str, default: str = "0") -> bool:
