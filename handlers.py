@@ -7,7 +7,7 @@ import yaml
 import logging
 import time
 import html
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, date, timedelta, timezone
 from typing import Optional, Iterable, Dict, List, Callable, Awaitable, Any
 from aiogram import Router, F, types
 from aiogram.enums import ParseMode
@@ -127,6 +127,9 @@ from keyboards import (
 # Логгер
 # ──────────────────────────────────────────────────────────────────────────────
 logger = logging.getLogger("handlers")
+
+
+_notify_admins_cached: Optional[Callable[[str], Awaitable[None]]] = None
 
 
 FORM_SLUG_ANALYSIS = "analysis"
@@ -392,6 +395,102 @@ def render_content(text: str, **placeholders: str) -> str:
     return rendered
 
 
+_MONTHS_RU: dict[str, int] = {
+    "январь": 1,
+    "января": 1,
+    "янв": 1,
+    "февраль": 2,
+    "февраля": 2,
+    "фев": 2,
+    "март": 3,
+    "марта": 3,
+    "мар": 3,
+    "апрель": 4,
+    "апреля": 4,
+    "апр": 4,
+    "май": 5,
+    "мая": 5,
+    "июнь": 6,
+    "июня": 6,
+    "июн": 6,
+    "июль": 7,
+    "июля": 7,
+    "июл": 7,
+    "август": 8,
+    "августа": 8,
+    "авг": 8,
+    "сен": 9,
+    "сент": 9,
+    "сентябрь": 9,
+    "сентября": 9,
+    "октябрь": 10,
+    "октября": 10,
+    "окт": 10,
+    "ноябрь": 11,
+    "ноября": 11,
+    "ноя": 11,
+    "декабрь": 12,
+    "декабря": 12,
+    "дек": 12,
+}
+
+
+def _normalize_year(value: str) -> int:
+    year = int(value)
+    if len(value) >= 4:
+        return year
+    current_year = datetime.now().year % 100
+    if year <= current_year:
+        return 2000 + year
+    return 1900 + year
+
+
+def _safe_birthdate(year: int, month: int, day: int) -> Optional[date]:
+    try:
+        parsed = date(year, month, day)
+    except ValueError:
+        return None
+    if parsed > date.today():
+        return None
+    return parsed
+
+
+def parse_birthdate(text: str | None) -> Optional[date]:
+    """Парсит дату рождения в распространённых форматах."""
+    if not text:
+        return None
+    cleaned = text.strip().lower()
+    if not cleaned:
+        return None
+
+    cleaned = cleaned.replace("г.", "").replace("г", "")
+    cleaned = cleaned.replace(",", " ")
+    cleaned = re.sub(r"\s+", " ", cleaned)
+
+    match = re.match(r"^(\d{1,2})\s+([а-яё]+)\s+(\d{2,4})$", cleaned)
+    if match:
+        day = int(match.group(1))
+        month_name = match.group(2)
+        year_value = match.group(3)
+        month = _MONTHS_RU.get(month_name)
+        if month:
+            return _safe_birthdate(_normalize_year(year_value), month, day)
+
+    digits = re.findall(r"\d+", cleaned)
+    if len(digits) == 3:
+        if len(digits[0]) == 4:
+            year_val, month_val, day_val = digits
+        else:
+            day_val, month_val, year_val = digits
+        return _safe_birthdate(
+            _normalize_year(year_val),
+            int(month_val),
+            int(day_val),
+        )
+
+    return None
+
+
 def _preview_text_for_admin(text: str, limit: int = 1500) -> str:
     """Формирует короткий превью-текст для сообщений админки."""
     if not text:
@@ -424,38 +523,109 @@ async def mark_form_started(user_id: int, slug: Optional[str]) -> None:
     try:
         await execute(
             """
-            INSERT INTO form_sessions (user_id, slug, started_at, created_at, updated_at)
-            VALUES ($1, $2, NOW(), NOW(), NOW())
-            ON CONFLICT (user_id, slug) DO UPDATE
-            SET started_at = COALESCE(form_sessions.started_at, EXCLUDED.started_at),
-                updated_at = NOW()
+            INSERT INTO form_sessions (user_id, form_slug, started_at)
+            VALUES ($1, $2, NOW())
+            ON CONFLICT (user_id, form_slug) DO UPDATE
+            SET started_at = COALESCE(form_sessions.started_at, EXCLUDED.started_at)
             """,
             user_id,
             normalized,
         )
     except Exception as e:
-        logger.warning("mark_form_started failed: user_id=%s slug=%s err=%s", user_id, normalized, e)
+        logger.warning(
+            "mark_form_started failed: user_id=%s slug=%s err=%s",
+            user_id,
+            normalized,
+            e,
+        )
 
 
-async def mark_form_completed(user_id: int, slug: Optional[str]) -> None:
+async def mark_form_completed(user_id: int, slug: Optional[str]) -> tuple[Optional[dict], bool]:
     normalized = resolve_form_slug(slug)
     if not user_id or not normalized:
-        return
+        return None, False
+
     try:
-        await execute(
-            """
-            INSERT INTO form_sessions (user_id, slug, started_at, completed_at, created_at, updated_at)
-            VALUES ($1, $2, NOW(), NOW(), NOW(), NOW())
-            ON CONFLICT (user_id, slug) DO UPDATE
-            SET completed_at = NOW(),
-                started_at = COALESCE(form_sessions.started_at, EXCLUDED.started_at),
-                updated_at = NOW()
-            """,
+        existing = await fetchrow(
+            "SELECT * FROM form_sessions WHERE user_id=$1 AND form_slug=$2",
             user_id,
             normalized,
         )
+        row = await fetchrow(
+            """
+            INSERT INTO form_sessions (user_id, form_slug, started_at, completed_at, last_reminder_at, reminder_count)
+            VALUES ($1, $2, COALESCE($3, NOW()), NOW(), NULL, 0)
+            ON CONFLICT (user_id, form_slug) DO UPDATE
+            SET completed_at = NOW(),
+                started_at = COALESCE(form_sessions.started_at, EXCLUDED.started_at),
+                last_reminder_at = NULL,
+                reminder_count = 0
+            RETURNING *
+            """,
+            user_id,
+            normalized,
+            existing.get("started_at") if existing else None,
+        )
+        return row, existing is None
     except Exception as e:
-        logger.warning("mark_form_completed failed: user_id=%s slug=%s err=%s", user_id, normalized, e)
+        logger.warning(
+            "mark_form_completed failed: user_id=%s slug=%s err=%s",
+            user_id,
+            normalized,
+            e,
+        )
+        return None, False
+
+
+async def upsert_test_request(
+    *,
+    tg_user_id: int,
+    user_id: Optional[int],
+    birthdate: date,
+    preferred_name: Optional[str],
+) -> Optional[dict]:
+    try:
+        return await fetchrow(
+            """
+            INSERT INTO test_requests (tg_user_id, user_id, birthdate, preferred_name, status)
+            VALUES ($1, $2, $3, $4, 'waiting')
+            ON CONFLICT (tg_user_id) DO UPDATE
+            SET user_id = COALESCE(EXCLUDED.user_id, test_requests.user_id),
+                birthdate = EXCLUDED.birthdate,
+                preferred_name = EXCLUDED.preferred_name,
+                status = 'waiting',
+                updated_at = NOW()
+            RETURNING *
+            """,
+            tg_user_id,
+            user_id,
+            birthdate,
+            preferred_name,
+        )
+    except Exception as e:
+        logger.warning(
+            "test_request upsert failed: tg_user_id=%s err=%s",
+            tg_user_id,
+            e,
+        )
+        return None
+
+
+def _get_notify_admins() -> Optional[Callable[[str], Awaitable[None]]]:
+    global _notify_admins_cached
+    if _notify_admins_cached is not None:
+        return _notify_admins_cached
+    try:
+        from app import notify_admins as _notify_admins  # type: ignore
+    except Exception:
+        _notify_admins_cached = None
+        return None
+    _notify_admins_cached = _notify_admins
+    return _notify_admins_cached
+
+
+def _format_birthdate(birthdate: date) -> str:
+    return birthdate.strftime("%d.%m.%Y")
 # ──────────────────────────────────────────────────────────────────────────────
 # Контент: content.yaml + БД content (fallback-логика)
 # ──────────────────────────────────────────────────────────────────────────────
@@ -705,6 +875,11 @@ class AdminPaymentsStates(StatesGroup):
     waiting_access_user = State()
     waiting_revoke_user = State()
     waiting_payment_review = State()
+
+
+class TestStates(StatesGroup):
+    waiting_birthdate = State()
+    waiting_name = State()
 # ──────────────────────────────────────────────────────────────────────────────
 # Улучшенные клавиатуры
 # ──────────────────────────────────────────────────────────────────────────────
@@ -1937,7 +2112,8 @@ async def send_test_section(
     is_admin: bool,
     *,
     from_callback: bool = False,
-) -> None:
+    only_text: bool = False,
+) -> tuple[str, Optional[str]] | None:
     user_row = user or await get_user_with_id(message.from_user.id)
     if not user_row:
         user_row = await ensure_user(message.from_user)
@@ -1959,19 +2135,24 @@ async def send_test_section(
         TEST_SLUG=default_slug or "",
     )
 
+    slug = resolve_form_slug(TEST_FORM_URL, default_slug or FORM_SLUG_TEST) or FORM_SLUG_TEST
     if user_row:
         form_url = extract_first_url(test_text) or TEST_FORM_URL
-        slug = resolve_form_slug(form_url, default_slug or FORM_SLUG_TEST)
-        if slug:
-            try:
-                await mark_form_started(user_row["id"], slug)
-            except Exception as e:
-                logger.warning(
-                    "form_session: mark start failed user_id=%s slug=%s: %s",
-                    user_row.get("id"),
-                    slug,
-                    e,
-                )
+        resolved = resolve_form_slug(form_url, slug)
+        if resolved:
+            slug = resolved
+        try:
+            await mark_form_started(user_row["id"], slug)
+        except Exception as e:
+            logger.warning(
+                "form_session: mark start failed user_id=%s slug=%s: %s",
+                user_row.get("id"),
+                slug,
+                e,
+            )
+
+    if only_text:
+        return test_text, slug
 
     await answer_with_main_menu(
         message,
@@ -1981,6 +2162,7 @@ async def send_test_section(
         section="learning",
         from_callback=from_callback,
     )
+    return test_text, slug
 
 
 async def send_support_section(
@@ -3580,7 +3762,176 @@ async def menu_analysis(message: types.Message, state: FSMContext):
 async def menu_test(message: types.Message, state: FSMContext):
     await _reset_state_if_needed(state)
     user, is_admin = await _get_user_and_admin(message)
-    await send_test_section(message, user, is_admin)
+    if not user:
+        user = await ensure_user(message.from_user)
+
+    result = await send_test_section(message, user, is_admin, only_text=True)
+    if result:
+        intro_text, slug = result
+    else:
+        intro_text, slug = "", FORM_SLUG_TEST
+
+    await state.set_state(TestStates.waiting_birthdate)
+    await state.update_data(
+        test_form_slug=slug,
+        test_user_id=(user or {}).get("id"),
+    )
+
+    intro_template = await get_content("menu.test_intro", intro_text)
+    intro_message = render_content(
+        intro_template,
+        test_url=TEST_FORM_URL,
+        TEST_FORM_URL=TEST_FORM_URL,
+    )
+
+    birth_prompt_template = await get_content(
+        "menu.test_birthdate_prompt",
+        (
+            "Чтобы записать тебя на тест, напиши дату рождения.\n"
+            "Подойдут варианты: 24.08.1992 или 24 августа 1992.\n\n"
+            "Для отмены нажми «Отмена»."
+        ),
+    )
+    birth_prompt = render_content(
+        birth_prompt_template,
+        test_url=TEST_FORM_URL,
+        TEST_FORM_URL=TEST_FORM_URL,
+    )
+
+    parts = [intro_message.strip(), birth_prompt.strip()]
+    message_text = "\n\n".join([part for part in parts if part])
+    await message.answer(message_text, reply_markup=cancel_keyboard())
+
+
+@router.message(TestStates.waiting_birthdate)
+async def test_collect_birthdate(message: types.Message, state: FSMContext):
+    birthdate = parse_birthdate(message.text)
+    if not birthdate:
+        invalid_template = await get_content(
+            "menu.test_birthdate_invalid",
+            (
+                "Не получилось распознать дату. Попробуй формат 24.08.1992 или 24 августа 1992.\n\n"
+                "Если передумала — нажми «Отмена»."
+            ),
+        )
+        response = render_content(
+            invalid_template,
+            raw=message.text or "",
+            RAW=message.text or "",
+        )
+        await message.answer(response, reply_markup=cancel_keyboard())
+        return
+
+    await state.update_data(test_birthdate=birthdate.isoformat())
+    await state.set_state(TestStates.waiting_name)
+
+    name_prompt_template = await get_content(
+        "menu.test_name_prompt",
+        (
+            "Супер! Как к тебе обращаться?\n\n"
+            "Можно написать короткое имя или ник."
+        ),
+    )
+    formatted_birthdate = _format_birthdate(birthdate)
+    name_prompt = render_content(
+        name_prompt_template,
+        birthdate=formatted_birthdate,
+        BIRTHDATE=formatted_birthdate,
+    )
+    await message.answer(name_prompt, reply_markup=cancel_keyboard())
+
+
+@router.message(TestStates.waiting_name, F.text.len() > 0)
+async def test_collect_name(message: types.Message, state: FSMContext):
+    name = (message.text or "").strip()
+    if len(name) < 2:
+        invalid_name_template = await get_content(
+            "menu.test_name_invalid",
+            "Имя должно содержать хотя бы два символа. Попробуй снова.",
+        )
+        await message.answer(invalid_name_template, reply_markup=cancel_keyboard())
+        return
+
+    data = await state.get_data()
+    birthdate_raw = data.get("test_birthdate")
+    form_slug = data.get("test_form_slug") or FORM_SLUG_TEST
+    stored_user_id = data.get("test_user_id")
+    if not birthdate_raw:
+        await state.set_state(TestStates.waiting_birthdate)
+        await message.answer("Начнём с даты рождения. Напиши её ещё раз, пожалуйста.", reply_markup=cancel_keyboard())
+        return
+
+    birthdate = date.fromisoformat(birthdate_raw)
+
+    user, is_admin = await _get_user_and_admin(message)
+    if not user:
+        user = await ensure_user(message.from_user)
+    user_id = stored_user_id or (user or {}).get("id")
+
+    if user_id and form_slug:
+        try:
+            await mark_form_started(user_id, form_slug)
+        except Exception as exc:
+            logger.warning(
+                "test_request: mark start retry failed user_id=%s slug=%s err=%s",
+                user_id,
+                form_slug,
+                exc,
+            )
+
+    preferred_name = name
+    await upsert_test_request(
+        tg_user_id=message.from_user.id,
+        user_id=user_id,
+        birthdate=birthdate,
+        preferred_name=preferred_name,
+    )
+
+    await state.clear()
+
+    thanks_template = await get_content(
+        "menu.test_thanks",
+        (
+            "Спасибо, {name}! Мы записали твою заявку на тест.\n"
+            "Когда будет готов анализ, администратор напишет в Telegram."
+        ),
+    )
+    safe_name = html.escape(preferred_name)
+    if not safe_name:
+        safe_name = html.escape(
+            (user or {}).get("name")
+            or (user or {}).get("full_name")
+            or message.from_user.first_name
+            or "друг"
+        )
+    formatted_birthdate = _format_birthdate(birthdate)
+    thanks_text = render_content(
+        thanks_template,
+        name=safe_name,
+        NAME=safe_name,
+        birthdate=formatted_birthdate,
+        BIRTHDATE=formatted_birthdate,
+    )
+
+    keyboard = await build_menu_keyboard(user=user, is_admin=is_admin, section="learning")
+    await message.answer(thanks_text, reply_markup=keyboard)
+
+    notify_admins = _get_notify_admins()
+    if notify_admins:
+        card_lines = [
+            "🧪 Новая заявка на тест",
+            f"tg-id: <code>{message.from_user.id}</code>",
+            f"Дата рождения: {_format_birthdate(birthdate)}",
+            f"Имя: {safe_name if safe_name else '—'}",
+        ]
+        try:
+            await notify_admins("\n".join(card_lines))
+        except Exception as exc:
+            logger.warning(
+                "test_request: notify_admins failed tg_user_id=%s err=%s",
+                message.from_user.id,
+                exc,
+            )
 
 
 @router.message(F.text == "⚙️ Админка")
