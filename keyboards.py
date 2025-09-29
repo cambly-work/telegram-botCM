@@ -45,6 +45,11 @@ ADMIN_USERS_REVOKE_ACCESS = "🚫 Отозвать доступ"
 ADMIN_USERS_UPDATE_CONTACTS = "✏️ Обновить контакты"
 ADMIN_BROADCAST_BUTTON = "📢 Рассылка"
 ADMIN_STATS_BUTTON = "📊 Статистика"
+ADMIN_STATS_REFRESH = "🔄 Обновить сводку"
+ADMIN_STATS_USERS_BREAKDOWN = "📋 Статусы пользователей"
+ADMIN_STATS_LESSON_PROGRESS = "🎯 Прогресс уроков"
+ADMIN_STATS_PAYMENTS_BREAKDOWN = "💰 Статистика оплат"
+ADMIN_STATS_RECENT_PAYMENTS = "🧾 Последние оплаты"
 ADMIN_DEBUG_BUTTON = "🛠️ Диагностика"
 ADMIN_SETTINGS_BUTTON = "⚙️ Настройки"
 ADMIN_PAYMENTS_BUTTON = "💳 Оплаты"
@@ -265,6 +270,18 @@ def admin_main_keyboard() -> ReplyKeyboardMarkup:
         resize_keyboard=True,
         input_field_placeholder="Админ-панель — выберите раздел",
     )
+
+
+def admin_stats_keyboard() -> ReplyKeyboardMarkup:
+    rows = [
+        [KeyboardButton(text=ADMIN_STATS_REFRESH)],
+        [KeyboardButton(text=ADMIN_STATS_USERS_BREAKDOWN)],
+        [KeyboardButton(text=ADMIN_STATS_LESSON_PROGRESS)],
+        [KeyboardButton(text=ADMIN_STATS_PAYMENTS_BREAKDOWN)],
+        [KeyboardButton(text=ADMIN_STATS_RECENT_PAYMENTS)],
+        [KeyboardButton(text=BACK_TO_ADMIN), KeyboardButton(text=BACK_TO_MAIN)],
+    ]
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
 
 def admin_users_segments_keyboard() -> ReplyKeyboardMarkup:
