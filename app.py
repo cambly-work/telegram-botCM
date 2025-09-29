@@ -15,7 +15,7 @@ from datetime import datetime, timedelta, timezone
 from throttling_mw import ThrottleMiddleware
 from fastapi import FastAPI, Request, HTTPException, Header, Body, Query, status
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -532,7 +532,7 @@ class BroadcastBody(BaseModel):
     segment: str = Field(..., description="all | lead_funnel | member_active | member_expired")
     text: str
     
-    @validator('segment')
+    @field_validator('segment')
     def validate_segment(cls, v):
         if v not in {"all", "lead_funnel", "member_active", "member_expired"}:
             raise ValueError("invalid segment")
