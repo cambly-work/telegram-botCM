@@ -19,7 +19,7 @@ from aiogram.exceptions import TelegramRetryAfter
 from urllib.parse import parse_qs, urlparse
 from aiogram.dispatcher.middlewares.base import BaseMiddleware
 from db import fetchrow, fetch, execute
-from app import _admin_ids
+from settings import ADMIN_IDS
 from keyboards import (
     main_menu_keyboard,
     info_menu_keyboard,
@@ -122,7 +122,6 @@ TEST_FORM_URL = os.getenv(
 SUPPORT_CONTACT = os.getenv("SUPPORT_CONTACT", "@Tokyo_tokyo")
 AT_PRODUCT_ID_CLUB = os.getenv("AT_PRODUCT_ID_CLUB", "")
 CLUB_CHAT_ID = os.getenv("CLUB_CHAT_ID", "")  # ID приватной группы/канала (опц.)
-ADMIN_IDS = _admin_ids()
 BOT_VERSION = "1.0.0"
 
 
