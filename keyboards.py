@@ -260,9 +260,8 @@ def admin_main_keyboard() -> ReplyKeyboardMarkup:
     rows = [
         [KeyboardButton(text=ADMIN_USERS_BUTTON)],
         [KeyboardButton(text=ADMIN_BROADCAST_BUTTON), KeyboardButton(text=ADMIN_CONTENT_MENU)],
-        [KeyboardButton(text=ADMIN_BEHAVIOR_BUTTON)],
+        [KeyboardButton(text=ADMIN_BEHAVIOR_BUTTON), KeyboardButton(text=ADMIN_SETTINGS_BUTTON)],
         [KeyboardButton(text=ADMIN_STATS_BUTTON), KeyboardButton(text=ADMIN_DEBUG_BUTTON)],
-        [KeyboardButton(text=ADMIN_SETTINGS_BUTTON), KeyboardButton(text=ADMIN_PAYMENTS_BUTTON)],
         [KeyboardButton(text=BACK_TO_MAIN)],
     ]
     return ReplyKeyboardMarkup(
@@ -334,6 +333,7 @@ def admin_behavior_keyboard() -> ReplyKeyboardMarkup:
         [KeyboardButton(text=ADMIN_BEHAVIOR_START)],
         [KeyboardButton(text=ADMIN_BEHAVIOR_REGISTRATION)],
         [KeyboardButton(text=ADMIN_BEHAVIOR_ONBOARDING)],
+        [KeyboardButton(text=ADMIN_PAYMENTS_BUTTON)],
         [KeyboardButton(text=BACK_TO_ADMIN), KeyboardButton(text=BACK_TO_MAIN)],
     ]
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
@@ -434,7 +434,8 @@ def admin_payments_keyboard(*, payments_open: bool) -> ReplyKeyboardMarkup:
             KeyboardButton(text=ADMIN_PAYMENTS_MARK_PAID),
             KeyboardButton(text=ADMIN_PAYMENTS_MARK_FAILED),
         ],
-        [KeyboardButton(text=BACK_TO_ADMIN), KeyboardButton(text=BACK_TO_MAIN)],
+        [KeyboardButton(text=BACK_TO_BEHAVIOR), KeyboardButton(text=BACK_TO_ADMIN)],
+        [KeyboardButton(text=BACK_TO_MAIN)],
     ]
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
