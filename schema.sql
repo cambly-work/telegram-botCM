@@ -44,6 +44,14 @@ ALTER TABLE users
   ADD COLUMN IF NOT EXISTS created_at         TIMESTAMPTZ DEFAULT NOW(),
   ADD COLUMN IF NOT EXISTS updated_at         TIMESTAMPTZ DEFAULT NOW();
 
+ALTER TABLE users
+  ALTER COLUMN access_until TYPE TIMESTAMPTZ
+    USING CASE
+      WHEN pg_typeof(access_until) = 'timestamp without time zone'::regtype
+        THEN timezone('UTC', access_until)
+      ELSE access_until
+    END;
+
 DO $$
 BEGIN
   BEGIN
@@ -110,6 +118,13 @@ CREATE TABLE IF NOT EXISTS payments (
   raw_payload   JSONB,
   created_at    TIMESTAMPTZ DEFAULT NOW()
 );
+ALTER TABLE payments
+  ALTER COLUMN access_until TYPE TIMESTAMPTZ
+    USING CASE
+      WHEN pg_typeof(access_until) = 'timestamp without time zone'::regtype
+        THEN timezone('UTC', access_until)
+      ELSE access_until
+    END;
 CREATE UNIQUE INDEX IF NOT EXISTS ux_payments_order_id ON payments(order_id);
 CREATE INDEX IF NOT EXISTS idx_payments_status         ON payments(status);
 CREATE INDEX IF NOT EXISTS idx_payments_email          ON payments(LOWER(email));
