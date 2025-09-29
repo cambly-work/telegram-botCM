@@ -47,6 +47,7 @@ ADMIN_BROADCAST_BUTTON = "📢 Рассылка"
 ADMIN_STATS_BUTTON = "📊 Статистика"
 ADMIN_DEBUG_BUTTON = "🛠️ Диагностика"
 ADMIN_SETTINGS_BUTTON = "⚙️ Настройки"
+ADMIN_PAYMENTS_BUTTON = "💳 Оплаты"
 ADMIN_BEHAVIOR_BUTTON = "🎛 Логика бота"
 
 ADMIN_BEHAVIOR_START = "✉️ Приветствие /start"
@@ -241,13 +242,22 @@ def remove_keyboard() -> ReplyKeyboardRemove:
     return ReplyKeyboardRemove()
 
 
+ADMIN_PAYMENTS_OPEN_WINDOW = "🔓 Открыть окно оплат"
+ADMIN_PAYMENTS_CLOSE_WINDOW = "🔒 Закрыть окно оплат"
+ADMIN_PAYMENTS_SHOW_LATEST = "🧾 Последние платежи"
+ADMIN_PAYMENTS_CONFIRM_ACCESS = "✅ Подтвердить доступ"
+ADMIN_PAYMENTS_REVOKE_ACCESS = "🚫 Приостановить доступ"
+ADMIN_PAYMENTS_MARK_PAID = "☑️ Отметить платёж"
+ADMIN_PAYMENTS_MARK_FAILED = "❗ Пометить как ошибку"
+
+
 def admin_main_keyboard() -> ReplyKeyboardMarkup:
     rows = [
         [KeyboardButton(text=ADMIN_USERS_BUTTON)],
         [KeyboardButton(text=ADMIN_BROADCAST_BUTTON), KeyboardButton(text=ADMIN_CONTENT_MENU)],
         [KeyboardButton(text=ADMIN_BEHAVIOR_BUTTON)],
         [KeyboardButton(text=ADMIN_STATS_BUTTON), KeyboardButton(text=ADMIN_DEBUG_BUTTON)],
-        [KeyboardButton(text=ADMIN_SETTINGS_BUTTON)],
+        [KeyboardButton(text=ADMIN_SETTINGS_BUTTON), KeyboardButton(text=ADMIN_PAYMENTS_BUTTON)],
         [KeyboardButton(text=BACK_TO_MAIN)],
     ]
     return ReplyKeyboardMarkup(
@@ -389,6 +399,26 @@ def admin_settings_keyboard(
         KeyboardButton(text=ADMIN_TEXTS_ENTRY),
     ])
     rows.append([KeyboardButton(text=BACK_TO_ADMIN), KeyboardButton(text=BACK_TO_MAIN)])
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
+
+
+def admin_payments_keyboard(*, payments_open: bool) -> ReplyKeyboardMarkup:
+    toggle_text = (
+        ADMIN_PAYMENTS_CLOSE_WINDOW if payments_open else ADMIN_PAYMENTS_OPEN_WINDOW
+    )
+    rows = [
+        [KeyboardButton(text=toggle_text)],
+        [KeyboardButton(text=ADMIN_PAYMENTS_SHOW_LATEST)],
+        [
+            KeyboardButton(text=ADMIN_PAYMENTS_CONFIRM_ACCESS),
+            KeyboardButton(text=ADMIN_PAYMENTS_REVOKE_ACCESS),
+        ],
+        [
+            KeyboardButton(text=ADMIN_PAYMENTS_MARK_PAID),
+            KeyboardButton(text=ADMIN_PAYMENTS_MARK_FAILED),
+        ],
+        [KeyboardButton(text=BACK_TO_ADMIN), KeyboardButton(text=BACK_TO_MAIN)],
+    ]
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
 
