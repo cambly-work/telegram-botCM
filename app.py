@@ -21,6 +21,7 @@ from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher, types
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from settings import ADMIN_IDS
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Конфиг/окружение
@@ -194,17 +195,6 @@ RETRY_DELAY = float(os.getenv("RETRY_DELAY", "0.5"))
 
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN не задан в окружении (.env).")
-
-
-def _admin_ids() -> set[int]:
-    ids = os.getenv("ADMIN_IDS", "")
-    try:
-        return {int(x.strip()) for x in ids.split(",") if x.strip()}
-    except Exception:
-        return set()
-
-
-ADMIN_IDS = _admin_ids()
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Логирование
