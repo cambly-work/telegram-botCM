@@ -103,6 +103,7 @@ from keyboards import (
     ADMIN_USERS_GRANT_ACCESS,
     ADMIN_USERS_REVOKE_ACCESS,
     ADMIN_USERS_UPDATE_CONTACTS,
+    admin_stats_keyboard,
     admin_payments_keyboard,
     ADMIN_PAYMENTS_OPEN_WINDOW,
     ADMIN_PAYMENTS_CLOSE_WINDOW,
@@ -111,6 +112,11 @@ from keyboards import (
     ADMIN_PAYMENTS_REVOKE_ACCESS,
     ADMIN_PAYMENTS_MARK_PAID,
     ADMIN_PAYMENTS_MARK_FAILED,
+    ADMIN_STATS_REFRESH,
+    ADMIN_STATS_USERS_BREAKDOWN,
+    ADMIN_STATS_LESSON_PROGRESS,
+    ADMIN_STATS_PAYMENTS_BREAKDOWN,
+    ADMIN_STATS_RECENT_PAYMENTS,
 )
 # ──────────────────────────────────────────────────────────────────────────────
 # Логгер
@@ -799,6 +805,28 @@ _ADMIN_USER_PROGRESS_ICONS: dict[str, str] = {
     "pending": "⏳",
 }
 
+_ADMIN_STATS_USER_LABELS: dict[str, str] = {
+    "total": "Всего",
+    "lead_funnel": "Лиды",
+    "member_active": "Активные",
+    "member_expired": "Завершившие",
+}
+
+_ADMIN_LESSON_STATUS_ORDER = ["submitted", "pending", "skipped"]
+
+_ADMIN_LESSON_STATUS_LABELS: dict[str, str] = {
+    "submitted": "Сдано",
+    "pending": "В работе",
+    "skipped": "Пропущено",
+}
+
+_ADMIN_PAYMENT_STATUS_LABELS: dict[str, str] = {
+    "paid": "Оплачено",
+    "renew": "Продление",
+    "refund": "Возврат",
+    "failed": "Ошибка",
+}
+
 
 def _admin_user_segment_from_text(text: str | None) -> str | None:
     if not text:
@@ -970,6 +998,256 @@ def _format_admin_payment_entry(payment: dict) -> str:
     contacts = ", ".join(contact_bits) if contact_bits else "контакты не указаны"
     return f"• <code>{order_id}</code> — {status} ({paid_at})\n  {contacts}"
 
+
+def _render_stats_table(
+    headers: list[str],
+    rows: list[list[str]],
+    align: list[str] | None = None,
+) -> str:
+    if align is None:
+        align = ["left"] * len(headers)
+
+    widths = [len(header) for header in headers]
+    for row in rows:
+        for idx, cell in enumerate(row):
+            widths[idx] = max(widths[idx], len(cell))
+
+    def _format_cell(text: str, width: int, alignment: str) -> str:
+        if alignment == "right":
+            return text.rjust(width)
+        if alignment == "center":
+            pad_total = max(width - len(text), 0)
+            left = pad_total // 2
+            right = pad_total - left
+            return " " * left + text + " " * right
+        return text.ljust(width)
+
+    space = "  "
+    header_line = space.join(
+        _format_cell(headers[idx], widths[idx], align[idx]) for idx in range(len(headers))
+    )
+    separator = space.join("─" * width for width in widths)
+    body_lines = [
+        space.join(_format_cell(row[idx], widths[idx], align[idx]) for idx in range(len(headers)))
+        for row in rows
+    ]
+    table_lines = [header_line, separator, *body_lines] if rows else [header_line, separator]
+    return "<pre>" + "\n".join(table_lines) + "</pre>"
+
+
+async def _collect_admin_stats_data() -> dict[str, Any]:
+    total = await fetchrow("SELECT COUNT(*) AS c FROM users")
+    lead = await fetchrow("SELECT COUNT(*) AS c FROM users WHERE status='lead_funnel'")
+    active = await fetchrow("SELECT COUNT(*) AS c FROM users WHERE status='member_active'")
+    expired = await fetchrow("SELECT COUNT(*) AS c FROM users WHERE status='member_expired'")
+
+    lesson_stats_rows = await fetch(
+        """
+        SELECT lesson_num, hw_status, COUNT(*) AS count
+          FROM funnel_progress
+         GROUP BY lesson_num, hw_status
+         ORDER BY lesson_num, hw_status
+        """
+    )
+
+    completed_4 = await fetchrow(
+        """
+        SELECT COUNT(*) AS c
+          FROM (
+                SELECT user_id
+                  FROM funnel_progress
+                 WHERE hw_status = 'submitted'
+                 GROUP BY user_id
+                HAVING COUNT(DISTINCT CASE
+                           WHEN lesson_num BETWEEN 1 AND 4 THEN lesson_num
+                       END) = 4
+               ) AS completed
+        """
+    )
+
+    payment_stats_rows = await fetch(
+        """
+        SELECT status, COUNT(*) AS count, MAX(created_at) AS last_payment
+          FROM payments
+         GROUP BY status
+        """
+    )
+
+    return {
+        "users": {
+            "total": int((total or {}).get("c", 0)),
+            "lead_funnel": int((lead or {}).get("c", 0)),
+            "member_active": int((active or {}).get("c", 0)),
+            "member_expired": int((expired or {}).get("c", 0)),
+        },
+        "funnel": {
+            "completed_4of4": int((completed_4 or {}).get("c", 0)),
+            "lesson_stats": [dict(row) for row in lesson_stats_rows or []],
+        },
+        "payments": [dict(row) for row in payment_stats_rows or []],
+        "timestamp": now_utc(),
+    }
+
+
+def _generate_users_table_data(stats: dict[str, Any]) -> tuple[list[str], list[list[str]], list[str]]:
+    users = stats.get("users", {})
+    total = int(users.get("total") or 0)
+    headers = ["Статус", "Кол-во", "%"]
+    rows: list[list[str]] = []
+    for key in ("total", "lead_funnel", "member_active", "member_expired"):
+        label = _ADMIN_STATS_USER_LABELS.get(key, key)
+        value = int(users.get(key) or 0)
+        if total:
+            share = "100%" if key == "total" else f"{value / total * 100:.1f}%"
+        else:
+            share = "—"
+        rows.append([label, str(value), share])
+    return headers, rows, ["left", "right", "right"]
+
+
+def _generate_lesson_table_data(stats: dict[str, Any]) -> tuple[list[str], list[list[str]], list[str]]:
+    funnel = stats.get("funnel") or {}
+    lesson_rows = funnel.get("lesson_stats") or []
+
+    statuses_present = {
+        row.get("hw_status") for row in lesson_rows if row.get("hw_status")
+    }
+    base_statuses = list(_ADMIN_LESSON_STATUS_ORDER)
+    extra_statuses = sorted(statuses_present - set(base_statuses))
+    status_order = list(dict.fromkeys(base_statuses + extra_statuses))
+
+    lesson_numbers = sorted({row.get("lesson_num") for row in lesson_rows if row.get("lesson_num")})
+    if not lesson_numbers:
+        lesson_numbers = list(range(1, 5))
+
+    totals: dict[str, int] = {status: 0 for status in status_order}
+    rows: list[list[str]] = []
+
+    for lesson_num in lesson_numbers:
+        row_counts = {status: 0 for status in status_order}
+        for item in lesson_rows:
+            if item.get("lesson_num") == lesson_num:
+                status = item.get("hw_status")
+                if not status:
+                    continue
+                count = int(item.get("count") or 0)
+                row_counts[status] = count
+                totals[status] = totals.get(status, 0) + count
+        rows.append(
+            [f"Урок {lesson_num}"]
+            + [str(row_counts.get(status, 0)) for status in status_order]
+        )
+
+    totals_row = ["Итого"] + [str(totals.get(status, 0)) for status in status_order]
+    rows.append(totals_row)
+
+    headers = ["Урок"] + [
+        _ADMIN_LESSON_STATUS_LABELS.get(status, str(status).title()) for status in status_order
+    ]
+    align = ["left"] + ["right"] * len(status_order)
+    return headers, rows, align
+
+
+def _generate_payments_table_data(stats: dict[str, Any]) -> tuple[list[str], list[list[str]], list[str]]:
+    payment_rows = stats.get("payments") or []
+    statuses_present = {row.get("status") for row in payment_rows if row.get("status")}
+    base_order = ["paid", "renew", "refund", "failed"]
+    extra_statuses = sorted(statuses_present - set(base_order))
+    status_order = list(dict.fromkeys(base_order + extra_statuses))
+
+    rows: list[list[str]] = []
+    total = 0
+    for status in status_order:
+        matching = next((row for row in payment_rows if row.get("status") == status), None)
+        count = int((matching or {}).get("count") or 0)
+        total += count
+        last_payment = _format_datetime_safe((matching or {}).get("last_payment"))
+        label = _ADMIN_PAYMENT_STATUS_LABELS.get(status, status)
+        rows.append([label, str(count), last_payment])
+
+    if not status_order:
+        rows.append(["Нет записей", "0", "—"])
+
+    rows.append(["Итого", str(total), "—"])
+
+    headers = ["Статус", "Кол-во", "Последняя запись"]
+    align = ["left", "right", "left"]
+    return headers, rows, align
+
+
+def _format_admin_stats_overview(stats: dict[str, Any]) -> str:
+    headers_users, rows_users, align_users = _generate_users_table_data(stats)
+    headers_lessons, rows_lessons, align_lessons = _generate_lesson_table_data(stats)
+    headers_payments, rows_payments, align_payments = _generate_payments_table_data(stats)
+
+    users_table = _render_stats_table(headers_users, rows_users, align_users)
+    lessons_table = _render_stats_table(headers_lessons, rows_lessons, align_lessons)
+    payments_table = _render_stats_table(headers_payments, rows_payments, align_payments)
+
+    timestamp = _format_datetime_safe(stats.get("timestamp"))
+    completed = stats.get("funnel", {}).get("completed_4of4", 0)
+
+    lines = [
+        "<b>📊 Сводка по базе</b>",
+        "",
+        "<b>👥 Пользователи</b>",
+        users_table,
+        "",
+        "<b>🎯 Уроки</b>",
+        f"Завершили 4/4 урока: <b>{completed}</b>",
+        lessons_table,
+        "",
+        "<b>💰 Оплаты</b>",
+        payments_table,
+        "",
+        f"Обновлено: {timestamp}",
+        "",
+        "Используй кнопки ниже, чтобы открыть подробные отчёты.",
+    ]
+    return "\n".join(lines)
+
+
+def _format_admin_stats_users(stats: dict[str, Any]) -> str:
+    headers, rows, align = _generate_users_table_data(stats)
+    table = _render_stats_table(headers, rows, align)
+    timestamp = _format_datetime_safe(stats.get("timestamp"))
+    return "\n".join([
+        "<b>📋 Статусы пользователей</b>",
+        table,
+        "",
+        f"Обновлено: {timestamp}",
+    ])
+
+
+def _format_admin_stats_lessons(stats: dict[str, Any]) -> str:
+    headers, rows, align = _generate_lesson_table_data(stats)
+    table = _render_stats_table(headers, rows, align)
+    completed = stats.get("funnel", {}).get("completed_4of4", 0)
+    timestamp = _format_datetime_safe(stats.get("timestamp"))
+    return "\n".join([
+        "<b>🎯 Прогресс уроков</b>",
+        f"4/4 урока завершили: <b>{completed}</b>",
+        table,
+        "",
+        "Статусы: <i>Сдано</i> — домашнее задание принято, <i>В работе</i> — урок открыт,",
+        "<i>Пропущено</i> — урок отмечен как пропущенный.",
+        "",
+        f"Обновлено: {timestamp}",
+    ])
+
+
+def _format_admin_stats_payments(stats: dict[str, Any]) -> str:
+    headers, rows, align = _generate_payments_table_data(stats)
+    table = _render_stats_table(headers, rows, align)
+    timestamp = _format_datetime_safe(stats.get("timestamp"))
+    return "\n".join([
+        "<b>💰 Статистика оплат</b>",
+        table,
+        "",
+        "Последняя запись показывает дату по полю created_at/paid_at.",
+        "",
+        f"Обновлено: {timestamp}",
+    ])
 
 async def _admin_set_member_active(user_id: int, access_until: Optional[datetime]) -> None:
     await execute(
@@ -2071,13 +2349,14 @@ async def send_admin_menu(
     admin_text = (
         "<b>Админ-панель</b>\n\n"
         "Здесь собраны основные инструменты:\n"
-        "• 👥 Пользователи — сегменты, карточки и управление доступом.\n"
+        "• 👥 Пользователи — сегменты, карточки профилей и управление доступом.\n"
         "• 📢 Рассылка — как отправлять сообщения сегментам.\n"
         "• 🧾 Контент и тексты — редактирование сообщений бота без команд.\n"
-        "• 📊 Статистика — краткие цифры по базе.\n"
+        "• 💳 Оплаты — окно продаж, ручная активация и история платежей.\n"
+        "• 📊 Статистика — сводка по статусам, прогресс уроков и последние оплаты.\n"
         "• 🛠️ Диагностика — проверка важных настроек.\n"
         "• ⚙️ Настройки — управление разделами меню и быстрый доступ к текстам.\n\n"
-        "Выберите, что нужно настроить."
+        "Выберите раздел, чтобы открыть расширенную статистику, карточки пользователей или управление оплатами."
     )
     await message.answer(
         admin_text,
@@ -4724,21 +5003,119 @@ async def admin_content_quick_reply_update(message: types.Message, state: FSMCon
 
 
 @router.message(F.text == ADMIN_STATS_BUTTON)
-async def admin_stats(message: types.Message):
+async def admin_stats(message: types.Message, state: FSMContext):
     if not is_admin_id(message.from_user.id):
         return
-    users_count = (await fetchrow("SELECT COUNT(*) as count FROM users"))["count"]
-    active_users = (await fetchrow("SELECT COUNT(*) as count FROM users WHERE status='member_active' AND access_until > NOW()"))["count"]
-    lessons_completed = (await fetchrow("SELECT COUNT(*) as count FROM funnel_progress WHERE hw_status='submitted'"))["count"]
-    feedback_count = (await fetchrow("SELECT COUNT(*) as count FROM lesson_feedback"))["count"]
-    stats_text = (
-        f"<b>📊 Статистика</b>\n\n"
-        f"Всего пользователей: {users_count}\n"
-        f"Активных участниц: {active_users}\n"
-        f"Выполнено уроков: {lessons_completed}\n"
-        f"Оставлено отзывов: {feedback_count}"
+    await _reset_state_if_needed(state)
+
+    stats = await _collect_admin_stats_data()
+    stats_text = _format_admin_stats_overview(stats)
+    await message.answer(
+        stats_text,
+        reply_markup=admin_stats_keyboard(),
+        disable_web_page_preview=True,
+        parse_mode=ParseMode.HTML,
     )
-    await message.answer(stats_text, reply_markup=admin_main_keyboard(), disable_web_page_preview=True)
+
+
+@router.message(F.text == ADMIN_STATS_REFRESH)
+async def admin_stats_refresh(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+    await _reset_state_if_needed(state)
+
+    stats = await _collect_admin_stats_data()
+    stats_text = _format_admin_stats_overview(stats)
+    await message.answer(
+        stats_text,
+        reply_markup=admin_stats_keyboard(),
+        disable_web_page_preview=True,
+        parse_mode=ParseMode.HTML,
+    )
+
+
+@router.message(F.text == ADMIN_STATS_USERS_BREAKDOWN)
+async def admin_stats_users_breakdown(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+    await _reset_state_if_needed(state)
+
+    stats = await _collect_admin_stats_data()
+    text = _format_admin_stats_users(stats)
+    await message.answer(
+        text,
+        reply_markup=admin_stats_keyboard(),
+        disable_web_page_preview=True,
+        parse_mode=ParseMode.HTML,
+    )
+
+
+@router.message(F.text == ADMIN_STATS_LESSON_PROGRESS)
+async def admin_stats_lessons_breakdown(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+    await _reset_state_if_needed(state)
+
+    stats = await _collect_admin_stats_data()
+    text = _format_admin_stats_lessons(stats)
+    await message.answer(
+        text,
+        reply_markup=admin_stats_keyboard(),
+        disable_web_page_preview=True,
+        parse_mode=ParseMode.HTML,
+    )
+
+
+@router.message(F.text == ADMIN_STATS_PAYMENTS_BREAKDOWN)
+async def admin_stats_payments_breakdown(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+    await _reset_state_if_needed(state)
+
+    stats = await _collect_admin_stats_data()
+    text = _format_admin_stats_payments(stats)
+    await message.answer(
+        text,
+        reply_markup=admin_stats_keyboard(),
+        disable_web_page_preview=True,
+        parse_mode=ParseMode.HTML,
+    )
+
+
+@router.message(F.text == ADMIN_STATS_RECENT_PAYMENTS)
+async def admin_stats_recent_payments(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+    await _reset_state_if_needed(state)
+
+    payments = await _fetch_recent_payments(limit=10)
+    timestamp_text = _format_datetime_safe(now_utc())
+    if not payments:
+        text = "\n".join(
+            [
+                "<b>🧾 Последние оплаты</b>",
+                "",
+                "Пока нет платежей в базе.",
+                "",
+                f"Обновлено: {timestamp_text}",
+            ]
+        )
+    else:
+        lines = ["<b>🧾 Последние оплаты</b>", ""]
+        lines.extend(_format_admin_payment_entry(payment) for payment in payments)
+        lines.extend([
+            "",
+            "Подробное управление доступами — в разделе «💳 Оплаты».",
+            f"Обновлено: {timestamp_text}",
+        ])
+        text = "\n".join(lines)
+
+    await message.answer(
+        text,
+        reply_markup=admin_stats_keyboard(),
+        disable_web_page_preview=True,
+        parse_mode=ParseMode.HTML,
+    )
 
 
 @router.message(F.text == ADMIN_DEBUG_BUTTON)
