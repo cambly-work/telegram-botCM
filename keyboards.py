@@ -33,6 +33,16 @@ ADMIN_CONTENT_CREATE = "➕ Добавить или обновить текст"
 ADMIN_CONTENT_TAGS_HELP = "ℹ️ Форматирование текста"
 ADMIN_CONTENT_SUGGEST_MORE = "🔁 Ещё варианты"
 ADMIN_USERS_BUTTON = "👥 Пользователи"
+ADMIN_USERS_SEGMENT_LEADS = "🎯 Лиды"
+ADMIN_USERS_SEGMENT_ACTIVE = "🔥 Активные"
+ADMIN_USERS_SEGMENT_EXPIRED = "🧊 Завершившие"
+ADMIN_USERS_PAGE_PREV = "⬅️ Предыдущие"
+ADMIN_USERS_PAGE_NEXT = "➡️ Следующие"
+ADMIN_USERS_BACK_TO_SEGMENTS = "📋 Сегменты"
+ADMIN_USERS_BACK_TO_LIST = "📋 К списку"
+ADMIN_USERS_GRANT_ACCESS = "✅ Выдать доступ"
+ADMIN_USERS_REVOKE_ACCESS = "🚫 Отозвать доступ"
+ADMIN_USERS_UPDATE_CONTACTS = "✏️ Обновить контакты"
 ADMIN_BROADCAST_BUTTON = "📢 Рассылка"
 ADMIN_STATS_BUTTON = "📊 Статистика"
 ADMIN_DEBUG_BUTTON = "🛠️ Диагностика"
@@ -233,8 +243,9 @@ def remove_keyboard() -> ReplyKeyboardRemove:
 
 def admin_main_keyboard() -> ReplyKeyboardMarkup:
     rows = [
-        [KeyboardButton(text=ADMIN_USERS_BUTTON), KeyboardButton(text=ADMIN_BROADCAST_BUTTON)],
-        [KeyboardButton(text=ADMIN_CONTENT_MENU), KeyboardButton(text=ADMIN_BEHAVIOR_BUTTON)],
+        [KeyboardButton(text=ADMIN_USERS_BUTTON)],
+        [KeyboardButton(text=ADMIN_BROADCAST_BUTTON), KeyboardButton(text=ADMIN_CONTENT_MENU)],
+        [KeyboardButton(text=ADMIN_BEHAVIOR_BUTTON)],
         [KeyboardButton(text=ADMIN_STATS_BUTTON), KeyboardButton(text=ADMIN_DEBUG_BUTTON)],
         [KeyboardButton(text=ADMIN_SETTINGS_BUTTON)],
         [KeyboardButton(text=BACK_TO_MAIN)],
@@ -244,6 +255,51 @@ def admin_main_keyboard() -> ReplyKeyboardMarkup:
         resize_keyboard=True,
         input_field_placeholder="Админ-панель — выберите раздел",
     )
+
+
+def admin_users_segments_keyboard() -> ReplyKeyboardMarkup:
+    rows = [
+        [KeyboardButton(text=ADMIN_USERS_SEGMENT_LEADS)],
+        [KeyboardButton(text=ADMIN_USERS_SEGMENT_ACTIVE)],
+        [KeyboardButton(text=ADMIN_USERS_SEGMENT_EXPIRED)],
+        [KeyboardButton(text=BACK_TO_ADMIN), KeyboardButton(text=BACK_TO_MAIN)],
+    ]
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
+
+
+def admin_users_pagination_keyboard(
+    user_buttons: list[str],
+    *,
+    has_prev: bool,
+    has_next: bool,
+) -> ReplyKeyboardMarkup:
+    rows: list[list[KeyboardButton]] = [[KeyboardButton(text=text)] for text in user_buttons]
+
+    nav_row: list[KeyboardButton] = []
+    if has_prev:
+        nav_row.append(KeyboardButton(text=ADMIN_USERS_PAGE_PREV))
+    nav_row.append(KeyboardButton(text=ADMIN_USERS_BACK_TO_SEGMENTS))
+    if has_next:
+        nav_row.append(KeyboardButton(text=ADMIN_USERS_PAGE_NEXT))
+
+    rows.append(nav_row)
+    rows.append([KeyboardButton(text=BACK_TO_ADMIN), KeyboardButton(text=BACK_TO_MAIN)])
+
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
+
+
+def admin_user_card_keyboard() -> ReplyKeyboardMarkup:
+    rows = [
+        [
+            KeyboardButton(text=ADMIN_USERS_GRANT_ACCESS),
+            KeyboardButton(text=ADMIN_USERS_REVOKE_ACCESS),
+        ],
+        [KeyboardButton(text=ADMIN_USERS_UPDATE_CONTACTS)],
+        [KeyboardButton(text=ADMIN_USERS_BACK_TO_LIST)],
+        [KeyboardButton(text=ADMIN_USERS_BACK_TO_SEGMENTS)],
+        [KeyboardButton(text=BACK_TO_ADMIN), KeyboardButton(text=BACK_TO_MAIN)],
+    ]
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
 
 def admin_behavior_keyboard() -> ReplyKeyboardMarkup:
