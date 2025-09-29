@@ -143,6 +143,8 @@ FORM_ALIASES: dict[str, str] = {
     "analysis": FORM_SLUG_ANALYSIS,
     "test": FORM_SLUG_TEST,
     "тест": FORM_SLUG_TEST,
+    "magnetism-window": "magnetism-window",
+    "magnetism_window": "magnetism-window",
 }
 # ──────────────────────────────────────────────────────────────────────────────
 # Конфиг из окружения
@@ -234,6 +236,30 @@ _URL_RE = re.compile(r"https?://[^\s<>\]\)]+", re.IGNORECASE)
 _FORM_SLUG_SANITIZE_RE = re.compile(r"[^a-z0-9_-]+", re.IGNORECASE)
 
 
+def _lookup_form_alias(value: str) -> Optional[str]:
+    cleaned = (value or "").strip()
+    if not cleaned:
+        return None
+
+    lowered = cleaned.lower()
+    candidates = [lowered]
+
+    replaced = lowered.replace("-", "_")
+    if replaced not in candidates:
+        candidates.append(replaced)
+
+    collapsed = re.sub(r"\s+", "_", replaced)
+    if collapsed not in candidates:
+        candidates.append(collapsed)
+
+    for candidate in candidates:
+        alias = FORM_ALIASES.get(candidate)
+        if alias:
+            return alias
+
+    return None
+
+
 def _sanitize_form_slug(candidate: str) -> str:
     cleaned = (candidate or "").strip()
     if not cleaned:
@@ -280,8 +306,15 @@ def resolve_form_slug(raw_value: Optional[str], fallback: Optional[str] = None) 
         candidates.append(fallback)
 
     for candidate in candidates:
+        alias = _lookup_form_alias(candidate)
+        if alias:
+            return alias
+
         slug = _sanitize_form_slug(candidate)
         if slug:
+            alias = _lookup_form_alias(slug)
+            if alias:
+                return alias
             return slug
     return None
 
@@ -2662,14 +2695,6 @@ async def save_lesson_feedback(user_id: int, lesson_num: int, feedback_type: str
         user_id, lesson_num, feedback_type, feedback_text
     )
     logger.info("feedback saved: user_id=%s lesson=%s type=%s", user_id, lesson_num, feedback_type)
-
-
-def resolve_form_slug(raw: str | None) -> Optional[str]:
-    if not raw:
-        return None
-    slug = raw.strip().lower().replace("-", "_")
-    slug = re.sub(r"\s+", "_", slug)
-    return FORM_ALIASES.get(slug, slug if slug in FORM_LABELS else None)
 
 
 async def mark_form_started(user_id: int, form_slug: str) -> None:
