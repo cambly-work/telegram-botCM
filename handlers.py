@@ -2227,6 +2227,19 @@ async def feedback_receive_text(message: types.Message, state: FSMContext):
     )
 
 
+@router.message(
+    ProfileStates.waiting_email, F.text.casefold() == CANCEL_TEXT.lower()
+)
+async def profile_cancel_email(message: types.Message, state: FSMContext):
+    await state.clear()
+
+    user = await get_user_with_id(message.from_user.id)
+    is_admin = is_admin_id(message.from_user.id)
+
+    await message.answer("Изменение email отменено.")
+    await send_profile_overview(message, user, is_admin)
+
+
 @router.message(ProfileStates.waiting_email, F.text.len() > 0)
 async def profile_receive_email(message: types.Message, state: FSMContext):
     email = (message.text or "").strip()
