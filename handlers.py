@@ -1,5 +1,6 @@
 # handlers.py
 import asyncio
+import math
 import os
 import re
 import yaml
@@ -15,7 +16,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.utils.chat_action import ChatActionSender
-from aiogram.exceptions import TelegramRetryAfter
+from aiogram.exceptions import TelegramRetryAfter, SkipHandler
 from urllib.parse import parse_qs, urlparse
 from aiogram.dispatcher.middlewares.base import BaseMiddleware
 from db import fetchrow, fetch, execute
@@ -88,6 +89,19 @@ from keyboards import (
     ADMIN_STATS_BUTTON,
     ADMIN_DEBUG_BUTTON,
     ADMIN_SETTINGS_BUTTON,
+    admin_users_segments_keyboard,
+    admin_users_pagination_keyboard,
+    admin_user_card_keyboard,
+    ADMIN_USERS_SEGMENT_LEADS,
+    ADMIN_USERS_SEGMENT_ACTIVE,
+    ADMIN_USERS_SEGMENT_EXPIRED,
+    ADMIN_USERS_PAGE_PREV,
+    ADMIN_USERS_PAGE_NEXT,
+    ADMIN_USERS_BACK_TO_SEGMENTS,
+    ADMIN_USERS_BACK_TO_LIST,
+    ADMIN_USERS_GRANT_ACCESS,
+    ADMIN_USERS_REVOKE_ACCESS,
+    ADMIN_USERS_UPDATE_CONTACTS,
 )
 # ──────────────────────────────────────────────────────────────────────────────
 # Логгер
@@ -625,6 +639,13 @@ class AdminBehaviorStates(StatesGroup):
     waiting_registration_text = State()
     waiting_onboarding_text = State()
     waiting_onboarding_delete = State()
+
+
+class AdminUserStates(StatesGroup):
+    choosing_segment = State()
+    browsing_users = State()
+    viewing_user = State()
+    waiting_contacts = State()
 # ──────────────────────────────────────────────────────────────────────────────
 # Улучшенные клавиатуры
 # ──────────────────────────────────────────────────────────────────────────────
@@ -733,6 +754,372 @@ _BROADCAST_BUTTON_SEGMENTS: dict[str, str] = {
     BROADCAST_MEMBERS_BUTTON: "member_active",
     BROADCAST_EXPIRED_BUTTON: "member_expired",
 }
+
+_ADMIN_USER_SEGMENT_CONDITIONS: dict[str, str] = {
+    "lead_funnel": "status='lead_funnel'",
+    "member_active": "status='member_active' AND (access_until IS NULL OR access_until > NOW())",
+    "member_expired": "status='member_expired' OR (access_until IS NOT NULL AND access_until <= NOW())",
+}
+
+_ADMIN_USER_BUTTON_SEGMENTS: dict[str, str] = {
+    ADMIN_USERS_SEGMENT_LEADS: "lead_funnel",
+    ADMIN_USERS_SEGMENT_ACTIVE: "member_active",
+    ADMIN_USERS_SEGMENT_EXPIRED: "member_expired",
+}
+
+_ADMIN_USER_SEGMENT_LABELS: dict[str, str] = {
+    "lead_funnel": "Лиды",
+    "member_active": "Активные",
+    "member_expired": "Завершившие",
+}
+
+_ADMIN_USERS_PAGE_SIZE = 5
+
+_ADMIN_USER_PROGRESS_ICONS: dict[str, str] = {
+    "submitted": "✅",
+    "skipped": "⏭️",
+    "pending": "⏳",
+}
+
+
+def _admin_user_segment_from_text(text: str | None) -> str | None:
+    if not text:
+        return None
+    return _ADMIN_USER_BUTTON_SEGMENTS.get(text.strip())
+
+
+def _admin_user_segment_label(segment: str | None) -> str:
+    if not segment:
+        return "—"
+    return _ADMIN_USER_SEGMENT_LABELS.get(segment, segment)
+
+
+def _admin_user_display_name(user: dict) -> str:
+    for key in ("name", "full_name"):
+        value = (user.get(key) or "").strip()
+        if value:
+            return value
+    return "—"
+
+
+def _admin_user_username(user: dict) -> str:
+    username = (user.get("username") or "").strip()
+    return f"@{username}" if username else "—"
+
+
+def _format_datetime_safe(value: Any) -> str:
+    if not value:
+        return "—"
+    dt = value
+    if isinstance(dt, str):
+        try:
+            dt = datetime.fromisoformat(dt.replace("Z", "+00:00"))
+        except ValueError:
+            return html.escape(dt)
+    if isinstance(dt, datetime):
+        try:
+            return tz_aware_msk(dt)
+        except Exception:
+            return dt.isoformat()
+    return html.escape(str(value))
+
+
+def _admin_user_access_line(user: dict) -> str:
+    access_until = user.get("access_until")
+    if not access_until:
+        return "—"
+    dt = access_until
+    if isinstance(dt, str):
+        try:
+            dt = datetime.fromisoformat(dt.replace("Z", "+00:00"))
+        except ValueError:
+            return html.escape(dt)
+    if isinstance(dt, datetime) and dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    if isinstance(dt, datetime):
+        try:
+            return tz_aware_msk(dt)
+        except Exception:
+            return dt.isoformat()
+    return html.escape(str(access_until))
+
+
+def _admin_user_progress_summary(progress: list[tuple[int, str]] | None) -> str:
+    if not progress:
+        return "—"
+    parts: list[str] = []
+    for lesson_num, status in sorted(progress, key=lambda item: item[0]):
+        icon = _ADMIN_USER_PROGRESS_ICONS.get(status, "•")
+        parts.append(f"{lesson_num}{icon}")
+    return " ".join(parts)
+
+
+async def _collect_progress_map(user_ids: list[int]) -> dict[int, list[tuple[int, str]]]:
+    if not user_ids:
+        return {}
+    rows = await fetch(
+        """
+        SELECT user_id, lesson_num, hw_status
+        FROM funnel_progress
+        WHERE user_id = ANY($1::int[])
+        ORDER BY user_id, lesson_num
+        """,
+        user_ids,
+    )
+    progress: dict[int, list[tuple[int, str]]] = {}
+    for row in rows or []:
+        progress.setdefault(row["user_id"], []).append((row["lesson_num"], row["hw_status"]))
+    return progress
+
+
+async def _collect_last_payments(users: list[dict]) -> dict[int, dict]:
+    results: dict[int, dict] = {}
+    for user in users:
+        email = (user.get("email") or "").strip()
+        phone = (user.get("phone") or "").strip()
+        at_user = (user.get("at_user_id") or "").strip()
+
+        conditions: list[str] = []
+        params: list[Any] = []
+        idx = 1
+        if email:
+            conditions.append(f"LOWER(email) = LOWER(${idx})")
+            params.append(email)
+            idx += 1
+        if phone:
+            conditions.append(f"phone = ${idx}")
+            params.append(phone)
+            idx += 1
+        if at_user:
+            conditions.append(f"at_user_id = ${idx}")
+            params.append(at_user)
+            idx += 1
+
+        if not conditions:
+            continue
+
+        sql = (
+            "SELECT status, paid_at, access_until FROM payments WHERE "
+            + " OR ".join(conditions)
+            + " ORDER BY paid_at DESC NULLS LAST, created_at DESC, id DESC LIMIT 1"
+        )
+        row = await fetchrow(sql, *params)
+        if row:
+            results[user["id"]] = dict(row)
+    return results
+
+
+def _format_payment_line(payment: dict | None) -> str:
+    if not payment:
+        return "—"
+    status = html.escape(payment.get("status") or "—")
+    paid_at_text = _format_datetime_safe(payment.get("paid_at"))
+    access_text = _format_datetime_safe(payment.get("access_until"))
+    details = []
+    if paid_at_text != "—":
+        details.append(paid_at_text)
+    if access_text != "—" and access_text != paid_at_text:
+        details.append(f"доступ до {access_text}")
+    if details:
+        return f"{status} ({', '.join(details)})"
+    return status
+
+
+def _admin_user_button_label(user: dict) -> str:
+    base = _admin_user_display_name(user)
+    username = (user.get("username") or "").strip()
+    fallback = str(user.get("tg_user_id") or user.get("id"))
+    pieces = [piece for piece in [base if base != "—" else "", f"@{username}" if username else "", fallback] if piece]
+    label = " ".join(dict.fromkeys(pieces)) or fallback
+    text = f"#{user['id']} · {label}"
+    if len(text) > 60:
+        return text[:57] + "…"
+    return text
+
+
+def _admin_user_id_from_button(text: str, mapping: dict[str, int]) -> int | None:
+    if not text:
+        return None
+    cleaned = text.strip()
+    if cleaned in mapping:
+        return mapping[cleaned]
+    for key, value in mapping.items():
+        if key.strip() == cleaned:
+            return value
+    if cleaned.startswith("#"):
+        digits = "".join(ch for ch in cleaned if ch.isdigit())
+        if digits:
+            try:
+                return int(digits)
+            except ValueError:
+                return None
+    return None
+
+
+async def _fetch_users_page(segment: str, page: int) -> tuple[list[dict], int]:
+    condition = _ADMIN_USER_SEGMENT_CONDITIONS.get(segment)
+    if not condition:
+        return [], 0
+
+    limit = _ADMIN_USERS_PAGE_SIZE
+    offset = max(0, (page - 1) * limit)
+
+    rows = await fetch(
+        f"""
+        SELECT id, tg_user_id, username, full_name, name, email, phone, at_user_id,
+               status, access_until, last_activity_at, joined_club_at, created_at
+        FROM users
+        WHERE {condition}
+        ORDER BY created_at DESC
+        LIMIT $1 OFFSET $2
+        """,
+        limit,
+        offset,
+    )
+
+    count_row = await fetchrow(f"SELECT COUNT(*) AS count FROM users WHERE {condition}")
+    total = count_row["count"] if count_row else 0
+    return [dict(row) for row in rows] if rows else [], total
+
+
+async def _fetch_user_by_id(user_id: int) -> dict | None:
+    row = await fetchrow("SELECT * FROM users WHERE id=$1", user_id)
+    return dict(row) if row else None
+
+
+async def _show_admin_users_list(
+    message: types.Message,
+    state: FSMContext,
+    *,
+    segment: str,
+    page: int,
+    notice: str | None = None,
+) -> None:
+    page = max(1, page)
+    users, total = await _fetch_users_page(segment, page)
+    total_pages = max(1, math.ceil(total / _ADMIN_USERS_PAGE_SIZE)) if total else 1
+
+    if page > total_pages:
+        page = total_pages
+        users, total = await _fetch_users_page(segment, page)
+
+    progress_map = await _collect_progress_map([user["id"] for user in users])
+    payments_map = await _collect_last_payments(users)
+    offset = (page - 1) * _ADMIN_USERS_PAGE_SIZE
+
+    lines: list[str] = []
+    if notice:
+        lines.append(f"<b>{html.escape(notice)}</b>")
+    lines.append(
+        f"<b>Сегмент: {_admin_user_segment_label(segment)}</b> — страница {page} из {total_pages}"
+        f"\nВсего пользователей: {total}"
+    )
+
+    if not users:
+        lines.append("Пока нет пользователей в этом сегменте.")
+    else:
+        for idx, user in enumerate(users, start=1 + offset):
+            display_name = html.escape(_admin_user_display_name(user))
+            username_text = html.escape(_admin_user_username(user))
+            tg_id = html.escape(str(user.get("tg_user_id") or "—"))
+            status_value = user.get("status") or "—"
+            status_title = _PROFILE_STATUS_TITLES.get(status_value, status_value)
+            access_line = _admin_user_access_line(user)
+            progress_summary = _admin_user_progress_summary(progress_map.get(user["id"]))
+            payment_line = _format_payment_line(payments_map.get(user["id"]))
+
+            lines.append(
+                "\n".join(
+                    [
+                        f"{idx}. {display_name} — {username_text}",
+                        f"ID: <code>{tg_id}</code>",
+                        f"Статус: {html.escape(status_title)} ({html.escape(status_value)})",
+                        f"Доступ до: {access_line}",
+                        f"Прогресс: {progress_summary}",
+                        f"Платёж: {payment_line}",
+                    ]
+                )
+            )
+
+    text = "\n\n".join(lines)
+    button_labels = [_admin_user_button_label(user) for user in users]
+    keyboard = admin_users_pagination_keyboard(
+        button_labels,
+        has_prev=page > 1,
+        has_next=page < total_pages,
+    )
+
+    await message.answer(text, reply_markup=keyboard, disable_web_page_preview=True)
+    await state.set_state(AdminUserStates.browsing_users)
+    await state.update_data(
+        segment=segment,
+        page=page,
+        total_pages=total_pages,
+        page_users={label: user["id"] for label, user in zip(button_labels, users)},
+        selected_user_id=None,
+    )
+
+
+async def _show_admin_user_card(
+    message: types.Message,
+    state: FSMContext,
+    *,
+    user_id: int,
+    notice: str | None = None,
+) -> None:
+    user = await _fetch_user_by_id(user_id)
+    if not user:
+        await message.answer("Пользователь не найден или уже удалён.")
+        data = await state.get_data()
+        segment = data.get("segment")
+        page = data.get("page", 1)
+        if segment:
+            await _show_admin_users_list(message, state, segment=segment, page=page)
+        else:
+            await state.clear()
+        return
+
+    progress_map = await _collect_progress_map([user_id])
+    payments_map = await _collect_last_payments([user])
+    progress_summary = _admin_user_progress_summary(progress_map.get(user_id))
+    payment_line = _format_payment_line(payments_map.get(user_id))
+    access_line = _admin_user_access_line(user)
+
+    status_value = user.get("status") or "—"
+    status_title = _PROFILE_STATUS_TITLES.get(status_value, status_value)
+    username_text = _admin_user_username(user)
+    name_line = _admin_user_display_name(user)
+    full_name = (user.get("full_name") or "").strip()
+    last_activity = _format_datetime_safe(user.get("last_activity_at"))
+    joined_at = _format_datetime_safe(user.get("joined_club_at"))
+    utm_parts = [user.get("utm_source"), user.get("utm_medium"), user.get("utm_campaign")]
+    utm_line = "/".join(filter(None, [part or "" for part in utm_parts])) or "—"
+
+    lines: list[str] = []
+    if notice:
+        lines.append(f"<b>{html.escape(notice)}</b>")
+    lines.append(f"<b>Пользователь #{user['id']}</b>")
+    lines.append(f"Имя: {html.escape(name_line)}")
+    if full_name and full_name != name_line:
+        lines.append(f"ФИО: {html.escape(full_name)}")
+    lines.append(
+        f"Telegram: <code>{html.escape(str(user.get('tg_user_id') or '—'))}</code> {html.escape(username_text)}"
+    )
+    lines.append(f"Статус: {html.escape(status_title)} ({html.escape(status_value)})")
+    lines.append(f"Доступ до: {access_line}")
+    lines.append(f"Прогресс: {progress_summary}")
+    lines.append(f"Последний платёж: {payment_line}")
+    lines.append(f"Email: {html.escape(user.get('email') or '—')}")
+    lines.append(f"Телефон: {html.escape(user.get('phone') or '—')}")
+    lines.append(f"AT ID: {html.escape(user.get('at_user_id') or '—')}")
+    lines.append(f"UTM: {html.escape(utm_line)}")
+    lines.append(f"Присоединился: {joined_at}")
+    lines.append(f"Активность: {last_activity}")
+
+    text = "\n".join(lines)
+    await message.answer(text, reply_markup=admin_user_card_keyboard(), disable_web_page_preview=True)
+    await state.set_state(AdminUserStates.viewing_user)
+    await state.update_data(selected_user_id=user_id)
 
 _TEMPLATE_DELETE_PREFIX = "🗑️ "
 _ONBOARDING_EDIT_PREFIX = "✏️ Шаг "
@@ -1544,7 +1931,7 @@ async def send_admin_menu(
     admin_text = (
         "<b>Админ-панель</b>\n\n"
         "Здесь собраны основные инструменты:\n"
-        "• 👥 Пользователи — подсказки по поиску и настройке доступа.\n"
+        "• 👥 Пользователи — сегменты, карточки и управление доступом.\n"
         "• 📢 Рассылка — как отправлять сообщения сегментам.\n"
         "• 🧾 Контент и тексты — редактирование сообщений бота без команд.\n"
         "• 📊 Статистика — краткие цифры по базе.\n"
@@ -3314,19 +3701,225 @@ async def admin_onboarding_delete_step(message: types.Message, state: FSMContext
 
 
 @router.message(F.text == ADMIN_USERS_BUTTON)
-async def admin_users_help(message: types.Message):
+async def admin_users_menu_entry(message: types.Message, state: FSMContext):
     if not is_admin_id(message.from_user.id):
         return
-    text = (
+    await _reset_state_if_needed(state)
+    await state.set_state(AdminUserStates.choosing_segment)
+    await message.answer(
         "<b>👥 Пользователи</b>\n\n"
-        "Коротко о командах:\n"
-        "• /admin user <code>username или tg_id</code> — посмотреть профиль и статусы.\n"
-        "• /admin set_paid <code>username</code> [days или YYYY-MM-DD] — продлить доступ.\n"
-        "• /admin bind <code>username или tg_id</code> email=<code>email</code> phone=<code>phone</code> — обновить контакты.\n"
-        "• /admin access <code>username</code> [revoke или status] — выдать или отозвать доступ.\n\n"
-        "Подсказка: команды можно копировать из этого сообщения и заменять параметры своими данными."
+        "Выберите сегмент, чтобы посмотреть список участниц и управлять доступом.",
+        reply_markup=admin_users_segments_keyboard(),
+        disable_web_page_preview=True,
     )
-    await message.answer(text, reply_markup=admin_main_keyboard(), disable_web_page_preview=True)
+
+
+@router.message(AdminUserStates.choosing_segment, F.text.func(lambda text: _admin_user_segment_from_text(text) is not None))
+async def admin_users_choose_segment(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+    segment = _admin_user_segment_from_text(message.text)
+    if not segment:
+        return
+    await _show_admin_users_list(message, state, segment=segment, page=1)
+
+
+@router.message(AdminUserStates.browsing_users, F.text == ADMIN_USERS_PAGE_PREV)
+async def admin_users_prev_page(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+    data = await state.get_data()
+    segment = data.get("segment")
+    if not segment:
+        await message.answer("Сначала выбери сегмент.")
+        return
+    current_page = max(1, int(data.get("page", 1)))
+    await _show_admin_users_list(message, state, segment=segment, page=max(1, current_page - 1))
+
+
+@router.message(AdminUserStates.browsing_users, F.text == ADMIN_USERS_PAGE_NEXT)
+async def admin_users_next_page(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+    data = await state.get_data()
+    segment = data.get("segment")
+    if not segment:
+        await message.answer("Сначала выбери сегмент.")
+        return
+    current_page = max(1, int(data.get("page", 1)))
+    total_pages = max(1, int(data.get("total_pages", current_page)))
+    next_page = current_page + 1 if current_page < total_pages else total_pages
+    await _show_admin_users_list(message, state, segment=segment, page=next_page)
+
+
+@router.message(AdminUserStates.browsing_users, F.text.func(lambda text: bool(text)))
+async def admin_users_open_card(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+    data = await state.get_data()
+    mapping = data.get("page_users") or {}
+    user_id = _admin_user_id_from_button(message.text, mapping)
+    if not user_id:
+        raise SkipHandler()
+    await _show_admin_user_card(message, state, user_id=user_id)
+
+
+@router.message(AdminUserStates.viewing_user, F.text == ADMIN_USERS_BACK_TO_LIST)
+@router.message(AdminUserStates.waiting_contacts, F.text == ADMIN_USERS_BACK_TO_LIST)
+async def admin_users_back_to_list(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+    data = await state.get_data()
+    segment = data.get("segment")
+    page = data.get("page", 1)
+    if not segment:
+        await admin_users_menu_entry(message, state)
+        return
+    await _show_admin_users_list(message, state, segment=segment, page=int(page))
+
+
+@router.message(AdminUserStates.browsing_users, F.text == ADMIN_USERS_BACK_TO_SEGMENTS)
+@router.message(AdminUserStates.viewing_user, F.text == ADMIN_USERS_BACK_TO_SEGMENTS)
+@router.message(AdminUserStates.waiting_contacts, F.text == ADMIN_USERS_BACK_TO_SEGMENTS)
+async def admin_users_back_to_segments(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+    await state.set_state(AdminUserStates.choosing_segment)
+    await message.answer(
+        "Выбери сегмент, чтобы посмотреть список.",
+        reply_markup=admin_users_segments_keyboard(),
+        disable_web_page_preview=True,
+    )
+
+
+@router.message(AdminUserStates.viewing_user, F.text == ADMIN_USERS_GRANT_ACCESS)
+@router.message(AdminUserStates.waiting_contacts, F.text == ADMIN_USERS_GRANT_ACCESS)
+async def admin_users_grant_access(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+    data = await state.get_data()
+    user_id = data.get("selected_user_id")
+    if not user_id:
+        await message.answer("Не удалось определить пользователя. Вернись к списку и выбери карточку заново.")
+        return
+    access_until = datetime(2030, 1, 1, tzinfo=timezone.utc)
+    await execute(
+        """UPDATE users SET status='member_active', access_until=$2,
+                  joined_club_at=COALESCE(joined_club_at, NOW()), updated_at=NOW()
+           WHERE id=$1""",
+        user_id,
+        access_until,
+    )
+    await log_admin_action(
+        message.from_user.id,
+        "set_paid",
+        {"user_id": user_id, "access_until": access_until.isoformat(), "source": "menu"},
+    )
+    await _show_admin_user_card(message, state, user_id=user_id, notice="Доступ выдан ✅")
+
+
+@router.message(AdminUserStates.viewing_user, F.text == ADMIN_USERS_REVOKE_ACCESS)
+@router.message(AdminUserStates.waiting_contacts, F.text == ADMIN_USERS_REVOKE_ACCESS)
+async def admin_users_revoke_access(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+    data = await state.get_data()
+    user_id = data.get("selected_user_id")
+    if not user_id:
+        await message.answer("Не удалось определить пользователя. Вернись к списку и выбери карточку заново.")
+        return
+    await execute(
+        "UPDATE users SET status='member_expired', access_until=NULL, updated_at=NOW() WHERE id=$1",
+        user_id,
+    )
+    await log_admin_action(
+        message.from_user.id,
+        "revoke_access",
+        {"user_id": user_id, "source": "menu"},
+    )
+    await _show_admin_user_card(message, state, user_id=user_id, notice="Доступ отозван")
+
+
+@router.message(AdminUserStates.viewing_user, F.text == ADMIN_USERS_UPDATE_CONTACTS)
+@router.message(AdminUserStates.waiting_contacts, F.text == ADMIN_USERS_UPDATE_CONTACTS)
+async def admin_users_prompt_contacts(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+    data = await state.get_data()
+    if not data.get("selected_user_id"):
+        await message.answer("Выбери пользователя в списке, чтобы обновить контакты.")
+        return
+    await state.set_state(AdminUserStates.waiting_contacts)
+    await message.answer(
+        "Пришли новые контакты в формате <code>email=user@example.com phone=+7999...</code>."
+        " Можно указать только один из параметров.",
+        reply_markup=admin_user_card_keyboard(),
+        disable_web_page_preview=True,
+    )
+
+
+@router.message(
+    AdminUserStates.waiting_contacts,
+    F.text.len() > 0,
+)
+async def admin_users_update_contacts(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        await state.clear()
+        return
+    data = await state.get_data()
+    user_id = data.get("selected_user_id")
+    if not user_id:
+        await admin_users_menu_entry(message, state)
+        return
+    raw = (message.text or "").replace("\n", " ")
+    pairs = [chunk.strip() for chunk in raw.split() if chunk.strip()]
+    kv: dict[str, str] = {}
+    for pair in pairs:
+        if "=" not in pair:
+            continue
+        key, value = pair.split("=", 1)
+        kv[key.strip().lower()] = value.strip()
+
+    email = kv.get("email")
+    phone = kv.get("phone")
+    updates: list[str] = []
+    params: list[Any] = [user_id]
+    idx = 2
+
+    if email:
+        if not validate_email(email):
+            await message.answer("email невалиден. Попробуй снова или вернись к карточке.")
+            return
+        updates.append(f"email=${idx}")
+        params.append(email)
+        idx += 1
+
+    normalized_phone: str | None = None
+
+    if phone:
+        normalized_phone = normalize_phone(phone)
+        if not validate_phone(normalized_phone):
+            await message.answer("phone невалиден. Попробуй снова или вернись к карточке.")
+            return
+        updates.append(f"phone=${idx}")
+        params.append(normalized_phone)
+        idx += 1
+
+    if not updates:
+        await message.answer("Не нашла данных для обновления. Укажи email=... и/или phone=...")
+        return
+
+    updates.append("updated_at=NOW()")
+    sql = f"UPDATE users SET {', '.join(updates)} WHERE id=$1"
+    await execute(sql, *params)
+
+    await log_admin_action(
+        message.from_user.id,
+        "bind_contacts",
+        {"user_id": user_id, "email": email, "phone": normalized_phone or phone, "source": "menu"},
+    )
+
+    await _show_admin_user_card(message, state, user_id=user_id, notice="Контакты обновлены")
 
 
 @router.message(F.text == ADMIN_BROADCAST_BUTTON)

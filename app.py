@@ -225,7 +225,6 @@ from db import (
     close_db,
     fetchrow,
     fetch,
-    fetchval,
     execute,
     is_db_connected,
 )  # базовые хелперы БД
@@ -595,7 +594,7 @@ async def admin_stats(secret: str = Query(...)):
         """)
 
         # Пользователи, завершившие все 4 урока
-        done4_total = await fetchval("""
+        done4_row = await fetchrow("""
             SELECT COUNT(*) AS c
             FROM (
                 SELECT user_id
@@ -623,7 +622,7 @@ async def admin_stats(secret: str = Query(...)):
                 "member_expired": (expired or {}).get("c", 0),
             },
             "funnel": {
-                "completed_4of4": done4_total or 0,
+                "completed_4of4": (done4_row or {}).get("c", 0),
                 "lesson_stats": lesson_stats or [],
             },
             "payments": payment_stats or [],
