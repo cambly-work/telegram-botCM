@@ -86,6 +86,30 @@
    uvicorn app:app --reload
    ```
 
+## Ручное применение миграции напоминаний
+
+Для продакшн-базы важно убедиться, что у таблицы `form_sessions` есть поля
+`last_reminder_at` и `reminder_count`. Их добавляет скрипт
+`migrations/20240703_form_sessions_form_slug.sql`. Минимальный набор команд для
+ручного прогона:
+
+```sql
+ALTER TABLE form_sessions
+    ADD COLUMN IF NOT EXISTS last_reminder_at TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS reminder_count INT DEFAULT 0;
+
+UPDATE form_sessions
+SET reminder_count = COALESCE(reminder_count, 0);
+```
+
+Проверить наличие колонок можно запросом:
+
+```sql
+SELECT column_name
+FROM information_schema.columns
+WHERE table_name = 'form_sessions';
+```
+
 ## Обновление и деплой
 
 ```bash
