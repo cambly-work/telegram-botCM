@@ -89,6 +89,7 @@ from keyboards import (
     ADMIN_STATS_BUTTON,
     ADMIN_DEBUG_BUTTON,
     ADMIN_SETTINGS_BUTTON,
+    ADMIN_PAYMENTS_BUTTON,
     admin_users_segments_keyboard,
     admin_users_pagination_keyboard,
     admin_user_card_keyboard,
@@ -102,6 +103,14 @@ from keyboards import (
     ADMIN_USERS_GRANT_ACCESS,
     ADMIN_USERS_REVOKE_ACCESS,
     ADMIN_USERS_UPDATE_CONTACTS,
+    admin_payments_keyboard,
+    ADMIN_PAYMENTS_OPEN_WINDOW,
+    ADMIN_PAYMENTS_CLOSE_WINDOW,
+    ADMIN_PAYMENTS_SHOW_LATEST,
+    ADMIN_PAYMENTS_CONFIRM_ACCESS,
+    ADMIN_PAYMENTS_REVOKE_ACCESS,
+    ADMIN_PAYMENTS_MARK_PAID,
+    ADMIN_PAYMENTS_MARK_FAILED,
 )
 # ──────────────────────────────────────────────────────────────────────────────
 # Логгер
@@ -646,6 +655,12 @@ class AdminUserStates(StatesGroup):
     browsing_users = State()
     viewing_user = State()
     waiting_contacts = State()
+
+
+class AdminPaymentsStates(StatesGroup):
+    waiting_access_user = State()
+    waiting_revoke_user = State()
+    waiting_payment_review = State()
 # ──────────────────────────────────────────────────────────────────────────────
 # Улучшенные клавиатуры
 # ──────────────────────────────────────────────────────────────────────────────
@@ -659,12 +674,14 @@ _MENU_SECTION_PROMPTS: dict[str, tuple[str, str]] = {
 
 _ADMIN_SETTINGS_DEFAULTS: dict[str, bool] = {
     "payments_open": True,
+    "payments_manual_review": False,
     "show_weekly_materials": True,
     "show_schedule": True,
 }
 
 _ADMIN_SETTINGS_LABELS: dict[str, str] = {
     "payments_open": "Окно оплаты",
+    "payments_manual_review": "Ручная проверка оплат",
     "show_weekly_materials": "Материалы недели",
     "show_schedule": "Расписание",
 }
@@ -706,6 +723,7 @@ _ADMIN_TEXT_GROUPS: dict[str, list[tuple[str, str]]] = {
     "💳 Оплата и поддержка": [
         ("Окно «Оплата»", "menu.pay"),
         ("Оплата закрыта", "menu.pay.closed"),
+        ("Комментарий о проверке оплаты", "menu.pay.manual_review"),
         ("Окно «Поддержка»", "menu.support"),
     ],
 }
@@ -923,6 +941,118 @@ def _format_payment_line(payment: dict | None) -> str:
     if details:
         return f"{status} ({', '.join(details)})"
     return status
+
+
+async def _fetch_recent_payments(limit: int = 5) -> list[dict]:
+    rows = await fetch(
+        """
+        SELECT id, order_id, status, email, phone, paid_at, created_at, access_until
+          FROM payments
+         ORDER BY paid_at DESC NULLS LAST, created_at DESC, id DESC
+         LIMIT $1
+        """,
+        limit,
+    )
+    return [dict(row) for row in rows or []]
+
+
+def _format_admin_payment_entry(payment: dict) -> str:
+    order_id = html.escape(payment.get("order_id") or f"#{payment.get('id')}")
+    status = html.escape(payment.get("status") or "—")
+    paid_at = _format_datetime_safe(payment.get("paid_at") or payment.get("created_at"))
+    contact_bits = []
+    email = payment.get("email")
+    phone = payment.get("phone")
+    if email:
+        contact_bits.append(html.escape(email))
+    if phone:
+        contact_bits.append(html.escape(phone))
+    contacts = ", ".join(contact_bits) if contact_bits else "контакты не указаны"
+    return f"• <code>{order_id}</code> — {status} ({paid_at})\n  {contacts}"
+
+
+async def _admin_set_member_active(user_id: int, access_until: Optional[datetime]) -> None:
+    await execute(
+        """
+        UPDATE users
+           SET status='member_active',
+               access_until=$2,
+               joined_club_at=COALESCE(joined_club_at, NOW()),
+               updated_at=NOW()
+         WHERE id=$1
+        """,
+        user_id,
+        access_until,
+    )
+
+
+async def _admin_set_member_expired(user_id: int) -> None:
+    await execute(
+        "UPDATE users SET status='member_expired', access_until=NULL, updated_at=NOW() WHERE id=$1",
+        user_id,
+    )
+
+
+async def _admin_find_user(identifier: str) -> Optional[dict]:
+    normalized = (identifier or "").strip()
+    if not normalized:
+        return None
+
+    if normalized.startswith("@"):
+        normalized = normalized[1:]
+
+    if normalized.isdigit():
+        tg_id = int(normalized)
+        row = await fetchrow("SELECT * FROM users WHERE tg_user_id=$1", tg_id)
+        if row:
+            return dict(row)
+        row = await fetchrow("SELECT * FROM users WHERE id=$1", tg_id)
+        if row:
+            return dict(row)
+
+    if normalized:
+        row = await fetchrow("SELECT * FROM users WHERE LOWER(username)=LOWER($1)", normalized)
+        if row:
+            return dict(row)
+
+    return None
+
+
+def _parse_admin_access_token(token: str | None) -> tuple[Optional[datetime], bool]:
+    if not token:
+        return None, False
+
+    normalized = token.strip()
+    if not normalized:
+        return None, False
+
+    lowered = normalized.lower()
+    if lowered in {"permanent", "forever", "навсегда", "navsegda", "∞"}:
+        return None, True
+
+    if lowered.startswith("+") and lowered[1:].isdigit():
+        days = int(lowered[1:])
+        return now_utc() + timedelta(days=days), True
+
+    if lowered.isdigit():
+        days = int(lowered)
+        return now_utc() + timedelta(days=days), True
+
+    normalized_iso = normalized.replace("Z", "+00:00")
+    for fmt in (None, "%Y-%m-%d", "%d.%m.%Y"):
+        try:
+            if fmt is None:
+                dt = datetime.fromisoformat(normalized_iso)
+            else:
+                dt = datetime.strptime(normalized, fmt)
+        except ValueError:
+            continue
+        else:
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt, True
+
+    return None, False
 
 
 def _admin_user_button_label(user: dict) -> str:
@@ -1833,9 +1963,8 @@ async def send_pay_section(
         )
         return
 
-    payments_open = await get_bool_setting(
-        "payments_open", _ADMIN_SETTINGS_DEFAULTS["payments_open"]
-    )
+    flags = await get_menu_flags()
+    payments_open = flags.get("payments_open", True)
     if not payments_open:
         closed_text = await get_content(
             "menu.pay.closed",
@@ -1866,6 +1995,17 @@ async def send_pay_section(
         checkout_url=url,
         CHECKOUT_URL=url,
     )
+
+    if flags.get("payments_manual_review", False):
+        manual_hint = await get_content(
+            "menu.pay.manual_review",
+            (
+                "Платежи проходят ручную проверку. "
+                "Если вы уже оплатили, команда подтвердит доступ и пришлёт уведомление."
+            ),
+        )
+        if manual_hint:
+            pay_text = f"{pay_text}\n\n{manual_hint.strip()}"
 
     await answer_with_main_menu(
         message,
@@ -1955,6 +2095,7 @@ async def send_admin_settings(
     text = (
         "Тонкие настройки бота\n\n"
         f"Окно оплаты: {'открыто' if flags.get('payments_open', True) else 'закрыто'}\n"
+        f"Ручная проверка оплат: {'включена' if flags.get('payments_manual_review', False) else 'выключена'}\n"
         f"Материалы недели: {'доступны' if flags.get('show_weekly_materials', True) else 'скрыты'}\n"
         f"Расписание: {'показывается' if flags.get('show_schedule', True) else 'скрыто'}\n\n"
         "Используй кнопки ниже, чтобы включать и выключать опции или перейти к редактору контента."
@@ -1976,6 +2117,49 @@ async def send_admin_behavior_menu(message: types.Message) -> None:
     await message.answer(
         text,
         reply_markup=admin_behavior_keyboard(),
+        disable_web_page_preview=True,
+    )
+
+
+async def send_admin_payments_overview(message: types.Message) -> None:
+    flags = await get_menu_flags()
+    payments_open = flags.get("payments_open", True)
+    manual_review = flags.get("payments_manual_review", False)
+    payments = await _fetch_recent_payments(limit=5)
+
+    status_line = "открыто" if payments_open else "закрыто"
+    review_line = "включена" if manual_review else "выключена"
+
+    lines = [
+        "<b>💳 Управление оплатами</b>",
+        "",
+        f"Окно оплаты: <b>{status_line}</b>",
+        f"Ручная проверка: <b>{review_line}</b>",
+    ]
+
+    if payments:
+        lines.append("\n<b>Последние платежи:</b>")
+        for payment in payments:
+            lines.append(_format_admin_payment_entry(payment))
+    else:
+        lines.append("\nПока нет записей о платежах.")
+
+    lines.extend(
+        [
+            "",
+            "<i>Подсказки:</i>",
+            "• Кнопки 🔓/🔒 открывают или закрывают окно оплаты.",
+            "• «🧾 Последние платежи» обновляет список ниже.",
+            "• «✅ Подтвердить доступ» и «🚫 Приостановить доступ» требуют @username или ID участницы.",
+            "• Кнопки отметки платежа добавят отметку о ручной проверке в карточку платежа.",
+        ]
+    )
+
+    keyboard = admin_payments_keyboard(payments_open=payments_open)
+    await message.answer(
+        "\n".join(lines),
+        reply_markup=keyboard,
+        parse_mode=ParseMode.HTML,
         disable_web_page_preview=True,
     )
 
@@ -3382,6 +3566,18 @@ async def cancel_handler(message: types.Message, state: FSMContext):
         await send_admin_broadcast_menu(message)
         return
 
+    if (
+        current_state
+        in {
+            AdminPaymentsStates.waiting_access_user.state,
+            AdminPaymentsStates.waiting_revoke_user.state,
+            AdminPaymentsStates.waiting_payment_review.state,
+        }
+        and is_admin
+    ):
+        await send_admin_payments_overview(message)
+        return
+
     kb = await build_menu_keyboard(user=user, is_admin=is_admin, section="root")
     await message.answer("Действие отменено. Возвращаюсь в главное меню...", reply_markup=kb)
 
@@ -4566,6 +4762,228 @@ async def admin_settings_menu(message: types.Message, state: FSMContext):
         return
     await _reset_state_if_needed(state)
     await send_admin_settings(message)
+
+
+@router.message(F.text == ADMIN_PAYMENTS_BUTTON)
+async def admin_payments_menu(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+    await _reset_state_if_needed(state)
+    await send_admin_payments_overview(message)
+
+
+@router.message(F.text.in_({ADMIN_PAYMENTS_OPEN_WINDOW, ADMIN_PAYMENTS_CLOSE_WINDOW}))
+async def admin_payments_toggle_window(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+    await _reset_state_if_needed(state)
+
+    new_value = message.text == ADMIN_PAYMENTS_OPEN_WINDOW
+    await set_bool_setting("payments_open", new_value)
+    await log_admin_action(
+        message.from_user.id,
+        "payments_toggle_window",
+        {"payments_open": new_value},
+    )
+    await send_admin_payments_overview(message)
+
+
+@router.message(F.text == ADMIN_PAYMENTS_SHOW_LATEST)
+async def admin_payments_show_latest(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+    await _reset_state_if_needed(state)
+    await send_admin_payments_overview(message)
+
+
+@router.message(F.text == ADMIN_PAYMENTS_CONFIRM_ACCESS)
+async def admin_payments_prompt_grant(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+    await _reset_state_if_needed(state)
+    await state.set_state(AdminPaymentsStates.waiting_access_user)
+    await message.answer(
+        "Отправь @username или ID участницы и срок доступа.\n"
+        "Примеры: <code>@username 30</code>, <code>123456789 2024-12-31</code>,"
+        " <code>@username forever</code>.",
+        parse_mode=ParseMode.HTML,
+    )
+
+
+@router.message(F.text == ADMIN_PAYMENTS_REVOKE_ACCESS)
+async def admin_payments_prompt_revoke(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+    await _reset_state_if_needed(state)
+    await state.set_state(AdminPaymentsStates.waiting_revoke_user)
+    await message.answer(
+        "Отправь @username или ID участницы, чтобы приостановить доступ.",
+    )
+
+
+@router.message(F.text.in_({ADMIN_PAYMENTS_MARK_PAID, ADMIN_PAYMENTS_MARK_FAILED}))
+async def admin_payments_prompt_review(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+    await _reset_state_if_needed(state)
+
+    status = "paid" if message.text == ADMIN_PAYMENTS_MARK_PAID else "failed"
+    await state.set_state(AdminPaymentsStates.waiting_payment_review)
+    await state.update_data(review_status=status)
+    await message.answer(
+        "Отправь order_id или ID платежа. Можно добавить комментарий через пробел.",
+    )
+
+
+@router.message(AdminPaymentsStates.waiting_access_user, F.text)
+async def admin_payments_receive_access(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+
+    text = (message.text or "").strip()
+    if not text:
+        await message.answer("Нужны данные: отправь @username или ID участницы.")
+        return
+
+    parts = text.split()
+    target = parts[0]
+    user = await _admin_find_user(target)
+    if not user:
+        await message.answer("Не нашла такую участницу. Проверь ник или ID и попробуй снова.")
+        return
+
+    access_until, consumed = _parse_admin_access_token(parts[1] if len(parts) > 1 else None)
+    comment_tokens = parts[2:] if consumed else parts[1:]
+    comment = " ".join(comment_tokens).strip() or None
+
+    if access_until is None and not consumed:
+        # По умолчанию продлеваем на 30 дней
+        access_until = now_utc() + timedelta(days=30)
+
+    await _admin_set_member_active(user["id"], access_until)
+    await log_admin_action(
+        message.from_user.id,
+        "payments_manual_grant",
+        {
+            "user_id": user["id"],
+            "access_until": access_until.isoformat() if access_until else None,
+            "comment": comment,
+        },
+    )
+
+    await state.clear()
+
+    access_text = "бессрочно" if access_until is None else _format_datetime_safe(access_until)
+    await message.answer(
+        (
+            f"Доступ для {html.escape(_admin_user_display_name(user))} обновлён.\n"
+            f"Статус: активен до {access_text}."
+        ),
+        parse_mode=ParseMode.HTML,
+    )
+    await send_admin_payments_overview(message)
+
+
+@router.message(AdminPaymentsStates.waiting_revoke_user, F.text)
+async def admin_payments_receive_revoke(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+
+    text = (message.text or "").strip()
+    if not text:
+        await message.answer("Отправь @username или ID, чтобы приостановить доступ.")
+        return
+
+    user = await _admin_find_user(text)
+    if not user:
+        await message.answer("Не нашла такую участницу. Проверь данные и попробуй снова.")
+        return
+
+    await _admin_set_member_expired(user["id"])
+    await log_admin_action(
+        message.from_user.id,
+        "payments_manual_revoke",
+        {"user_id": user["id"]},
+    )
+
+    await state.clear()
+
+    await message.answer(
+        f"Доступ для {html.escape(_admin_user_display_name(user))} приостановлен.",
+        parse_mode=ParseMode.HTML,
+    )
+    await send_admin_payments_overview(message)
+
+
+@router.message(AdminPaymentsStates.waiting_payment_review, F.text)
+async def admin_payments_receive_review(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+
+    data = await state.get_data()
+    status = data.get("review_status", "paid")
+
+    text = (message.text or "").strip()
+    if not text:
+        await message.answer("Нужно указать order_id или ID платежа.")
+        return
+
+    parts = text.split(maxsplit=1)
+    identifier = parts[0]
+    comment = parts[1].strip() if len(parts) > 1 else None
+
+    payment_row = None
+    if identifier.isdigit():
+        payment_row = await fetchrow("SELECT * FROM payments WHERE id=$1", int(identifier))
+    if not payment_row:
+        payment_row = await fetchrow("SELECT * FROM payments WHERE order_id=$1", identifier)
+
+    if not payment_row:
+        await message.answer("Платёж не найден. Проверь order_id или ID и попробуй снова.")
+        return
+
+    payment = dict(payment_row)
+    await execute(
+        """
+        UPDATE payments
+           SET status=$2,
+               paid_at = CASE WHEN $2='paid' THEN COALESCE(paid_at, NOW()) ELSE NULL END,
+               raw_payload = COALESCE(raw_payload, '{}'::jsonb)
+                    || jsonb_build_object(
+                        'manual_checked_at', NOW(),
+                        'manual_checked_by', $3,
+                        'manual_status', $2,
+                        'manual_comment', $4
+                    )
+         WHERE id=$1
+        """,
+        payment["id"],
+        status,
+        str(message.from_user.id),
+        comment,
+    )
+
+    await log_admin_action(
+        message.from_user.id,
+        "payments_mark_status",
+        {
+            "payment_id": payment["id"],
+            "order_id": payment.get("order_id"),
+            "status": status,
+            "comment": comment,
+        },
+    )
+
+    await state.clear()
+
+    await message.answer(
+        (
+            f"Платёж <code>{html.escape(payment.get('order_id') or str(payment['id']))}</code>"
+            f" отмечен как {status}."
+        ),
+        parse_mode=ParseMode.HTML,
+    )
+    await send_admin_payments_overview(message)
 
 
 @router.message(F.text == ADMIN_TEXTS_ENTRY)
