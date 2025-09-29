@@ -3831,8 +3831,8 @@ async def test_collect_birthdate(message: types.Message, state: FSMContext):
     name_prompt_template = await get_content(
         "menu.test_name_prompt",
         (
-            "Супер! Как к тебе обращаться?\n\n"
-            "Можно написать короткое имя или ник."
+            "Отлично! Как тебя записать в заявке?\n\n"
+            "Можно указать короткое имя или ник."
         ),
     )
     formatted_birthdate = _format_birthdate(birthdate)
@@ -3895,7 +3895,7 @@ async def test_collect_name(message: types.Message, state: FSMContext):
     thanks_template = await get_content(
         "menu.test_thanks",
         (
-            "Спасибо, {name}! Мы записали твою заявку на тест.\n"
+            "Спасибо, {name}! Мы записали тебя на тестирование.\n"
             "Когда будет готов анализ, администратор напишет в Telegram."
         ),
     )
@@ -3922,7 +3922,7 @@ async def test_collect_name(message: types.Message, state: FSMContext):
     notify_admins = _get_notify_admins()
     if notify_admins:
         card_lines = [
-            "🧪 Новая заявка на тест",
+            "🧪 Новая запись на тестирование",
             f"tg-id: <code>{message.from_user.id}</code>",
             f"Дата рождения: {_format_birthdate(birthdate)}",
             f"Имя: {safe_name if safe_name else '—'}",
