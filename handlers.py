@@ -25,7 +25,7 @@ except ImportError:  # aiogram < 3.13.1 compatibility
 from urllib.parse import parse_qs, urlparse
 from aiogram.dispatcher.middlewares.base import BaseMiddleware
 from db import fetchrow, fetch, execute
-from settings import ADMIN_IDS
+from settings import ADMIN_IDS, YOOMONEY_CHECKOUT_URL
 from keyboards import (
     main_menu_keyboard,
     info_menu_keyboard,
@@ -2450,7 +2450,11 @@ async def send_pay_section(
     *,
     from_callback: bool = False,
 ) -> None:
-    if not AT_PRODUCT_ID_CLUB:
+    checkout_url = (YOOMONEY_CHECKOUT_URL or "").strip()
+    if not checkout_url and AT_PRODUCT_ID_CLUB:
+        checkout_url = f"https://antitraining.example/checkout/{AT_PRODUCT_ID_CLUB}"
+
+    if not checkout_url:
         await answer_with_main_menu(
             message,
             user,
@@ -2478,7 +2482,6 @@ async def send_pay_section(
         )
         return
 
-    url = f"https://antitraining.example/checkout/{AT_PRODUCT_ID_CLUB}"
     pay_template = await get_content(
         "menu.pay",
         (
@@ -2490,8 +2493,8 @@ async def send_pay_section(
     )
     pay_text = render_content(
         pay_template,
-        checkout_url=url,
-        CHECKOUT_URL=url,
+        checkout_url=checkout_url,
+        CHECKOUT_URL=checkout_url,
     )
 
     if flags.get("payments_manual_review", False):

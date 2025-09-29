@@ -23,7 +23,7 @@ load_dotenv()
 from aiogram import Bot, Dispatcher, types
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
-from settings import ADMIN_IDS
+from settings import ADMIN_IDS, YOOMONEY_WEBHOOK_SECRET
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Конфиг/окружение
@@ -740,10 +740,136 @@ def _normalize_at_payload(data: dict) -> dict:
 
 PAYMENT_STATUS_ALIASES = {
     "paid": "paid",
+    "succeeded": "paid",
+    "success": "paid",
     "renew": "renew",
     "refund": "refund",
     "failed": "failed",
 }
+
+
+def _parse_datetime(value: Any) -> Optional[datetime]:
+    """Parse ISO string, timestamp or datetime into an aware UTC datetime."""
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+
+    if isinstance(value, (int, float)):
+        try:
+            return datetime.fromtimestamp(float(value), tz=timezone.utc)
+        except Exception:
+            return None
+
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return None
+        raw = raw.replace("Z", "+00:00")
+        try:
+            parsed = datetime.fromisoformat(raw)
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+
+    return None
+
+
+def _normalize_yoomoney_payload(payload: dict) -> tuple[str, dict, dict, dict]:
+    """Normalize YooMoney payload into unified structure for persistence."""
+    data = payload or {}
+    obj = data.get("object") or {}
+    metadata = obj.get("metadata") or {}
+
+    event_raw = (
+        data.get("event")
+        or data.get("notification_type")
+        or obj.get("status")
+        or data.get("status")
+        or ""
+    ).strip().lower()
+    if "." in event_raw:
+        event_raw = event_raw.split(".")[-1]
+
+    status_raw = (obj.get("status") or data.get("status") or event_raw).strip().lower()
+    if "." in status_raw:
+        status_raw = status_raw.split(".")[-1]
+
+    email = (metadata.get("email") or obj.get("email") or data.get("email") or "").strip().lower()
+    phone = normalize_phone(metadata.get("phone") or obj.get("phone") or data.get("phone") or "")
+    product_id = str(metadata.get("product_id") or obj.get("description") or data.get("product_id") or "")
+    order_id = str(
+        metadata.get("order_id")
+        or obj.get("id")
+        or obj.get("payment_id")
+        or data.get("id")
+        or ""
+    )
+
+    access_until = (
+        _parse_datetime(metadata.get("access_until"))
+        or _parse_datetime(metadata.get("access_until_ts"))
+        or _parse_datetime(obj.get("access_until"))
+        or _parse_datetime(obj.get("expires_at"))
+        or _parse_datetime(data.get("access_until"))
+    )
+
+    if access_until is None:
+        access_days = metadata.get("access_days") or obj.get("access_days")
+        if access_days not in (None, ""):
+            try:
+                access_until = now_utc() + timedelta(days=int(access_days))
+            except Exception:
+                access_until = None
+
+    amount_info = obj.get("amount") or {}
+    amount_value = str(amount_info.get("value") or "").strip()
+    currency = str(amount_info.get("currency") or "").strip()
+
+    normalized = {
+        "email": email,
+        "phone": phone,
+        "product_id": product_id,
+        "order_id": order_id,
+        "status": status_raw or event_raw,
+        "access_until": access_until,
+        "raw": data,
+        "amount_value": amount_value,
+        "currency": currency,
+    }
+
+    return status_raw or event_raw or "unknown", normalized, metadata, obj
+
+
+async def _find_user_for_yoomoney(metadata: dict, email: str, phone: str) -> Optional[dict]:
+    """Find user using metadata hints or fallback to contacts."""
+    metadata = metadata or {}
+
+    for key in ("user_id", "userId", "uid"):
+        value = metadata.get(key)
+        if value in (None, ""):
+            continue
+        try:
+            user = await fetchrow("SELECT * FROM users WHERE id=$1", int(value))
+        except Exception:
+            user = None
+        if user:
+            return user
+
+    for key in ("tg_user_id", "telegram_id", "telegram_user_id"):
+        value = metadata.get(key)
+        if value in (None, ""):
+            continue
+        try:
+            user = await fetchrow("SELECT * FROM users WHERE tg_user_id=$1", int(value))
+        except Exception:
+            user = None
+        if user:
+            return user
+
+    return await _find_user_by_contacts(email, phone)
 
 
 def _resolve_payment_status(*candidates: Optional[str]) -> str:
@@ -962,6 +1088,163 @@ async def antitraining_webhook(
     # Прочие события
     logger.info("Unhandled AT event: %s for order %s", event, order_id)
     return {"ok": True, "handled_event": event, "user_found": True}
+
+
+@app.post("/webhooks/yoomoney")
+async def yoomoney_webhook(
+    request: Request,
+    x_signature: Optional[str] = Header(default=None, alias="X-YooMoney-Signature"),
+):
+    """Handle YooMoney payment notifications."""
+    body = await request.body()
+    signature_header = x_signature or request.headers.get("X-Content-HMAC-SHA256")
+
+    if YOOMONEY_WEBHOOK_SECRET:
+        if not signature_header:
+            logger.warning("Missing signature for YooMoney webhook")
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="signature required")
+
+        expected = compute_hmac_sha256(YOOMONEY_WEBHOOK_SECRET, body)
+        if not hmac.compare_digest(expected, signature_header.strip().lower()):
+            logger.warning("Invalid signature for YooMoney webhook")
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid signature")
+
+    try:
+        payload = json.loads(body.decode("utf-8"))
+    except Exception as exc:
+        logger.error("Invalid JSON in YooMoney webhook: %s", exc)
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="invalid json") from exc
+
+    status_raw, normalized, metadata, _obj = _normalize_yoomoney_payload(payload)
+    order_id = normalized.get("order_id") or "unknown"
+    logger.info("YooMoney webhook status=%s order=%s", status_raw, order_id)
+
+    try:
+        user_row = await _find_user_for_yoomoney(metadata, normalized["email"], normalized["phone"])
+    except Exception as exc:  # noqa: BLE001 — хотим логировать любые ошибки поиска
+        logger.exception("Failed to locate user for YooMoney order %s: %s", order_id, exc)
+        user_row = None
+
+    await _upsert_payment(
+        normalized,
+        status_raw,
+        at_user_id=(user_row or {}).get("at_user_id"),
+        access_until=normalized.get("access_until"),
+    )
+
+    if not user_row:
+        await notify_admins(
+            (
+                "⚠️ YooMoney: получено уведомление, но пользователь не найден.\n"
+                f"Статус: {status_raw or '—'}\n"
+                f"Email: {normalized['email'] or '—'}, телефон: {normalized['phone'] or '—'}\n"
+                f"Order ID: {order_id}"
+            )
+        )
+        return {"ok": True, "status": status_raw, "user_found": False}
+
+    user_id = user_row["id"]
+    tg_user_id = user_row.get("tg_user_id")
+    access_until = normalized.get("access_until")
+    amount_value = normalized.get("amount_value")
+    currency = normalized.get("currency")
+    amount_label = amount_value or ""
+    if amount_value and currency:
+        amount_label = f"{amount_value} {currency}"
+    elif currency:
+        amount_label = currency
+
+    normalized_status = (status_raw or "").strip().lower()
+    success_statuses = {"paid", "succeeded", "success"}
+    failure_statuses = {"failed", "canceled", "cancelled", "refused", "rejected"}
+
+    if normalized_status in success_statuses:
+        try:
+            await _set_member_active(user_id, access_until)
+            invite = await gen_invite_link()
+            if access_until:
+                access_label = tz_aware_msk(access_until)
+                confirmation = (
+                    "🎉 Оплата получена! Доступ активен до "
+                    f"{access_label}.\n\nТвой инвайт (активен 24ч): {invite}\n\n"
+                    f"Начни отсюда: {WELCOME_POST_URL}"
+                )
+            else:
+                confirmation = (
+                    "🎉 Оплата получена! Доступ активирован.\n\n"
+                    f"Твой инвайт (активен 24ч): {invite}\n\n"
+                    f"Начни отсюда: {WELCOME_POST_URL}"
+                )
+
+            for attempt in range(MAX_RETRIES):
+                try:
+                    await bot.send_message(tg_user_id, confirmation)
+                    break
+                except Exception as exc:
+                    if attempt == MAX_RETRIES - 1:
+                        logger.error("Failed to deliver YooMoney confirmation to %s: %s", tg_user_id, exc)
+                        await notify_admins(
+                            f"⚠️ YooMoney: не удалось отправить подтверждение пользователю {tg_user_id}: {exc}"
+                        )
+                    await asyncio.sleep(RETRY_DELAY * (attempt + 1))
+
+            await notify_admins(
+                (
+                    "✅ YooMoney: успешная оплата.\n"
+                    f"Order ID: {order_id}\n"
+                    f"Сумма: {amount_label or '—'}\n"
+                    f"Пользователь: {tg_user_id} (id={user_id})"
+                )
+            )
+        except Exception as exc:  # noqa: BLE001 — логируем любые ошибки бизнес-логики
+            logger.exception("Error processing YooMoney success for user %s: %s", user_id, exc)
+            await notify_admins(
+                f"❌ YooMoney: ошибка обработки успешной оплаты для пользователя {user_id}: {exc}"
+            )
+
+        return {"ok": True, "status": normalized_status, "user_found": True}
+
+    if normalized_status in failure_statuses:
+        try:
+            await _set_member_expired(user_id)
+            warning = (
+                "❌ Оплата не прошла или была отменена. Доступ к клубу приостановлен.\n"
+                f"Поддержка: {SUPPORT_CONTACT}"
+            )
+            for attempt in range(MAX_RETRIES):
+                try:
+                    await bot.send_message(tg_user_id, warning)
+                    break
+                except Exception as exc:
+                    if attempt == MAX_RETRIES - 1:
+                        logger.error("Failed to deliver YooMoney failure notice to %s: %s", tg_user_id, exc)
+                    await asyncio.sleep(RETRY_DELAY * (attempt + 1))
+
+            await notify_admins(
+                (
+                    "⚠️ YooMoney: платеж отклонён или отменён.\n"
+                    f"Order ID: {order_id}\n"
+                    f"Статус: {normalized_status}\n"
+                    f"Пользователь: {tg_user_id} (id={user_id})"
+                )
+            )
+        except Exception as exc:
+            logger.exception("Error processing YooMoney failure for user %s: %s", user_id, exc)
+            await notify_admins(
+                f"❌ YooMoney: ошибка обработки неуспешной оплаты для пользователя {user_id}: {exc}"
+            )
+
+        return {"ok": True, "status": normalized_status, "user_found": True}
+
+    await notify_admins(
+        (
+            "ℹ️ YooMoney: получен вебхук с нестандартным статусом.\n"
+            f"Order ID: {order_id}\n"
+            f"Статус: {normalized_status or '—'}"
+        )
+    )
+    return {"ok": True, "status": normalized_status, "user_found": True}
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Локальный запуск
