@@ -16,7 +16,12 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.utils.chat_action import ChatActionSender
-from aiogram.exceptions import TelegramRetryAfter, SkipHandler
+from aiogram.exceptions import TelegramRetryAfter
+
+try:
+    from aiogram.exceptions import EventSkip
+except ImportError:  # aiogram < 3.13.1 compatibility
+    from aiogram.dispatcher.event.bases import SkipHandler as EventSkip
 from urllib.parse import parse_qs, urlparse
 from aiogram.dispatcher.middlewares.base import BaseMiddleware
 from db import fetchrow, fetch, execute
@@ -4235,7 +4240,7 @@ async def admin_users_open_card(message: types.Message, state: FSMContext):
     mapping = data.get("page_users") or {}
     user_id = _admin_user_id_from_button(message.text, mapping)
     if not user_id:
-        raise SkipHandler()
+        raise EventSkip()
     await _show_admin_user_card(message, state, user_id=user_id)
 
 
