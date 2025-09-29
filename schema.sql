@@ -160,6 +160,20 @@ CREATE INDEX IF NOT EXISTS idx_form_sessions_user_started
 CREATE INDEX IF NOT EXISTS idx_form_sessions_incomplete
   ON form_sessions(completed_at, started_at);
 
+-- TEST_REQUESTS
+CREATE TABLE IF NOT EXISTS test_requests (
+  id             SERIAL PRIMARY KEY,
+  tg_user_id     BIGINT NOT NULL UNIQUE,
+  user_id        INT REFERENCES users(id) ON DELETE SET NULL,
+  birthdate      DATE NOT NULL,
+  preferred_name TEXT,
+  status         TEXT NOT NULL DEFAULT 'waiting',
+  created_at     TIMESTAMPTZ DEFAULT NOW(),
+  updated_at     TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_test_requests_status ON test_requests(status);
+
 -- BROADCAST_TEMPLATES
 CREATE TABLE IF NOT EXISTS broadcast_templates (
   id         SERIAL PRIMARY KEY,
