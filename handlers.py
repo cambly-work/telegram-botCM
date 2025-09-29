@@ -967,15 +967,17 @@ async def send_about_section(
 ) -> None:
     about_text = await get_content(
         "menu.about",
-        "CODE: Магнетизм — закрытое пространство для тех, кто хочет:\n\n"
-        "- Управлять вниманием, мыслями и эмоциями\n"
-        "- Укрепить уверенность и личный магнетизм\n"
-        "- Изменить сценарии в отношениях и деньгах\n\n"
-        "Внутри тебя ждут:\n"
-        "- Подкасты и практики\n"
-        "- Челленджи и разборы\n"
-        "- Структурная система развития\n\n"
-        "Готова присоединиться? Оформи доступ в меню.",
+        (
+            "CODE: Магнетизм — закрытое пространство для тех, кто хочет:\n\n"
+            "- Управлять вниманием, мыслями и эмоциями\n"
+            "- Укрепить уверенность и личный магнетизм\n"
+            "- Изменить сценарии в отношениях и деньгах\n\n"
+            "Внутри тебя ждут:\n"
+            "- Подкасты и практики\n"
+            "- Челленджи и разборы\n"
+            "- Структурная система развития\n\n"
+            "Готова присоединиться? Оформи доступ в меню."
+        ),
     )
 
     await answer_with_main_menu(
@@ -997,11 +999,13 @@ async def send_faq_section(
 ) -> None:
     faq_text = await get_content(
         "menu.faq",
-        "FAQ.\n\n"
-        "Как получить доступ? — Оформи участие в разделе «Оплата».\n\n"
-        "Как проходят уроки? — Видеоуроки + практики, доступ через меню.\n\n"
-        f"Как задать вопрос? — Кнопка «Вопрос» в уроке или {SUPPORT_CONTACT}.\n\n"
-        "Как продлить доступ? — Раздел «Оплата».",
+        (
+            "FAQ.\n\n"
+            "Как получить доступ? — Оформи участие в разделе «Оплата».\n\n"
+            "Как проходят уроки? — Видеоуроки + практики, доступ через меню.\n\n"
+            f"Как задать вопрос? — Кнопка «Вопрос» в уроке или {SUPPORT_CONTACT}.\n\n"
+            "Как продлить доступ? — Раздел «Оплата»."
+        ),
     )
 
     await answer_with_main_menu(
@@ -1023,13 +1027,15 @@ async def send_rules_section(
 ) -> None:
     rules_text = await get_content(
         "menu.rules",
-        "Правила CODE: Магнетизм.\n\n"
-        "1. Уважение к участникам.\n"
-        "2. Только полезный контент.\n"
-        "3. Без спама и рекламы.\n"
-        "4. Конфиденциальность.\n"
-        "5. Без оскорблений и дискриминации.\n\n"
-        "Нарушение = блокировка доступа.",
+        (
+            "Правила CODE: Магнетизм.\n\n"
+            "1. Уважение к участникам.\n"
+            "2. Только полезный контент.\n"
+            "3. Без спама и рекламы.\n"
+            "4. Конфиденциальность.\n"
+            "5. Без оскорблений и дискриминации.\n\n"
+            "Нарушение = блокировка доступа."
+        ),
     )
 
     await answer_with_main_menu(
@@ -1056,9 +1062,11 @@ async def send_analysis_section(
     default_url = "https://forms.example.com/analysis"
     template = await get_content(
         "menu.analysis",
-        "Персональный разбор.\n\n",
-        "Заполни форму → мы назначим время.\n\n",
-        "{analysis_url}",
+        (
+            "Персональный разбор.\n\n"
+            "Заполни форму → мы назначим время.\n\n"
+            "{analysis_url}"
+        ),
     )
     analysis_text = render_content(
         template,
@@ -1103,9 +1111,11 @@ async def send_test_section(
 
     template = await get_content(
         "menu.test",
-        "Тест: определение уровня.\n\n",
-        "Пройди тест и получи анализ: {test_url}\n\n",
-        "После теста ты получишь анализ, рекомендации и сможешь записаться на разбор.",
+        (
+            "Тест: определение уровня.\n\n"
+            "Пройди тест и получи анализ: {test_url}\n\n"
+            "После теста ты получишь анализ, рекомендации и сможешь записаться на разбор."
+        ),
     )
     default_slug = resolve_form_slug(TEST_FORM_URL, "test")
     test_text = render_content(
@@ -1149,8 +1159,10 @@ async def send_support_section(
 ) -> None:
     support_template = await get_content(
         "menu.support",
-        "Поддержка.\n\n"
-        "Если есть вопросы или сложности — пиши сюда: {support}. Мы отвечаем лично и максимально быстро.",
+        (
+            "Поддержка.\n\n"
+            "Если есть вопросы или сложности — пиши сюда: {support}. Мы отвечаем лично и максимально быстро."
+        ),
     )
     support_text = render_content(
         support_template,
@@ -1274,8 +1286,10 @@ async def send_weekly_materials_section(
     if not user_row or not await is_member(user_row):
         locked_text = await get_content(
             "menu.weekly.locked",
-            "Материалы недели доступны участницам клуба.\n\n"
-            "Оформи доступ в разделе «Оплатить доступ», и бот пришлёт ссылку.",
+            (
+                "Материалы недели доступны участницам клуба.\n\n"
+                "Оформи доступ в разделе «Оплатить доступ», и бот пришлёт ссылку."
+            ),
         )
         await answer_with_main_menu(
             message,
@@ -1289,11 +1303,13 @@ async def send_weekly_materials_section(
 
     weekly_text = await get_content(
         "weekly_materials",
-        "📚 Материалы недели:\n"
-        "• Подкаст: [ссылка]\n"
-        "• Практика: [ссылка]\n"
-        "• Челлендж: [описание]\n"
-        "• Дневник: [шаблон]",
+        (
+            "📚 Материалы недели:\n"
+            "• Подкаст: [ссылка]\n"
+            "• Практика: [ссылка]\n"
+            "• Челлендж: [описание]\n"
+            "• Дневник: [шаблон]"
+        ),
     )
 
     await answer_with_main_menu(
@@ -1336,8 +1352,10 @@ async def send_schedule_section(
     if not user_row or not await is_member(user_row):
         locked_text = await get_content(
             "menu.schedule.locked",
-            "Расписание доступно участницам клуба.\n\n"
-            "Активируй доступ — и бот пришлёт ближайшие эфиры.",
+            (
+                "Расписание доступно участницам клуба.\n\n"
+                "Активируй доступ — и бот пришлёт ближайшие эфиры."
+            ),
         )
         await answer_with_main_menu(
             message,
@@ -1351,10 +1369,12 @@ async def send_schedule_section(
 
     schedule_text = await get_content(
         "schedule",
-        "🗓️ Расписание эфиров:\n"
-        "• Понедельник 20:00 — Вводный эфир\n"
-        "• Четверг 19:00 — Практика в группе\n"
-        "• Воскресенье 18:00 — Подведение итогов",
+        (
+            "🗓️ Расписание эфиров:\n"
+            "• Понедельник 20:00 — Вводный эфир\n"
+            "• Четверг 19:00 — Практика в группе\n"
+            "• Воскресенье 18:00 — Подведение итогов"
+        ),
     )
 
     await answer_with_main_menu(
@@ -1377,9 +1397,11 @@ async def send_magnetism_window_section(
     default_form_url = "https://forms.gle/iNcUGfiLGNkLW1dc8"
     template = await get_content(
         "menu.learning.magnetism_window",
-        "Окно в Магнетизм.\n\n",
-        "Заполни форму и получи доступ к следующему шагу.\n\n",
-        "{form_url}",
+        (
+            "Окно в Магнетизм.\n\n"
+            "Заполни форму и получи доступ к следующему шагу.\n\n"
+            "{form_url}"
+        ),
     )
     default_slug = resolve_form_slug(default_form_url, "magnetism-window")
     message_text = render_content(
@@ -1445,10 +1467,12 @@ async def send_pay_section(
     url = f"https://antitraining.example/checkout/{AT_PRODUCT_ID_CLUB}"
     pay_template = await get_content(
         "menu.pay",
-        "Доступ в клуб CODE: Магнетизм.\n\n"
-        "Тариф: Полный доступ — 2690₽ (единовременно).\n\n"
-        "Ссылка на оплату: {checkout_url}\n\n"
-        "После оплаты бот автоматически активирует доступ.",
+        (
+            "Доступ в клуб CODE: Магнетизм.\n\n"
+            "Тариф: Полный доступ — 2690₽ (единовременно).\n\n"
+            "Ссылка на оплату: {checkout_url}\n\n"
+            "После оплаты бот автоматически активирует доступ."
+        ),
     )
     pay_text = render_content(
         pay_template,
@@ -1478,8 +1502,10 @@ async def send_funnel_section(
     if n == 5:
         completed_text = await get_content(
             "menu.funnel.completed",
-            "Все уроки пройдены.\n\n"
-            "Дальше — клуб CODE: Магнетизм: углублённые практики, сообщество, живые эфиры.",
+            (
+                "Все уроки пройдены.\n\n"
+                "Дальше — клуб CODE: Магнетизм: углублённые практики, сообщество, живые эфиры."
+            ),
         )
         await answer_with_main_menu(
             message,
