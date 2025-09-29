@@ -2121,7 +2121,7 @@ async def send_weekly_materials_section(
             "menu.weekly.locked",
             (
                 "Материалы недели доступны участницам клуба.\n\n"
-                "Оформи доступ в разделе «Оплатить доступ», и бот пришлёт ссылку."
+                f"Оформи доступ в разделе «{ADMIN_PAYMENTS_BUTTON}», и бот пришлёт ссылки автоматически."
             ),
         )
         await answer_with_main_menu(

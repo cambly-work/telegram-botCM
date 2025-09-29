@@ -20,6 +20,7 @@ from keyboards import (
     BACK_TO_ADMIN,
     BACK_TO_BEHAVIOR,
     BACK_TO_MAIN,
+    materials_menu_keyboard,
     admin_behavior_keyboard,
     admin_main_keyboard,
     admin_payments_keyboard,
@@ -67,3 +68,32 @@ def test_admin_payments_keyboard_back_navigation():
     assert rows_closed[0] == [ADMIN_PAYMENTS_OPEN_WINDOW]
     assert rows_closed[4] == [BACK_TO_BEHAVIOR, BACK_TO_ADMIN]
     assert rows_closed[5] == [BACK_TO_MAIN]
+
+
+def test_materials_menu_keyboard_all_sections_available():
+    rows = _keyboard_texts(
+        materials_menu_keyboard(weekly_enabled=True, schedule_enabled=True)
+    )
+    assert rows == [
+        ["Материалы недели"],
+        ["Расписание"],
+        [BACK_TO_MAIN],
+    ]
+
+
+def test_materials_menu_keyboard_highlights_locked_sections():
+    rows = _keyboard_texts(
+        materials_menu_keyboard(weekly_enabled=False, schedule_enabled=False)
+    )
+    assert rows[0] == ["Материалы недели 🔒"]
+    assert rows[1] == ["Расписание 🔒"]
+    assert rows[2] == [BACK_TO_MAIN]
+
+
+def test_materials_menu_keyboard_mixed_flags():
+    rows = _keyboard_texts(
+        materials_menu_keyboard(weekly_enabled=True, schedule_enabled=False)
+    )
+    assert rows[0] == ["Материалы недели"]
+    assert rows[1] == ["Расписание 🔒"]
+    assert rows[2] == [BACK_TO_MAIN]
