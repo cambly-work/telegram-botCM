@@ -2636,15 +2636,18 @@ async def is_member(user_row: dict) -> bool:
     access_until = user_row.get("access_until")
     
     if status == "member_active":
-        if access_until and access_until > now_utc():
+        if access_until is None:
             return True
-        # Если срок доступа истек, обновляем статус
-        if access_until and access_until <= now_utc():
-            await execute(
-                "UPDATE users SET status='member_expired', updated_at=NOW() WHERE id=$1",
-                user_row["id"]
-            )
-    
+
+        if access_until > now_utc():
+            return True
+
+        # Если срок доступа истек, обновляем статус только при наличии даты
+        await execute(
+            "UPDATE users SET status='member_expired', updated_at=NOW() WHERE id=$1",
+            user_row["id"]
+        )
+
     return False
 def parse_start_utm(text: Optional[str]) -> dict:
     if not text or " " not in text:
