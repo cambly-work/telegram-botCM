@@ -87,6 +87,9 @@ def test_test_flow_sequence(monkeypatch):
             notifications.append(text)
             events.append(("admin", text))
 
+        monkeypatch.setattr(handlers, "_get_notify_admins", lambda: fake_notify_admins)
+        monkeypatch.setattr(handlers, "_notify_admins_cached", None, raising=False)
+
         content_map = {
             "menu.test": "Intro base",
             "menu.test_intro": "Intro override",
@@ -106,8 +109,6 @@ def test_test_flow_sequence(monkeypatch):
         monkeypatch.setattr(handlers, "upsert_test_request", fake_upsert_test_request)
         monkeypatch.setattr(handlers, "get_content", fake_get_content)
         monkeypatch.setattr(handlers, "cancel_keyboard", lambda: "CANCEL")
-        monkeypatch.setattr(handlers, "_notify_admins_cached", fake_notify_admins, raising=False)
-
         state = DummyState()
         start_message = DummyMessage("Пройти тест", test_user, events)
 
@@ -122,7 +123,8 @@ def test_test_flow_sequence(monkeypatch):
         await handlers.test_collect_birthdate(birth_message, state)
 
         assert await state.get_state() == handlers.TestStates.waiting_name.state
-        assert events[1] == ("user", "Name prompt")
+        assert ("user", "Name prompt") in events
+        assert any("Этап: ожидание имени" in note for note in notifications)
 
         name_message = DummyMessage("Аня", test_user, events)
         await handlers.test_collect_name(name_message, state)
@@ -135,10 +137,9 @@ def test_test_flow_sequence(monkeypatch):
         assert birthdate_value == date(1992, 8, 24)
         assert preferred_name == "Аня"
 
-        assert events[2][0] == "user"
-        assert events[2][1].startswith("Thanks, ")
-        assert events[3][0] == "admin"
-        assert notifications and notifications[0].startswith("🧪")
+        assert any(e[0] == "user" and e[1].startswith("Thanks, ") for e in events)
+        assert any(note.startswith("🧪 Заявка на тест: обновление") for note in notifications)
+        assert any("Новая запись на тестирование" in note for note in notifications)
 
         assert started_calls  # form marked as started at least once
 
@@ -166,10 +167,18 @@ def test_test_flow_cancel(monkeypatch):
         async def fake_get_content(key: str, default: str = ""):
             return content_map.get(key, default)
 
+        notifications: list[str] = []
+
+        async def fake_notify_admins(text: str):
+            notifications.append(text)
+            events.append(("admin", text))
+
         monkeypatch.setattr(handlers, "_get_user_and_admin", fake_get_user_and_admin)
         monkeypatch.setattr(handlers, "build_menu_keyboard", fake_build_menu_keyboard)
         monkeypatch.setattr(handlers, "get_content", fake_get_content)
         monkeypatch.setattr(handlers, "cancel_keyboard", lambda: "CANCEL")
+        monkeypatch.setattr(handlers, "_get_notify_admins", lambda: fake_notify_admins)
+        monkeypatch.setattr(handlers, "_notify_admins_cached", None, raising=False)
 
         state = DummyState()
         start_message = DummyMessage("Пройти тест", test_user, events)
@@ -178,11 +187,18 @@ def test_test_flow_cancel(monkeypatch):
 
         assert await state.get_state() == handlers.TestStates.waiting_birthdate.state
 
+        birth_message = DummyMessage("24.08.1992", test_user, events)
+        await handlers.test_collect_birthdate(birth_message, state)
+
+        assert await state.get_state() == handlers.TestStates.waiting_name.state
+
         cancel_message = DummyMessage("Отмена", test_user, events)
-        await handlers.test_collect_birthdate(cancel_message, state)
+        await handlers.cancel_handler(cancel_message, state)
 
         assert await state.get_state() is None
         assert events[-1] == ("user", "Действие отменено. Возвращаюсь в главное меню...")
+        assert any("Этап: ожидание имени" in note for note in notifications)
+        assert any("Заявка на тест отменена" in note for note in notifications)
 
     asyncio.run(run_flow())
 
