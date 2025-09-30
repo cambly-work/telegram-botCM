@@ -30,8 +30,10 @@ ADMIN_TEXTS_ENTRY = "📄 Тексты экранов"
 ADMIN_CONTENT_MENU = "🧾 Контент и тексты"
 ADMIN_CONTENT_VIEW = "🔍 Посмотреть текст"
 ADMIN_CONTENT_CREATE = "➕ Добавить или обновить текст"
+ADMIN_CONTENT_HISTORY = "🕘 История версий"
 ADMIN_CONTENT_TAGS_HELP = "ℹ️ Форматирование текста"
 ADMIN_CONTENT_SUGGEST_MORE = "🔁 Ещё варианты"
+ADMIN_CONTENT_ROLLBACK_PREFIX = "↩️ Откатить"
 ADMIN_USERS_BUTTON = "👥 Пользователи"
 ADMIN_USERS_SEGMENT_LEADS = "🎯 Лиды"
 ADMIN_USERS_SEGMENT_ACTIVE = "🔥 Активные"
@@ -447,6 +449,7 @@ def admin_content_keyboard() -> ReplyKeyboardMarkup:
             KeyboardButton(text=ADMIN_CONTENT_VIEW),
             KeyboardButton(text=ADMIN_CONTENT_CREATE),
         ],
+        [KeyboardButton(text=ADMIN_CONTENT_HISTORY)],
         [KeyboardButton(text=ADMIN_CONTENT_TAGS_HELP)],
         [KeyboardButton(text=BACK_TO_ADMIN), KeyboardButton(text=BACK_TO_MAIN)],
     ]
@@ -485,6 +488,17 @@ def admin_content_suggestions_keyboard(
 
     if show_more:
         rows.append([KeyboardButton(text=ADMIN_CONTENT_SUGGEST_MORE)])
+
+    rows.append([KeyboardButton(text=CANCEL_TEXT)])
+
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
+
+
+def admin_content_versions_keyboard(options_count: int) -> ReplyKeyboardMarkup:
+    rows: list[list[KeyboardButton]] = []
+
+    for idx in range(1, options_count + 1):
+        rows.append([KeyboardButton(text=f"{ADMIN_CONTENT_ROLLBACK_PREFIX} {idx}")])
 
     rows.append([KeyboardButton(text=CANCEL_TEXT)])
 
