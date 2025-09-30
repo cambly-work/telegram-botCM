@@ -88,8 +88,8 @@ def test_test_flow_sequence(monkeypatch):
             events.append(("admin", text))
 
         content_map = {
-            "menu.test": "Intro base {test_url}",
-            "menu.test_intro": "Intro override {TEST_FORM_URL}",
+            "menu.test": "Intro base",
+            "menu.test_intro": "Intro override",
             "menu.test_birthdate_prompt": "Birth prompt",
             "menu.test_birthdate_invalid": "Invalid {RAW}",
             "menu.test_name_prompt": "Name prompt",
@@ -158,8 +158,8 @@ def test_test_flow_cancel(monkeypatch):
             return "KB"
 
         content_map = {
-            "menu.test": "Intro base {test_url}",
-            "menu.test_intro": "Intro override {TEST_FORM_URL}",
+            "menu.test": "Intro base",
+            "menu.test_intro": "Intro override",
             "menu.test_birthdate_prompt": "Birth prompt",
         }
 
