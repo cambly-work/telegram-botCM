@@ -151,6 +151,35 @@ CREATE TABLE IF NOT EXISTS form_sessions (
   reminder_count   INT NOT NULL DEFAULT 0
 );
 
+ALTER TABLE form_sessions
+  ADD COLUMN IF NOT EXISTS last_reminder_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS reminder_count INT;
+
+UPDATE form_sessions
+SET reminder_count = 0
+WHERE reminder_count IS NULL;
+
+ALTER TABLE form_sessions
+  ALTER COLUMN reminder_count SET DEFAULT 0;
+
+DO $$
+BEGIN
+  IF EXISTS (
+      SELECT 1
+      FROM information_schema.columns
+      WHERE table_schema = 'public'
+        AND table_name = 'form_sessions'
+        AND column_name = 'reminder_count'
+  ) THEN
+      BEGIN
+          EXECUTE 'ALTER TABLE form_sessions ALTER COLUMN reminder_count SET NOT NULL';
+      EXCEPTION WHEN others THEN
+          NULL;
+      END;
+  END IF;
+END
+$$;
+
 -- Legacy compatibility: remove the old index and rename slug → form_slug when needed.
 DROP INDEX IF EXISTS ux_form_sessions_user_slug;
 
