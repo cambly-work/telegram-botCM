@@ -10,6 +10,15 @@ from apscheduler.triggers.cron import CronTrigger
 
 from aiogram import Bot, exceptions as tg_exc
 
+RetryAfterTypes = tuple(
+    exc
+    for exc in (
+        getattr(tg_exc, "TelegramRetryAfter", None),
+        getattr(tg_exc, "RetryAfter", None),
+    )
+    if exc is not None
+) or (Exception,)
+
 from db import fetch, fetchrow, execute
 from keyboards import lesson_keyboard
 # переиспользуем минимум логики из handlers, чтобы не дублировать
@@ -62,7 +71,7 @@ async def _send_with_retries(bot: Bot, chat_id: int, text: str, reply_markup=Non
         try:
             await bot.send_message(chat_id, text, reply_markup=reply_markup)
             return True
-        except tg_exc.RetryAfter as e:
+        except RetryAfterTypes as e:
             # Telegram просит подождать (Flood control)
             wait_for = getattr(e, "timeout", delay)
             logger.warning("Flood control: waiting %.2fs (attempt %s/%s)", wait_for, attempt, max_attempts)
