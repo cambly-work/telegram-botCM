@@ -5,6 +5,7 @@ from keyboards import (
     ADMIN_BEHAVIOR_START,
     ADMIN_BROADCAST_BUTTON,
     ADMIN_CONTENT_MENU,
+    ADMIN_TEXTS_ENTRY,
     ADMIN_DEBUG_BUTTON,
     ADMIN_PAYMENTS_BUTTON,
     ADMIN_PAYMENTS_CLOSE_WINDOW,
@@ -24,6 +25,7 @@ from keyboards import (
     admin_behavior_keyboard,
     admin_main_keyboard,
     admin_payments_keyboard,
+    admin_settings_keyboard,
 )
 
 
@@ -97,3 +99,31 @@ def test_materials_menu_keyboard_mixed_flags():
     assert rows[0] == ["Материалы недели"]
     assert rows[1] == ["Расписание 🔒"]
     assert rows[2] == [BACK_TO_MAIN]
+
+
+def test_admin_settings_keyboard_no_content_shortcuts():
+    flags = {
+        "payments_open": True,
+        "payments_manual_review": False,
+        "show_weekly_materials": True,
+        "show_schedule": False,
+    }
+    labels = {
+        "payments_open": "Окно оплаты",
+        "payments_manual_review": "Ручная проверка оплат",
+        "show_weekly_materials": "Материалы недели",
+        "show_schedule": "Расписание",
+    }
+
+    rows = _keyboard_texts(admin_settings_keyboard(flags, labels))
+
+    assert rows[-1] == [BACK_TO_ADMIN, BACK_TO_MAIN]
+
+    flattened = [text for row in rows for text in row]
+    assert ADMIN_CONTENT_MENU not in flattened
+    assert ADMIN_TEXTS_ENTRY not in flattened
+
+    assert flattened[0] == "✅ Окно оплаты"
+    assert flattened[1] == "❌ Ручная проверка оплат"
+    assert flattened[2] == "✅ Материалы недели"
+    assert flattened[3] == "❌ Расписание"

@@ -422,10 +422,6 @@ def admin_settings_keyboard(
     for key, label in labels.items():
         status = "✅" if flags.get(key, True) else "❌"
         rows.append([KeyboardButton(text=f"{status} {label}")])
-    rows.append([
-        KeyboardButton(text=ADMIN_CONTENT_MENU),
-        KeyboardButton(text=ADMIN_TEXTS_ENTRY),
-    ])
     rows.append([KeyboardButton(text=BACK_TO_ADMIN), KeyboardButton(text=BACK_TO_MAIN)])
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
