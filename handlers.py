@@ -1,5 +1,7 @@
 # handlers.py
 import asyncio
+import io
+import json
 import math
 import os
 import re
@@ -7,11 +9,12 @@ import yaml
 import logging
 import time
 import html
+from collections import OrderedDict
 from datetime import datetime, date, timedelta, timezone
 from typing import Optional, Iterable, Dict, List, Callable, Awaitable, Any
 from aiogram import Router, F, types
 from aiogram.enums import ParseMode
-from aiogram.types import ReplyKeyboardMarkup
+from aiogram.types import ReplyKeyboardMarkup, BufferedInputFile
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.filters import Command, CommandObject, CommandStart
@@ -24,7 +27,7 @@ except ImportError:  # aiogram < 3.13.1 compatibility
     from aiogram.dispatcher.event.bases import SkipHandler as EventSkip
 from urllib.parse import parse_qs, urlparse
 from aiogram.dispatcher.middlewares.base import BaseMiddleware
-from db import fetchrow, fetch, execute
+from db import fetchrow, fetch, execute, transaction
 from settings import ADMIN_IDS, YOOMONEY_CHECKOUT_URL
 from keyboards import (
     main_menu_keyboard,
@@ -76,6 +79,8 @@ from keyboards import (
     ADMIN_CONTENT_SAVE_TEMPLATE_BUTTON,
     ADMIN_CONTENT_TAGS_HELP,
     ADMIN_CONTENT_ROLLBACK_PREFIX,
+    ADMIN_CONTENT_EXPORT,
+    ADMIN_CONTENT_IMPORT,
     ADMIN_USERS_BUTTON,
     ADMIN_BROADCAST_BUTTON,
     ADMIN_BEHAVIOR_BUTTON,
@@ -702,14 +707,28 @@ async def get_content(key: str, default: str = "") -> str:
     """
     value, _ = await get_content_with_source(key, default)
     return value
-async def _write_content_version(key: str, value: str, updated_by: int | None) -> None:
+async def _write_content_version(
+    key: str,
+    value: str,
+    updated_by: int | None,
+    *,
+    conn=None,
+) -> None:
     try:
-        await execute(
-            "INSERT INTO content_versions(key, value, updated_by, updated_at) VALUES ($1,$2,$3,NOW())",
-            key,
-            value,
-            updated_by,
-        )
+        if conn is not None:
+            await conn.execute(
+                "INSERT INTO content_versions(key, value, updated_by, updated_at) VALUES ($1,$2,$3,NOW())",
+                key,
+                value,
+                updated_by,
+            )
+        else:
+            await execute(
+                "INSERT INTO content_versions(key, value, updated_by, updated_at) VALUES ($1,$2,$3,NOW())",
+                key,
+                value,
+                updated_by,
+            )
     except Exception as exc:
         logger.warning("content_versions: insert failed key=%s err=%s", key, exc)
 
@@ -844,6 +863,37 @@ async def _send_content_history(
 async def list_content_keys_db() -> list[str]:
     rows = await fetch("SELECT key FROM content ORDER BY key ASC")
     return [r["key"] for r in rows] if rows else []
+
+
+async def _collect_content_export_data() -> OrderedDict[str, str]:
+    db_keys = await list_content_keys_db()
+    db_values: dict[str, str] = {}
+
+    if db_keys:
+        rows = await fetch(
+            "SELECT key, value FROM content WHERE key = ANY($1::text[])",
+            db_keys,
+        )
+        value_map = {str(row["key"]): str(row.get("value") or "") for row in (rows or [])}
+        for key in db_keys:
+            if key in value_map:
+                db_values[key] = value_map[key]
+
+    yaml_content = _load_yaml_content()
+    yaml_keys = list(_flatten_yaml_keys(yaml_content))
+    combined_keys = _merge_unique_content_keys(db_keys, yaml_keys)
+
+    export_data: OrderedDict[str, str] = OrderedDict()
+    for key in combined_keys:
+        if key in db_values:
+            export_data[key] = db_values[key]
+            continue
+
+        yaml_value, found = _get_yaml_value(key, default="")
+        if found:
+            export_data[key] = yaml_value
+
+    return export_data
 
 
 async def get_onboarding_steps() -> list[str]:
@@ -1003,6 +1053,7 @@ class AdminContentStates(StatesGroup):
     waiting_view_key = State()
     waiting_history_key = State()
     waiting_history_choice = State()
+    waiting_import_file = State()
 
 
 class AdminBehaviorStates(StatesGroup):
@@ -2955,6 +3006,8 @@ async def send_admin_content_menu(message: types.Message) -> None:
         "• 📄 <b>Тексты экранов</b> — выбрать готовый экран и обновить его текст.\n"
         "• 🔍 <b>Посмотреть текст</b> — узнать текущее содержимое любого ключа и при необходимости сразу обновить его ответом.\n"
         "• ➕ <b>Добавить или обновить текст</b> — создать свой ключ или выбрать существующий из подсказок.\n\n"
+        "• ⬇️ <b>Экспорт</b> — выгрузить все ключи в YAML и JSON для резервной копии.\n"
+        "• ⬆️ <b>Импорт</b> — загрузить подготовленный файл и массово обновить тексты.\n\n"
         "Можно писать обычным текстом — бот автоматически преобразует популярные сокращения в теги и очищает форматирование.\n"
         "Подробности о тегах и примерах — в кнопке «ℹ️ Форматирование текста».\n"
         "Допустимы теги: <code>&lt;b&gt;</code>, <code>&lt;i&gt;</code>, <code>&lt;u&gt;</code>, <code>&lt;strong&gt;</code>, <code>&lt;em&gt;</code>, <code>&lt;code&gt;</code>, <code>&lt;a href=&quot;...&quot;&gt;</code>.\n"
@@ -4483,6 +4536,7 @@ async def cancel_handler(message: types.Message, state: FSMContext):
             AdminContentStates.waiting_view_key.state,
             AdminContentStates.waiting_history_key.state,
             AdminContentStates.waiting_history_choice.state,
+            AdminContentStates.waiting_import_file.state,
         }
         and is_admin
     ):
@@ -5242,6 +5296,269 @@ async def admin_content_formatting_help(message: types.Message, state: FSMContex
         reply_markup=admin_content_keyboard(),
         parse_mode=ParseMode.HTML,
         disable_web_page_preview=True,
+    )
+
+
+@router.message(F.text == ADMIN_CONTENT_EXPORT)
+async def admin_content_export(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+
+    await _reset_state_if_needed(state)
+
+    export_data = await _collect_content_export_data()
+    total_keys = len(export_data)
+
+    if total_keys == 0:
+        await message.answer(
+            "Пока нечего экспортировать — нет ни одного ключа в базе или шаблоне.",
+            reply_markup=admin_content_keyboard(),
+        )
+        return
+
+    yaml_payload = yaml.safe_dump(
+        dict(export_data),
+        allow_unicode=True,
+        sort_keys=False,
+    )
+    json_payload = json.dumps(export_data, ensure_ascii=False, indent=2)
+
+    yaml_file = BufferedInputFile(
+        yaml_payload.encode("utf-8"),
+        filename="content-export.yaml",
+    )
+    json_file = BufferedInputFile(
+        json_payload.encode("utf-8"),
+        filename="content-export.json",
+    )
+
+    try:
+        await message.bot.send_document(
+            chat_id=message.chat.id,
+            document=yaml_file,
+            caption=f"Экспорт контента — YAML ({total_keys} ключей)",
+        )
+        await message.bot.send_document(
+            chat_id=message.chat.id,
+            document=json_file,
+            caption=f"Экспорт контента — JSON ({total_keys} ключей)",
+        )
+    except Exception as exc:
+        logger.exception("content export failed: %s", exc)
+        await message.answer(
+            "Не удалось отправить файлы экспорта. Попробуй ещё раз или свяжись с разработчиком.",
+            reply_markup=admin_content_keyboard(),
+        )
+        return
+
+    await log_admin_action(
+        message.from_user.id,
+        "content_export",
+        {"total": total_keys},
+    )
+
+    await message.answer(
+        "Готово! Отправила два файла с экспортом. Их можно загрузить обратно кнопкой «⬆️ Импорт».",
+        reply_markup=admin_content_keyboard(),
+        disable_web_page_preview=True,
+    )
+
+
+@router.message(F.text == ADMIN_CONTENT_IMPORT)
+async def admin_content_import_prompt(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+
+    await _reset_state_if_needed(state)
+    await state.set_state(AdminContentStates.waiting_import_file)
+
+    text = (
+        "<b>Импорт контента</b>\n\n"
+        "Пришли файл в формате YAML или JSON с парами <code>key: value</code>.\n"
+        "Можно взять свежий экспорт через кнопку «⬇️ Экспорт», внести правки и загрузить обратно.\n\n"
+        "Пока файл не отправлен, можно отменить действие кнопкой «Отмена»."
+    )
+
+    await message.answer(
+        text,
+        reply_markup=cancel_keyboard(),
+        parse_mode=ParseMode.HTML,
+        disable_web_page_preview=True,
+    )
+
+
+def _prepare_import_items(raw_mapping: dict) -> tuple[list[tuple[str, str]], list[str]]:
+    items: list[tuple[str, str]] = []
+    invalid: list[str] = []
+
+    for raw_key, raw_value in (raw_mapping or {}).items():
+        key = str(raw_key or "").strip()
+        if not key or not _CONTENT_KEY_PATTERN.match(key):
+            invalid.append(key or "(пусто)")
+            continue
+
+        value = "" if raw_value is None else str(raw_value)
+        items.append((key, value))
+
+    return items, invalid
+
+
+@router.message(AdminContentStates.waiting_import_file, F.document)
+async def admin_content_import_handle_document(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        await state.clear()
+        return
+
+    document = message.document
+    if not document:
+        await message.answer(
+            "Пришли файл в формате YAML или JSON.",
+            reply_markup=cancel_keyboard(),
+        )
+        return
+
+    buffer = io.BytesIO()
+    try:
+        await message.bot.download(document, destination=buffer)
+    except Exception as exc:
+        logger.exception("content import download failed: %s", exc)
+        await message.answer(
+            "Не удалось скачать файл. Попробуй ещё раз позже.",
+            reply_markup=cancel_keyboard(),
+        )
+        return
+
+    raw_bytes = buffer.getvalue()
+    try:
+        text_payload = raw_bytes.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        await message.answer(
+            "Не удалось прочитать файл как UTF-8. Убедись, что файл сохранён в кодировке UTF-8.",
+            reply_markup=cancel_keyboard(),
+        )
+        return
+
+    parsed: dict | None = None
+    data_format = "json"
+
+    try:
+        parsed_obj = json.loads(text_payload)
+        if isinstance(parsed_obj, dict):
+            parsed = parsed_obj
+        else:
+            parsed = None
+    except json.JSONDecodeError:
+        parsed = None
+
+    if parsed is None:
+        data_format = "yaml"
+        try:
+            yaml_obj = yaml.safe_load(text_payload) or {}
+            if isinstance(yaml_obj, dict):
+                parsed = yaml_obj
+        except yaml.YAMLError as exc:
+            logger.warning("content import yaml parse failed: %s", exc)
+            parsed = None
+
+    if parsed is None:
+        await message.answer(
+            "Не удалось распознать файл. Используй экспорт из меню или отправь корректный YAML/JSON.",
+            reply_markup=cancel_keyboard(),
+        )
+        return
+
+    items, invalid_keys = _prepare_import_items(parsed)
+    if invalid_keys:
+        sample = ", ".join(invalid_keys[:10])
+        if len(invalid_keys) > 10:
+            sample += " …"
+        await message.answer(
+            "Некоторые ключи имеют неверный формат: "
+            f"{sample}. Разрешены символы A-Z, a-z, 0-9, точка, дефис и подчёркивание.",
+            reply_markup=cancel_keyboard(),
+        )
+        return
+
+    if not items:
+        await message.answer(
+            "Файл не содержит пар ключ/значение. Добавь данные и попробуй снова.",
+            reply_markup=cancel_keyboard(),
+        )
+        return
+
+    sanitized_items = [(key, sanitize_html(value)) for key, value in items]
+    keys = [key for key, _ in sanitized_items]
+
+    created = 0
+    updated = 0
+
+    try:
+        async with transaction() as conn:
+            existing_rows = await conn.fetch(
+                "SELECT key FROM content WHERE key = ANY($1::text[])",
+                keys,
+            )
+            existing = {row["key"] for row in (existing_rows or [])}
+
+            for key, value in sanitized_items:
+                await _write_content_version(key, value, message.from_user.id, conn=conn)
+                if key in existing:
+                    await conn.execute(
+                        "UPDATE content SET value=$2, updated_at=NOW() WHERE key=$1",
+                        key,
+                        value,
+                    )
+                    updated += 1
+                else:
+                    await conn.execute(
+                        "INSERT INTO content(key, value, created_at, updated_at) VALUES ($1,$2,NOW(),NOW())",
+                        key,
+                        value,
+                    )
+                    created += 1
+    except Exception as exc:
+        logger.exception("content import failed: %s", exc)
+        await message.answer(
+            "Не удалось сохранить данные. Проверь файл и попробуй снова позже.",
+            reply_markup=cancel_keyboard(),
+        )
+        return
+
+    _CONTENT_DB_CACHE.clear()
+
+    await log_admin_action(
+        message.from_user.id,
+        "content_import",
+        {
+            "total": len(sanitized_items),
+            "created": created,
+            "updated": updated,
+            "format": data_format,
+        },
+    )
+
+    await state.clear()
+
+    await message.answer(
+        (
+            "Импорт завершён ✅\n"
+            f"Добавлено новых ключей: {created}.\n"
+            f"Обновлено существующих: {updated}."
+        ),
+        reply_markup=admin_content_keyboard(),
+        disable_web_page_preview=True,
+    )
+
+
+@router.message(AdminContentStates.waiting_import_file)
+async def admin_content_import_waiting(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        await state.clear()
+        return
+
+    await message.answer(
+        "Пришли файл с парами ключ/значение в формате YAML или JSON, либо нажми «Отмена».",
+        reply_markup=cancel_keyboard(),
     )
 
 
@@ -7495,6 +7812,7 @@ async def fallback(message: types.Message, state: FSMContext):
         AdminContentStates.waiting_view_key,
         AdminContentStates.waiting_history_key,
         AdminContentStates.waiting_history_choice,
+        AdminContentStates.waiting_import_file,
     ):
         return
 
