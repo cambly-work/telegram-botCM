@@ -185,3 +185,50 @@ def test_test_flow_cancel(monkeypatch):
         assert events[-1] == ("user", "Действие отменено. Возвращаюсь в главное меню...")
 
     asyncio.run(run_flow())
+
+
+def test_test_flow_cancel_on_name(monkeypatch):
+    async def run_flow():
+        events: list[tuple[str, str]] = []
+        test_user = DummyFromUser()
+        user_row = {"id": 42, "tg_user_id": test_user.id, "full_name": test_user.full_name}
+
+        async def fake_get_user_and_admin(message):
+            return user_row, False
+
+        async def fake_build_menu_keyboard(**kwargs):
+            return "KB"
+
+        content_map = {
+            "menu.test": "Intro base {test_url}",
+            "menu.test_intro": "Intro override {TEST_FORM_URL}",
+            "menu.test_birthdate_prompt": "Birth prompt",
+            "menu.test_name_prompt": "Name prompt",
+        }
+
+        async def fake_get_content(key: str, default: str = ""):
+            return content_map.get(key, default)
+
+        monkeypatch.setattr(handlers, "_get_user_and_admin", fake_get_user_and_admin)
+        monkeypatch.setattr(handlers, "build_menu_keyboard", fake_build_menu_keyboard)
+        monkeypatch.setattr(handlers, "get_content", fake_get_content)
+        monkeypatch.setattr(handlers, "cancel_keyboard", lambda: "CANCEL")
+
+        state = DummyState()
+        start_message = DummyMessage("Пройти тест", test_user, events)
+
+        await handlers.menu_test(start_message, state)
+
+        birth_message = DummyMessage("24.08.1992", test_user, events)
+        await handlers.test_collect_birthdate(birth_message, state)
+
+        assert await state.get_state() == handlers.TestStates.waiting_name.state
+
+        cancel_message = DummyMessage(handlers.CANCEL_TEXT, test_user, events)
+        await handlers.test_collect_name(cancel_message, state)
+
+        assert await state.get_state() is None
+        assert await state.get_data() == {}
+        assert events[-1] == ("user", "Действие отменено. Возвращаюсь в главное меню...")
+
+    asyncio.run(run_flow())

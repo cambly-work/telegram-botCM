@@ -3855,7 +3855,12 @@ async def test_collect_birthdate(message: types.Message, state: FSMContext):
 
 @router.message(TestStates.waiting_name, F.text.len() > 0)
 async def test_collect_name(message: types.Message, state: FSMContext):
-    name = (message.text or "").strip()
+    text = (message.text or "").strip()
+    if text.lower() == CANCEL_TEXT.lower():
+        await cancel_handler(message, state)
+        return
+
+    name = text
     if len(name) < 2:
         invalid_name_template = await get_content(
             "menu.test_name_invalid",
