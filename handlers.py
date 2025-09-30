@@ -3806,8 +3806,17 @@ async def menu_test(message: types.Message, state: FSMContext):
     await message.answer(message_text, reply_markup=cancel_keyboard())
 
 
+@router.message(TestStates.waiting_birthdate, F.text.casefold() == CANCEL_TEXT.lower())
+async def test_cancel_birthdate(message: types.Message, state: FSMContext):
+    await cancel_handler(message, state)
+
+
 @router.message(TestStates.waiting_birthdate)
 async def test_collect_birthdate(message: types.Message, state: FSMContext):
+    if (message.text or "").casefold() == CANCEL_TEXT.lower():
+        await cancel_handler(message, state)
+        return
+
     birthdate = parse_birthdate(message.text)
     if not birthdate:
         invalid_template = await get_content(
