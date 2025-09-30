@@ -7168,14 +7168,15 @@ async def admin_texts_edit_prompt(message: types.Message, state: FSMContext):
 
     await _reset_state_if_needed(state)
     await state.set_state(AdminContentStates.waiting_value)
+
+    current_text = await get_content(key, default="")
+
     await state.update_data(
         content_key=key,
         content_group=group_title,
         content_label=message.text,
         content_preview_text=current_text,
     )
-
-    current_text = await get_content(key, default="")
     preview = _preview_text_for_admin(current_text)
 
     placeholders_line = _admin_placeholder_hint_line(key)
