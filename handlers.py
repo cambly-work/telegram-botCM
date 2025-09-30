@@ -1193,7 +1193,7 @@ for setting_key, label in _ADMIN_SETTINGS_LABELS.items():
 
 _CONTENT_KEY_PATTERN = re.compile(r"^[A-Za-z0-9_.-]{3,}$")
 _CONTENT_SUGGESTION_STEP = 6
-_CONTENT_SUGGESTION_LIMIT = 60
+_CONTENT_SUGGESTION_LIMIT: int | None = None
 _CONTENT_PREVIEW_KEY_RE = re.compile(r"<b>Ключ:</b>\s*<code>([^<]+)</code>")
 _CONTENT_PREVIEW_KEY_PLAIN_RE = re.compile(r"Ключ[:：]\s*([A-Za-z0-9_.-]{3,})")
 
@@ -1997,7 +1997,7 @@ def _merge_unique_content_keys(*sources: Iterable[str], limit: int | None = None
     return result
 
 
-async def _collect_content_suggestions(limit: int = _CONTENT_SUGGESTION_LIMIT) -> list[str]:
+async def _collect_content_suggestions(limit: int | None = _CONTENT_SUGGESTION_LIMIT) -> list[str]:
     db_keys = await list_content_keys_db()
     yaml_content = _load_yaml_content()
     yaml_keys = sorted(_flatten_yaml_keys(yaml_content))
@@ -2089,6 +2089,40 @@ def _filter_suggestions(keys: list[str], query: str, limit: int = 5) -> list[str
         return []
     matches = [key for key in keys if normalized in key.lower()]
     return matches[:limit]
+
+
+async def _send_content_key_suggestions(
+    message: types.Message,
+    query: str,
+    matches: list[str],
+) -> None:
+    if not query:
+        return
+
+    escaped_query = html.escape(query)
+    if matches:
+        lines = [
+            f"<b>Похожие ключи на запрос</b> <code>{escaped_query}</code>:",
+            "",
+        ]
+        lines.extend(_format_suggestion_lines(matches))
+        lines.extend(
+            [
+                "",
+                "Можно выбрать ключ кнопкой из списка ниже или ввести его полностью вручную.",
+            ]
+        )
+    else:
+        lines = [
+            f"Не нашёл ключи, похожие на <code>{escaped_query}</code>.",
+            "Попробуй уточнить запрос или пролистай список через «🔁 Ещё варианты».",
+        ]
+
+    await message.answer(
+        "\n".join(lines),
+        parse_mode=ParseMode.HTML,
+        disable_web_page_preview=True,
+    )
 
 
 async def get_bool_setting(key: str, default: bool = True) -> bool:
@@ -2959,6 +2993,7 @@ async def send_admin_content_menu(message: types.Message) -> None:
         "Подробности о тегах и примерах — в кнопке «ℹ️ Форматирование текста».\n"
         "Допустимы теги: <code>&lt;b&gt;</code>, <code>&lt;i&gt;</code>, <code>&lt;u&gt;</code>, <code>&lt;strong&gt;</code>, <code>&lt;em&gt;</code>, <code>&lt;code&gt;</code>, <code>&lt;a href=&quot;...&quot;&gt;</code>.\n"
         "Бот подсказывает популярные ключи и запоминает последние изменения, чтобы можно было быстро вносить правки.\n"
+        "Достаточно набрать несколько символов — бот пришлёт подходящие ключи с описанием, чтобы быстрее найти нужный текст.\n"
         "Если нужно отменить действие — нажми кнопку «Отмена»."
     )
     keyboard = admin_content_keyboard()
@@ -5373,10 +5408,22 @@ async def admin_content_view_value(message: types.Message, state: FSMContext):
         await message.answer(
             "Укажи ключ текста, чтобы я мог его показать.",
             reply_markup=cancel_keyboard(),
+            disable_web_page_preview=True,
         )
         return
 
     suggestions = await _collect_content_suggestions()
+    if not _CONTENT_KEY_PATTERN.match(key):
+        await message.answer(
+            "Ключ может содержать только латинские буквы, цифры, точки, дефисы и подчёркивания."
+            "\nПримеры: <code>menu.support</code>, <code>weekly_materials</code>, <code>promo.welcome</code>.",
+            reply_markup=cancel_keyboard(),
+            disable_web_page_preview=True,
+        )
+        matches = _filter_suggestions(suggestions, key)
+        await _send_content_key_suggestions(message, key, matches)
+        return
+
     value, source = await get_content_with_source(key, default="")
     _, yaml_found = _get_yaml_value(key, default="")
     last_update = await get_content_last_update(key)
@@ -5860,16 +5907,20 @@ async def admin_content_receive_key(message: types.Message, state: FSMContext):
         await message.answer(
             "Ключ не может быть пустым. Попробуй ещё раз.",
             reply_markup=cancel_keyboard(),
+            disable_web_page_preview=True,
         )
         return
 
     if not _CONTENT_KEY_PATTERN.match(raw_key):
+        suggestions = await _collect_content_suggestions()
         await message.answer(
             "Ключ может содержать только латинские буквы, цифры, точки, дефисы и подчёркивания."
             "\nПримеры: <code>menu.support</code>, <code>weekly_materials</code>, <code>promo.welcome</code>.",
             reply_markup=cancel_keyboard(),
             disable_web_page_preview=True,
         )
+        matches = _filter_suggestions(suggestions, raw_key)
+        await _send_content_key_suggestions(message, raw_key, matches)
         return
 
     key = raw_key
