@@ -32,6 +32,7 @@ ADMIN_CONTENT_VIEW = "🔍 Посмотреть текст"
 ADMIN_CONTENT_CREATE = "➕ Добавить или обновить текст"
 ADMIN_CONTENT_HISTORY = "🕘 История версий"
 ADMIN_CONTENT_TAGS_HELP = "ℹ️ Форматирование текста"
+ADMIN_CONTENT_SAVE_TEMPLATE_BUTTON = "📥 Сохранить шаблон"
 ADMIN_CONTENT_SUGGEST_MORE = "🔁 Ещё варианты"
 ADMIN_CONTENT_ROLLBACK_PREFIX = "↩️ Откатить"
 ADMIN_USERS_BUTTON = "👥 Пользователи"
@@ -238,9 +239,13 @@ def feedback_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
 
-def cancel_keyboard() -> ReplyKeyboardMarkup:
+def cancel_keyboard(*, extra_buttons: list[str] | None = None) -> ReplyKeyboardMarkup:
+    rows: list[list[KeyboardButton]] = []
+    if extra_buttons:
+        rows.append([KeyboardButton(text=btn) for btn in extra_buttons])
+    rows.append([KeyboardButton(text=CANCEL_TEXT)])
     return ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text=CANCEL_TEXT)]],
+        keyboard=rows,
         resize_keyboard=True,
     )
 
@@ -442,9 +447,15 @@ def admin_payments_keyboard(*, payments_open: bool) -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
 
-def admin_content_keyboard() -> ReplyKeyboardMarkup:
+def admin_content_keyboard(*, include_save_template: bool = False) -> ReplyKeyboardMarkup:
     rows = [
         [KeyboardButton(text=ADMIN_TEXTS_ENTRY)],
+    ]
+
+    if include_save_template:
+        rows.append([KeyboardButton(text=ADMIN_CONTENT_SAVE_TEMPLATE_BUTTON)])
+
+    rows.extend([
         [
             KeyboardButton(text=ADMIN_CONTENT_VIEW),
             KeyboardButton(text=ADMIN_CONTENT_CREATE),
@@ -452,7 +463,7 @@ def admin_content_keyboard() -> ReplyKeyboardMarkup:
         [KeyboardButton(text=ADMIN_CONTENT_HISTORY)],
         [KeyboardButton(text=ADMIN_CONTENT_TAGS_HELP)],
         [KeyboardButton(text=BACK_TO_ADMIN), KeyboardButton(text=BACK_TO_MAIN)],
-    ]
+    ])
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
 

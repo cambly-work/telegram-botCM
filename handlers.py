@@ -73,6 +73,7 @@ from keyboards import (
     ADMIN_CONTENT_CREATE,
     ADMIN_CONTENT_HISTORY,
     ADMIN_CONTENT_SUGGEST_MORE,
+    ADMIN_CONTENT_SAVE_TEMPLATE_BUTTON,
     ADMIN_CONTENT_TAGS_HELP,
     ADMIN_CONTENT_ROLLBACK_PREFIX,
     ADMIN_USERS_BUTTON,
@@ -637,6 +638,38 @@ _CONTENT_FILE = os.path.join(os.path.dirname(__file__), "content.yaml")
 _CONTENT_DB_CACHE: Dict[str, str] = {}
 _CONTENT_LAST_RELOAD = None
 _CONTENT_HISTORY_LIMIT = 5
+
+
+def _get_yaml_value(key: str, default: str = "") -> tuple[str, bool]:
+    data = _load_yaml_content()
+    if not data:
+        return default, False
+
+    if "." not in key:
+        if key in data:
+            value = data[key]
+            if isinstance(value, (list, dict)):
+                return yaml.safe_dump(value, allow_unicode=True), True
+            return str(value), True
+        return default, False
+
+    cur: Any = data
+    try:
+        for part in key.split("."):
+            if isinstance(cur, list) and part.isdigit():
+                cur = cur[int(part)]
+            elif isinstance(cur, dict):
+                cur = cur[part]
+            else:
+                raise KeyError(part)
+    except Exception:
+        return default, False
+
+    if isinstance(cur, (list, dict)):
+        return yaml.safe_dump(cur, allow_unicode=True), True
+    return str(cur), True
+
+
 def _load_yaml_content() -> dict:
     global _CONTENT_CACHE
     if _CONTENT_CACHE:
@@ -647,36 +680,28 @@ def _load_yaml_content() -> dict:
     except FileNotFoundError:
         _CONTENT_CACHE = {}
     return _CONTENT_CACHE
+async def get_content_with_source(key: str, default: str = "") -> tuple[str, str]:
+    """Возвращает значение контента и источник (БД или YAML-шаблон)."""
+    if key in _CONTENT_DB_CACHE:
+        return _CONTENT_DB_CACHE[key], "db"
+
+    row = await fetchrow("SELECT value FROM content WHERE key=$1", key)
+    if row and row.get("value"):
+        value = row["value"]
+        _CONTENT_DB_CACHE[key] = value
+        return value, "db"
+
+    yaml_value, _ = _get_yaml_value(key, default)
+    return yaml_value, "yaml"
+
+
 async def get_content(key: str, default: str = "") -> str:
     """
     1) Пытаемся достать из БД content.value по key.
     2) Если нет — из content.yaml (поддержка вложенных ключей "onboarding.0").
     """
-    # Проверяем кэш БД сначала
-    if key in _CONTENT_DB_CACHE:
-        return _CONTENT_DB_CACHE[key]
-    
-    # Если нет в кэше, проверяем БД
-    row = await fetchrow("SELECT value FROM content WHERE key=$1", key)
-    if row and row.get("value"):
-        _CONTENT_DB_CACHE[key] = row["value"]
-        return row["value"]
-    # Fallback to YAML
-    y = _load_yaml_content()
-    if "." in key:
-        cur = y
-        try:
-            for part in key.split("."):
-                if part.isdigit():
-                    cur = cur[int(part)]
-                else:
-                    cur = cur[part]
-            if isinstance(cur, (list, dict)):
-                return yaml.safe_dump(cur, allow_unicode=True)
-            return str(cur)
-        except Exception:
-            return default
-    return str(y.get(key, default))
+    value, _ = await get_content_with_source(key, default)
+    return value
 async def _write_content_version(key: str, value: str, updated_by: int | None) -> None:
     try:
         await execute(
@@ -5286,14 +5311,34 @@ async def admin_content_view_value(message: types.Message, state: FSMContext):
         return
 
     suggestions = await _collect_content_suggestions()
-    value = await get_content(key, default="")
+    value, source = await get_content_with_source(key, default="")
+    _, yaml_found = _get_yaml_value(key, default="")
     last_update = await get_content_last_update(key)
     has_value = bool(value.strip())
     preview = _preview_text_for_admin(value)
 
     similar = [item for item in _filter_suggestions(suggestions, key, limit=5) if item != key]
 
-    lines = [f"<b>Ключ:</b> <code>{html.escape(key)}</code>"]
+    source_label = "БД" if source == "db" else "шаблон"
+    show_save_button = source == "yaml" and yaml_found
+
+    lines = [
+        f"<b>Ключ:</b> <code>{html.escape(key)}</code>",
+        f"<code>Источник: {source_label}</code>",
+    ]
+
+    if source == "yaml":
+        lines.extend([
+            "",
+            "⚠️ <i>Текст ещё не скопирован в таблицу — используется шаблон из content.yaml.</i>",
+        ])
+        if yaml_found:
+            lines.append(
+                "Нажми «📥 Сохранить шаблон», чтобы перенести текст в базу и редактировать его здесь."
+            )
+        else:
+            lines.append("Добавь текст вручную, чтобы он появился в таблице.")
+
     if has_value:
         lines.extend(["", "<b>Текущее значение:</b>", preview])
         lines.extend([
@@ -5334,18 +5379,23 @@ async def admin_content_view_value(message: types.Message, state: FSMContext):
     )
     lines.extend(["", history_hint])
 
+    await state.update_data(
+        content_current_key=key,
+        content_current_source=source,
+        content_current_has_yaml=yaml_found,
+    )
+
     await log_admin_action(
         message.from_user.id,
         "content_view_menu",
-        {"key": key, "has_value": has_value},
+        {"key": key, "has_value": has_value, "source": source},
     )
 
     await message.answer(
         "\n".join(lines),
-        reply_markup=admin_content_keyboard(),
+        reply_markup=admin_content_keyboard(include_save_template=show_save_button),
         disable_web_page_preview=True,
     )
-    await state.clear()
 
 
 @router.message(F.text == ADMIN_CONTENT_HISTORY)
@@ -5757,14 +5807,39 @@ async def admin_content_receive_key(message: types.Message, state: FSMContext):
         return
 
     key = raw_key
-    current_value = await get_content(key, default="")
+    current_value, source = await get_content_with_source(key, default="")
+    _, yaml_found = _get_yaml_value(key, default="")
     has_value = bool(current_value.strip())
     preview = _preview_text_for_admin(current_value)
 
-    await state.update_data(custom_key=key)
+    await state.update_data(
+        custom_key=key,
+        content_current_key=key,
+        content_current_source=source,
+        content_current_has_yaml=yaml_found,
+    )
     await state.set_state(AdminContentStates.waiting_custom_value)
 
-    lines = [f"<b>Ключ:</b> <code>{html.escape(key)}</code>"]
+    source_label = "БД" if source == "db" else "шаблон"
+    show_save_button = source == "yaml" and yaml_found
+
+    lines = [
+        f"<b>Ключ:</b> <code>{html.escape(key)}</code>",
+        f"<code>Источник: {source_label}</code>",
+    ]
+
+    if source == "yaml":
+        lines.extend([
+            "",
+            "⚠️ <i>Текст ещё не скопирован в таблицу — используется шаблон из content.yaml.</i>",
+        ])
+        if yaml_found:
+            lines.append(
+                "Нажми «📥 Сохранить шаблон», чтобы скопировать текст в базу и редактировать его здесь."
+            )
+        else:
+            lines.append("Добавь текст вручную, чтобы он появился в таблице.")
+
     if has_value:
         lines.extend(["", "<b>Текущее значение:</b>", preview])
     else:
@@ -5782,7 +5857,85 @@ async def admin_content_receive_key(message: types.Message, state: FSMContext):
 
     await message.answer(
         "\n".join(lines),
-        reply_markup=cancel_keyboard(),
+        reply_markup=cancel_keyboard(
+            extra_buttons=[ADMIN_CONTENT_SAVE_TEMPLATE_BUTTON] if show_save_button else None
+        ),
+        disable_web_page_preview=True,
+    )
+
+
+@router.message(F.text == ADMIN_CONTENT_SAVE_TEMPLATE_BUTTON)
+async def admin_content_save_template(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        await state.clear()
+        return
+
+    data = await state.get_data() or {}
+    key = (data.get("content_current_key") or data.get("custom_key")) if data else None
+    if not key:
+        await message.answer(
+            "Сначала выбери ключ текста через меню — бот покажет источник и доступные действия.",
+            reply_markup=admin_content_keyboard(),
+            disable_web_page_preview=True,
+        )
+        return
+
+    yaml_value, yaml_found = _get_yaml_value(key, default="")
+    if not yaml_found:
+        current_state = await state.get_state()
+        keyboard = (
+            cancel_keyboard()
+            if current_state == AdminContentStates.waiting_custom_value.state
+            else admin_content_keyboard()
+        )
+        await message.answer(
+            "В content.yaml нет шаблона для этого ключа — добавь текст вручную и он сохранится в таблицу.",
+            reply_markup=keyboard,
+            disable_web_page_preview=True,
+        )
+        return
+
+    await set_content_value(key, yaml_value, updated_by=message.from_user.id)
+
+    saved_value, _ = await get_content_with_source(key, default="")
+    preview = _preview_text_for_admin(saved_value)
+
+    await state.update_data(content_current_source="db")
+
+    lines = [
+        f"<b>Ключ:</b> <code>{html.escape(key)}</code>",
+        "<code>Источник: БД</code>",
+    ]
+
+    if saved_value.strip():
+        lines.extend(["", "<b>Текст из шаблона сохранён:</b>", preview])
+    else:
+        lines.extend([
+            "",
+            "Шаблон был пустым — в таблицу сохранено пустое значение. Можешь отправить нужный текст ответом.",
+        ])
+
+    lines.extend([
+        "",
+        "Теперь текст хранится в базе. Ответь на сообщение новым вариантом или выбери другую команду.",
+    ])
+
+    current_state = await state.get_state()
+    keyboard = (
+        cancel_keyboard()
+        if current_state == AdminContentStates.waiting_custom_value.state
+        else admin_content_keyboard()
+    )
+
+    await log_admin_action(
+        message.from_user.id,
+        "content_save_template",
+        {"key": key, "length": len(saved_value)},
+    )
+
+    await message.answer(
+        "\n".join(lines),
+        reply_markup=keyboard,
         disable_web_page_preview=True,
     )
 
