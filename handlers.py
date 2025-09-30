@@ -1095,12 +1095,84 @@ _ADMIN_TEXT_GROUPS: dict[str, list[tuple[str, str]]] = {
     ],
 }
 
-_ADMIN_TEXT_PLACEHOLDERS: dict[str, list[str]] = {
-    "menu.start": ["{name}", "{{NAME}}"],
-    "menu.registration_complete": ["{name}", "{{NAME}}"],
-    "menu.pay": ["{checkout_url}", "{{CHECKOUT_URL}}"],
-    "menu.support": ["{support}", "{{SUPPORT_CONTACT}}"],
+ADMIN_TEXTS_PREVIEW_BUTTON = "👁 Предпросмотр"
+
+_ADMIN_TEXT_PLACEHOLDERS: dict[str, dict[str, list[str]]] = {
+    "menu.start": {
+        "required": ["{name}"],
+        "optional": ["{{NAME}}"],
+    },
+    "menu.registration_complete": {
+        "required": ["{name}"],
+        "optional": ["{{NAME}}"],
+    },
+    "menu.pay": {
+        "required": ["{checkout_url}"],
+        "optional": ["{{CHECKOUT_URL}}"],
+    },
+    "menu.support": {
+        "required": ["{support}"],
+        "optional": ["{{SUPPORT_CONTACT}}"],
+    },
 }
+
+_ADMIN_TEXT_PREVIEW_SAMPLE_DATA: dict[str, str] = {
+    "name": "Алиса",
+    "checkout_url": YOOMONEY_CHECKOUT_URL or "https://pay.example.com/checkout",
+    "support": SUPPORT_CONTACT,
+    "support_contact": SUPPORT_CONTACT,
+}
+
+
+def _admin_placeholder_variants(token: str) -> set[str]:
+    normalized = token.strip("{}").strip()
+    if not normalized:
+        return {token}
+    key = normalized.lower()
+    variants = {
+        f"{{{key}}}",
+        f"{{{key.upper()}}}",
+        f"{{{{{key}}}}}",
+        f"{{{{{key.upper()}}}}}",
+    }
+    variants.add(token)
+    return variants
+
+
+def _admin_placeholder_config(key: str) -> tuple[list[str], list[str]]:
+    config = _ADMIN_TEXT_PLACEHOLDERS.get(key) or {}
+    required = list(config.get("required", []))
+    optional = [token for token in config.get("optional", []) if token not in required]
+    return required, optional
+
+
+def _admin_missing_required_placeholders(text: str, key: str) -> list[str]:
+    required_tokens, _ = _admin_placeholder_config(key)
+    if not required_tokens:
+        return []
+    missing: list[str] = []
+    for token in required_tokens:
+        variants = _admin_placeholder_variants(token)
+        if not any(variant in text for variant in variants):
+            missing.append(token)
+    return missing
+
+
+def _admin_placeholder_hint_line(key: str) -> str:
+    required, optional = _admin_placeholder_config(key)
+    if not required and not optional:
+        return ""
+
+    def _format(tokens: list[str]) -> str:
+        return ", ".join(f"<code>{html.escape(token)}</code>" for token in tokens)
+
+    parts: list[str] = []
+    if required:
+        parts.append(f"обязательные — {_format(required)}")
+    if optional:
+        parts.append(f"дополнительные — {_format(optional)}")
+
+    return "Можно использовать плейсхолдеры: " + "; ".join(parts)
 
 _CONTENT_KEY_HINTS: dict[str, str] = {
     "about": "Описание клуба по умолчанию",
@@ -4530,12 +4602,9 @@ async def admin_behavior_start_prompt(message: types.Message, state: FSMContext)
         "Добро пожаловать в CODE: Магнетизм, {name}!",
     )
     preview = _preview_text_for_admin(current)
-    placeholders = _ADMIN_TEXT_PLACEHOLDERS.get("menu.start", [])
-    placeholders_line = ""
-    if placeholders:
-        placeholders_line = "\nДоступные плейсхолдеры: " + ", ".join(
-            f"<code>{html.escape(token)}</code>" for token in placeholders
-        )
+    placeholders_line = _admin_placeholder_hint_line("menu.start")
+    if placeholders_line:
+        placeholders_line = "\n" + placeholders_line
 
     await state.set_state(AdminBehaviorStates.waiting_start_text)
     await message.answer(
@@ -4604,12 +4673,9 @@ async def admin_behavior_registration_prompt(message: types.Message, state: FSMC
         "Регистрация завершена, {name}!",
     )
     preview = _preview_text_for_admin(current)
-    placeholders = _ADMIN_TEXT_PLACEHOLDERS.get("menu.registration_complete", [])
-    placeholders_line = ""
-    if placeholders:
-        placeholders_line = "\nДоступные плейсхолдеры: " + ", ".join(
-            f"<code>{html.escape(token)}</code>" for token in placeholders
-        )
+    placeholders_line = _admin_placeholder_hint_line("menu.registration_complete")
+    if placeholders_line:
+        placeholders_line = "\n" + placeholders_line
 
     await state.set_state(AdminBehaviorStates.waiting_registration_text)
     await message.answer(
@@ -5957,6 +6023,21 @@ async def admin_content_receive_value(message: types.Message, state: FSMContext)
         return
 
     new_text = prepare_admin_text_input(message.text)
+
+    missing_placeholders = _admin_missing_required_placeholders(new_text, key)
+    if missing_placeholders:
+        missing_tokens = ", ".join(
+            f"<code>{html.escape(token)}</code>" for token in missing_placeholders
+        )
+        await message.answer(
+            "Не удалось сохранить текст — отсутствуют обязательные плейсхолдеры: "
+            f"{missing_tokens}. Добавь их и отправь текст ещё раз.",
+            reply_markup=cancel_keyboard(),
+            parse_mode=ParseMode.HTML,
+            disable_web_page_preview=True,
+        )
+        return
+
     await set_content_value(key, new_text, updated_by=message.from_user.id)
     await log_admin_action(
         message.from_user.id,
@@ -6469,17 +6550,17 @@ async def admin_texts_edit_prompt(message: types.Message, state: FSMContext):
 
     await _reset_state_if_needed(state)
     await state.set_state(AdminContentStates.waiting_value)
-    await state.update_data(content_key=key, content_group=group_title, content_label=message.text)
+    await state.update_data(
+        content_key=key,
+        content_group=group_title,
+        content_label=message.text,
+        content_preview_text=current_text,
+    )
 
     current_text = await get_content(key, default="")
     preview = _preview_text_for_admin(current_text)
 
-    placeholders = _ADMIN_TEXT_PLACEHOLDERS.get(key, [])
-    placeholders_line = ""
-    if placeholders:
-        placeholders_line = "Можно использовать плейсхолдеры: " + ", ".join(
-            f"<code>{html.escape(token)}</code>" for token in placeholders
-        )
+    placeholders_line = _admin_placeholder_hint_line(key)
 
     text_lines = [
         f"<b>Редактирование текста:</b> {html.escape(message.text or key)}",
@@ -6502,8 +6583,43 @@ async def admin_texts_edit_prompt(message: types.Message, state: FSMContext):
 
     await message.answer(
         "\n".join(text_lines),
-        reply_markup=cancel_keyboard(),
+        reply_markup=cancel_keyboard(extra_buttons=[ADMIN_TEXTS_PREVIEW_BUTTON]),
         parse_mode="HTML",
+        disable_web_page_preview=True,
+    )
+
+
+@router.message(AdminContentStates.waiting_value, F.text == ADMIN_TEXTS_PREVIEW_BUTTON)
+async def admin_texts_preview(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        await state.clear()
+        return
+
+    data = await state.get_data() or {}
+    preview_text = (data.get("content_preview_text") or "").strip()
+
+    if not preview_text:
+        await message.answer(
+            "Предпросмотр недоступен — текст пустой. Отправь новый текст и попробуй ещё раз.",
+            reply_markup=cancel_keyboard(extra_buttons=[ADMIN_TEXTS_PREVIEW_BUTTON]),
+            disable_web_page_preview=True,
+        )
+        return
+
+    rendered = render_content(preview_text, **_ADMIN_TEXT_PREVIEW_SAMPLE_DATA)
+    rendered = rendered.strip()
+
+    if not rendered:
+        response_text = "<b>Предпросмотр пустой.</b>"
+    else:
+        label = data.get("content_label") or data.get("content_key")
+        label_text = f"<b>Предпросмотр: {html.escape(label or '')}</b>" if label else "<b>Предпросмотр:</b>"
+        response_text = f"{label_text}\n\n{rendered}"
+
+    await message.answer(
+        response_text,
+        reply_markup=cancel_keyboard(),
+        parse_mode=ParseMode.HTML,
         disable_web_page_preview=True,
     )
 
@@ -6525,6 +6641,22 @@ async def admin_texts_receive_value(message: types.Message, state: FSMContext):
         return
 
     new_text = prepare_admin_text_input(message.text)
+    await state.update_data(content_preview_text=new_text)
+
+    missing_placeholders = _admin_missing_required_placeholders(new_text, key)
+    if missing_placeholders:
+        missing_tokens = ", ".join(
+            f"<code>{html.escape(token)}</code>" for token in missing_placeholders
+        )
+        await message.answer(
+            "Не удалось сохранить текст — отсутствуют обязательные плейсхолдеры: "
+            f"{missing_tokens}. Добавь их и отправь текст ещё раз.",
+            reply_markup=cancel_keyboard(extra_buttons=[ADMIN_TEXTS_PREVIEW_BUTTON]),
+            parse_mode=ParseMode.HTML,
+            disable_web_page_preview=True,
+        )
+        return
+
     await set_content_value(key, new_text, updated_by=message.from_user.id)
     await log_admin_action(
         message.from_user.id,
