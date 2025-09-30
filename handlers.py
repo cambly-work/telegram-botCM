@@ -3852,6 +3852,24 @@ async def test_collect_birthdate(message: types.Message, state: FSMContext):
     )
     await message.answer(name_prompt, reply_markup=cancel_keyboard())
 
+    notify_admins = _get_notify_admins()
+    if notify_admins:
+        stage_label = "ожидание имени"
+        card_lines = [
+            "🧪 Заявка на тест: обновление",
+            f"tg-id: <code>{message.from_user.id}</code>",
+            f"Дата рождения: {_format_birthdate(birthdate)}",
+            f"Этап: {stage_label}",
+        ]
+        try:
+            await notify_admins("\n".join(card_lines))
+        except Exception as exc:
+            logger.warning(
+                "test_request: notify_admins birthdate failed tg_user_id=%s err=%s",
+                message.from_user.id,
+                exc,
+            )
+
 
 @router.message(TestStates.waiting_name, F.text.len() > 0)
 async def test_collect_name(message: types.Message, state: FSMContext):
@@ -4172,6 +4190,46 @@ async def cancel_handler(message: types.Message, state: FSMContext):
     data = await state.get_data()
     await state.clear()
     user, is_admin = await _get_user_and_admin(message)
+
+    if current_state in {
+        TestStates.waiting_birthdate.state,
+        TestStates.waiting_name.state,
+    }:
+        notify_admins = _get_notify_admins()
+        birthdate_raw = (data or {}).get("test_birthdate") if data else None
+        stored_user_id = (data or {}).get("test_user_id") if data else None
+        resolved_user_id = stored_user_id or ((user or {}).get("id") if user else None)
+        if notify_admins and (birthdate_raw or resolved_user_id):
+            stage_label = (
+                "ожидание даты рождения"
+                if current_state == TestStates.waiting_birthdate.state
+                else "ожидание имени"
+            )
+            formatted_birthdate = None
+            if birthdate_raw:
+                try:
+                    formatted_birthdate = _format_birthdate(
+                        date.fromisoformat(birthdate_raw)
+                    )
+                except Exception:
+                    formatted_birthdate = birthdate_raw
+            card_lines = [
+                "🧪 Заявка на тест отменена",
+                f"tg-id: <code>{message.from_user.id}</code>",
+            ]
+            if resolved_user_id:
+                card_lines.append(f"user-id: <code>{resolved_user_id}</code>")
+            if formatted_birthdate:
+                card_lines.append(f"Дата рождения: {formatted_birthdate}")
+            card_lines.append(f"Этап: {stage_label}")
+            try:
+                await notify_admins("\n".join(card_lines))
+            except Exception as exc:
+                logger.warning(
+                    "test_request: notify_admins cancel failed tg_user_id=%s err=%s",
+                    message.from_user.id,
+                    exc,
+                )
 
     if current_state == AdminContentStates.waiting_value.state and is_admin:
         group_title = (data or {}).get("content_group")
