@@ -55,6 +55,7 @@ ADMIN_STATS_USERS_BREAKDOWN = "📋 Статусы пользователей"
 ADMIN_STATS_LESSON_PROGRESS = "🎯 Прогресс уроков"
 ADMIN_STATS_PAYMENTS_BREAKDOWN = "💰 Статистика оплат"
 ADMIN_STATS_RECENT_PAYMENTS = "🧾 Последние оплаты"
+ADMIN_STATS_FORMS_BREAKDOWN = "🗂 Формы и консультации"
 ADMIN_DEBUG_BUTTON = "🛠️ Диагностика"
 ADMIN_SETTINGS_BUTTON = "⚙️ Настройки"
 ADMIN_PAYMENTS_BUTTON = "💳 Оплаты"
@@ -287,6 +288,7 @@ def admin_stats_keyboard() -> ReplyKeyboardMarkup:
         [KeyboardButton(text=ADMIN_STATS_LESSON_PROGRESS)],
         [KeyboardButton(text=ADMIN_STATS_PAYMENTS_BREAKDOWN)],
         [KeyboardButton(text=ADMIN_STATS_RECENT_PAYMENTS)],
+        [KeyboardButton(text=ADMIN_STATS_FORMS_BREAKDOWN)],
         [KeyboardButton(text=BACK_TO_ADMIN), KeyboardButton(text=BACK_TO_MAIN)],
     ]
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)

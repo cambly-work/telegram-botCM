@@ -131,6 +131,7 @@ from keyboards import (
     ADMIN_STATS_LESSON_PROGRESS,
     ADMIN_STATS_PAYMENTS_BREAKDOWN,
     ADMIN_STATS_RECENT_PAYMENTS,
+    ADMIN_STATS_FORMS_BREAKDOWN,
 )
 # ──────────────────────────────────────────────────────────────────────────────
 # Логгер
@@ -1311,6 +1312,26 @@ _ADMIN_PAYMENT_STATUS_LABELS: dict[str, str] = {
     "failed": "Ошибка",
 }
 
+_TEST_REQUEST_STATUS_ORDER = [
+    "waiting",
+    "booked",
+    "in_progress",
+    "done",
+    "cancelled",
+    "archived",
+]
+
+_TEST_REQUEST_STATUS_LABELS: dict[str, str] = {
+    "waiting": "В ожидании",
+    "booked": "Запланировано",
+    "in_progress": "В работе",
+    "done": "Завершено",
+    "cancelled": "Отменено",
+    "archived": "Архив",
+}
+
+_TEST_REQUEST_CLOSED_STATUSES = {"done", "completed", "cancelled", "archived", "rejected"}
+
 
 def _admin_user_segment_from_text(text: str | None) -> str | None:
     if not text:
@@ -1557,6 +1578,37 @@ async def _collect_admin_stats_data() -> dict[str, Any]:
         """
     )
 
+    form_sessions_rows = await fetch(
+        """
+        SELECT form_slug,
+               COUNT(*) AS total,
+               COUNT(*) FILTER (WHERE completed_at IS NOT NULL) AS completed,
+               COUNT(*) FILTER (WHERE completed_at IS NULL) AS in_progress,
+               MAX(started_at) AS last_started,
+               MAX(completed_at) AS last_completed
+          FROM form_sessions
+         GROUP BY form_slug
+        """
+    )
+
+    test_requests_status_rows = await fetch(
+        """
+        SELECT status, COUNT(*) AS count, MAX(updated_at) AS last_updated
+          FROM test_requests
+         GROUP BY status
+        """
+    )
+
+    test_requests_overview = await fetchrow(
+        """
+        SELECT COUNT(*) AS total,
+               COUNT(*) FILTER (
+                   WHERE status NOT IN ('done', 'completed', 'cancelled', 'archived', 'rejected')
+               ) AS active
+          FROM test_requests
+        """
+    )
+
     return {
         "users": {
             "total": int((total or {}).get("c", 0)),
@@ -1569,6 +1621,16 @@ async def _collect_admin_stats_data() -> dict[str, Any]:
             "lesson_stats": [dict(row) for row in lesson_stats_rows or []],
         },
         "payments": [dict(row) for row in payment_stats_rows or []],
+        "forms": {
+            "sessions": [dict(row) for row in form_sessions_rows or []],
+            "test_requests": {
+                "statuses": [dict(row) for row in test_requests_status_rows or []],
+                "summary": {
+                    "total": int((test_requests_overview or {}).get("total", 0)),
+                    "active": int((test_requests_overview or {}).get("active", 0)),
+                },
+            },
+        },
         "timestamp": now_utc(),
     }
 
@@ -1659,6 +1721,80 @@ def _generate_payments_table_data(stats: dict[str, Any]) -> tuple[list[str], lis
     return headers, rows, align
 
 
+def _form_display_label(slug: str) -> str:
+    if not slug:
+        return "—"
+    normalized = slug.strip()
+    base = FORM_LABELS.get(normalized)
+    if base and base != normalized:
+        return f"{base} ({normalized})"
+    return normalized
+
+
+def _generate_form_sessions_table_data(stats: dict[str, Any]) -> tuple[list[str], list[list[str]], list[str]]:
+    forms_data = stats.get("forms") or {}
+    session_rows = forms_data.get("sessions") or []
+
+    headers = [
+        "Форма",
+        "Начато",
+        "Завершено",
+        "Активно",
+        "Посл. старт",
+        "Посл. заверш.",
+    ]
+    align = ["left", "right", "right", "right", "left", "left"]
+
+    if not session_rows:
+        empty_row = ["Нет данных", "0", "0", "0", "—", "—"]
+        return headers, [empty_row], align
+
+    def _row_key(item: dict[str, Any]) -> tuple[int, str]:
+        slug = str(item.get("form_slug") or "")
+        priority = 0 if slug in (FORM_SLUG_ANALYSIS, FORM_SLUG_TEST) else 1
+        return priority, slug
+
+    rows: list[list[str]] = []
+    total_started = 0
+    total_completed = 0
+    total_active = 0
+
+    for item in sorted(session_rows, key=_row_key):
+        slug = str(item.get("form_slug") or "")
+        started = int(item.get("total") or 0)
+        completed = int(item.get("completed") or 0)
+        in_progress = int(item.get("in_progress") or started - completed)
+        in_progress = max(in_progress, 0)
+        last_started = _format_datetime_safe(item.get("last_started"))
+        last_completed = _format_datetime_safe(item.get("last_completed"))
+
+        total_started += started
+        total_completed += completed
+        total_active += in_progress
+
+        rows.append(
+            [
+                _form_display_label(slug),
+                str(started),
+                str(completed),
+                str(in_progress),
+                last_started,
+                last_completed,
+            ]
+        )
+
+    rows.append([
+        "Итого",
+        str(total_started),
+        str(total_completed),
+        str(total_active),
+        "—",
+        "—",
+    ])
+
+    return headers, rows, align
+
+
 def _format_admin_stats_overview(stats: dict[str, Any]) -> str:
     headers_users, rows_users, align_users = _generate_users_table_data(stats)
     headers_lessons, rows_lessons, align_lessons = _generate_lesson_table_data(stats)
@@ -1687,6 +1823,7 @@ def _format_admin_stats_overview(stats: dict[str, Any]) -> str:
         f"Обновлено: {timestamp}",
         "",
         "Используй кнопки ниже, чтобы открыть подробные отчёты.",
+        "«🗂 Формы и консультации» — отдельная сводка по тестам и разборам.",
     ]
     return "\n".join(lines)
 
@@ -1732,6 +1869,81 @@ def _format_admin_stats_payments(stats: dict[str, Any]) -> str:
         "",
         f"Обновлено: {timestamp}",
     ])
+
+
+def _format_admin_stats_forms(stats: dict[str, Any]) -> str:
+    headers, rows, align = _generate_form_sessions_table_data(stats)
+    forms_table = _render_stats_table(headers, rows, align)
+
+    forms_data = stats.get("forms") or {}
+    test_requests = forms_data.get("test_requests") or {}
+    status_rows = test_requests.get("statuses") or []
+    summary = test_requests.get("summary") or {}
+    total_requests = int(summary.get("total") or 0)
+    active_requests = int(summary.get("active") or 0)
+
+    if not total_requests and status_rows:
+        total_requests = sum(int(item.get("count") or 0) for item in status_rows)
+    if not active_requests and status_rows:
+        active_requests = sum(
+            int(item.get("count") or 0)
+            for item in status_rows
+            if str(item.get("status") or "").lower() not in _TEST_REQUEST_CLOSED_STATUSES
+        )
+
+    if status_rows:
+        def _status_key(item: dict[str, Any]) -> tuple[int, str]:
+            status = str(item.get("status") or "")
+            try:
+                return _TEST_REQUEST_STATUS_ORDER.index(status), status
+            except ValueError:
+                return len(_TEST_REQUEST_STATUS_ORDER), status
+
+        ordered_statuses = sorted(status_rows, key=_status_key)
+    else:
+        ordered_statuses = []
+
+    status_lines: list[str] = []
+    for item in ordered_statuses:
+        status = str(item.get("status") or "")
+        label = _TEST_REQUEST_STATUS_LABELS.get(status, status or "—")
+        count = int(item.get("count") or 0)
+        last_updated = _format_datetime_safe(item.get("last_updated"))
+        suffix = f" (обновлено: {last_updated})" if last_updated != "—" else ""
+        is_active = str(status).lower() not in _TEST_REQUEST_CLOSED_STATUSES
+        marker = "🔥" if is_active else "✅"
+        status_lines.append(f"{marker} {label}: <b>{count}</b>{suffix}")
+
+    updates = [item.get("last_updated") for item in ordered_statuses if item.get("last_updated")]
+    last_status_update = max(updates) if updates else None
+
+    lines = [
+        "<b>🗂 Формы и консультации</b>",
+        "",
+        "<b>Формы</b>",
+        forms_table,
+        "",
+        "<b>Заявки на консультацию</b>",
+        f"Всего заявок: <b>{total_requests}</b>",
+        f"Активных (ожидают действий): <b>{active_requests}</b>",
+    ]
+
+    if status_lines:
+        lines.extend(["", "По статусам:", *status_lines])
+    else:
+        lines.extend(["", "Пока нет заявок в базе."])
+
+    timestamp = _format_datetime_safe(stats.get("timestamp"))
+    last_status_text = _format_datetime_safe(last_status_update)
+
+    lines.extend([
+        "",
+        f"Последнее изменение статусов: {last_status_text}",
+        f"Обновлено: {timestamp}",
+    ])
+
+    return "\n".join(lines)
+
 
 async def _admin_set_member_active(user_id: int, access_until: Optional[datetime]) -> None:
     await execute(
@@ -6594,6 +6806,22 @@ async def admin_stats_payments_breakdown(message: types.Message, state: FSMConte
 
     stats = await _collect_admin_stats_data()
     text = _format_admin_stats_payments(stats)
+    await message.answer(
+        text,
+        reply_markup=admin_stats_keyboard(),
+        disable_web_page_preview=True,
+        parse_mode=ParseMode.HTML,
+    )
+
+
+@router.message(F.text == ADMIN_STATS_FORMS_BREAKDOWN)
+async def admin_stats_forms_breakdown(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+    await _reset_state_if_needed(state)
+
+    stats = await _collect_admin_stats_data()
+    text = _format_admin_stats_forms(stats)
     await message.answer(
         text,
         reply_markup=admin_stats_keyboard(),

@@ -216,6 +216,10 @@ CREATE INDEX IF NOT EXISTS idx_form_sessions_user_started
   ON form_sessions(user_id, started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_form_sessions_incomplete
   ON form_sessions(completed_at, started_at);
+CREATE INDEX IF NOT EXISTS idx_form_sessions_slug
+  ON form_sessions(form_slug);
+CREATE INDEX IF NOT EXISTS idx_form_sessions_slug_completed
+  ON form_sessions(form_slug, completed_at);
 
 -- TEST_REQUESTS
 CREATE TABLE IF NOT EXISTS test_requests (
