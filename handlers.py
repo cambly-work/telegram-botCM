@@ -3775,23 +3775,32 @@ async def cmd_form_done(message: types.Message, command: CommandObject, state: F
         invite_text = ""
         gen_invite_link = None
         notify_admins = None
+        invite_attempted = False
+        invite_generated = False
         try:
-            from app import gen_invite_link as _gen_invite_link, notify_admins as _notify_admins
+            from app import gen_invite_link as _gen_invite_link
 
             gen_invite_link = _gen_invite_link
-            notify_admins = _notify_admins
         except Exception:
             gen_invite_link = None
+
+        try:
+            from app import notify_admins as _notify_admins
+
+            notify_admins = _notify_admins
+        except Exception:
             notify_admins = None
 
         if gen_invite_link:
             try:
+                invite_attempted = True
                 invite_payload = await gen_invite_link()
                 if invite_payload:
                     if invite_payload.startswith("http"):
                         invite_text = f"Твоя персональная ссылка: {invite_payload}"
                     else:
                         invite_text = invite_payload
+                    invite_generated = True
             except Exception as exc:
                 logger.warning("form_session: gen_invite_link failed user_id=%s slug=%s: %s", user_row["id"], slug, exc)
 
@@ -3799,15 +3808,27 @@ async def cmd_form_done(message: types.Message, command: CommandObject, state: F
             response_lines.append(invite_text)
         else:
             response_lines.append("Мы передали заявку администраторам и свяжемся с тобой в ближайшее время.")
-            if notify_admins:
-                username = message.from_user.username
-                display = f"@{username}" if username else message.from_user.full_name or message.from_user.id
-                try:
-                    await notify_admins(
-                        f"✅ Завершена анкета «{label}»\nПользователь: {display} (tg_id={message.from_user.id})"
+        if notify_admins:
+            username = message.from_user.username
+            display = f"@{username}" if username else message.from_user.full_name or message.from_user.id
+            if invite_generated:
+                invite_status = "Ссылка выдана автоматически"
+            elif invite_attempted:
+                invite_status = "Не удалось выдать ссылку автоматически"
+            else:
+                invite_status = "Автовыдача ссылок недоступна"
+            try:
+                await notify_admins(
+                    "\n".join(
+                        [
+                            f"✅ Завершена анкета «{label}»",
+                            f"Пользователь: {display} (tg_id={message.from_user.id})",
+                            f"Инвайт: {invite_status}",
+                        ]
                     )
-                except Exception as exc:
-                    logger.warning("form_session: notify_admins failed user_id=%s slug=%s: %s", user_row["id"], slug, exc)
+                )
+            except Exception as exc:
+                logger.warning("form_session: notify_admins failed user_id=%s slug=%s: %s", user_row["id"], slug, exc)
     else:
         response_lines.append(f"Анкета «{label}» уже отмечена как завершённая.")
 
