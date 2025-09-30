@@ -35,6 +35,8 @@ ADMIN_CONTENT_TAGS_HELP = "ℹ️ Форматирование текста"
 ADMIN_CONTENT_SAVE_TEMPLATE_BUTTON = "📥 Сохранить шаблон"
 ADMIN_CONTENT_SUGGEST_MORE = "🔁 Ещё варианты"
 ADMIN_CONTENT_ROLLBACK_PREFIX = "↩️ Откатить"
+ADMIN_CONTENT_EXPORT = "⬇️ Экспорт"
+ADMIN_CONTENT_IMPORT = "⬆️ Импорт"
 ADMIN_USERS_BUTTON = "👥 Пользователи"
 ADMIN_USERS_SEGMENT_LEADS = "🎯 Лиды"
 ADMIN_USERS_SEGMENT_ACTIVE = "🔥 Активные"
@@ -461,6 +463,10 @@ def admin_content_keyboard(*, include_save_template: bool = False) -> ReplyKeybo
             KeyboardButton(text=ADMIN_CONTENT_CREATE),
         ],
         [KeyboardButton(text=ADMIN_CONTENT_HISTORY)],
+        [
+            KeyboardButton(text=ADMIN_CONTENT_EXPORT),
+            KeyboardButton(text=ADMIN_CONTENT_IMPORT),
+        ],
         [KeyboardButton(text=ADMIN_CONTENT_TAGS_HELP)],
         [KeyboardButton(text=BACK_TO_ADMIN), KeyboardButton(text=BACK_TO_MAIN)],
     ])
