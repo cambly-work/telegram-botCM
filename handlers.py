@@ -159,8 +159,6 @@ FORM_ALIASES: dict[str, str] = {
     "magnetism-window": "magnetism-window",
     "magnetism_window": "magnetism-window",
 }
-
-FORM_REMINDERS_SETTING_KEY = "form_reminders_enabled"
 # ──────────────────────────────────────────────────────────────────────────────
 # Конфиг из окружения
 # ──────────────────────────────────────────────────────────────────────────────
@@ -1147,6 +1145,9 @@ _ADMIN_TEXT_GROUPS: dict[str, list[tuple[str, str]]] = {
         ("Комментарий о проверке оплаты", "menu.pay.manual_review"),
         ("Окно «Поддержка»", "menu.support"),
     ],
+    "📝 Анкеты": [
+        ("Напоминание о незавершённой анкете", "forms.reminder_template"),
+    ],
 }
 
 ADMIN_TEXTS_PREVIEW_BUTTON = "👁 Предпросмотр"
@@ -1167,6 +1168,10 @@ _ADMIN_TEXT_PLACEHOLDERS: dict[str, dict[str, list[str]]] = {
     "menu.support": {
         "required": ["{support}"],
         "optional": ["{{SUPPORT_CONTACT}}"],
+    },
+    "forms.reminder_template": {
+        "required": ["{form_label}"],
+        "optional": [],
     },
 }
 
@@ -3209,17 +3214,14 @@ async def send_admin_onboarding_menu(message: types.Message) -> None:
 
 
 async def send_admin_broadcast_menu(message: types.Message) -> None:
-    reminders_enabled = await get_bool_setting(FORM_REMINDERS_SETTING_KEY, True)
-    status = "включены" if reminders_enabled else "выключены"
     text = (
         "<b>Рассылка</b>\n\n"
         "Выберите сегмент, напишите текст — бот покажет предпросмотр и спросит подтверждение.\n"
-        "Можно сохранять тексты как шаблоны и переиспользовать их позже.\n\n"
-        f"<b>Напоминания анкет:</b> {status}."
+        "Можно сохранять тексты как шаблоны и переиспользовать их позже."
     )
     await message.answer(
         text,
-        reply_markup=admin_broadcast_keyboard(reminders_enabled=reminders_enabled),
+        reply_markup=admin_broadcast_keyboard(),
         disable_web_page_preview=True,
     )
 
@@ -5434,36 +5436,15 @@ async def admin_broadcast_templates(message: types.Message, state: FSMContext):
     await send_admin_broadcast_templates(message)
 
 
-@router.message(F.text.func(lambda text: isinstance(text, str) and text.endswith("Напоминания анкет")))
-async def admin_broadcast_toggle_form_reminders(message: types.Message, state: FSMContext):
-    if not is_admin_id(message.from_user.id):
-        return
-    await _reset_state_if_needed(state)
-    current = await get_bool_setting(FORM_REMINDERS_SETTING_KEY, True)
-    new_value = not current
-    await set_bool_setting(
-        FORM_REMINDERS_SETTING_KEY,
-        new_value,
-        updated_by=message.from_user.id,
-    )
-    await log_admin_action(
-        message.from_user.id,
-        "broadcast_form_reminders_toggle",
-        {"enabled": new_value},
-    )
-    await send_admin_broadcast_menu(message)
-
-
 @router.message(F.text == DELETE_BROADCAST_TEMPLATE_BUTTON)
 async def admin_broadcast_delete_prompt(message: types.Message, state: FSMContext):
     if not is_admin_id(message.from_user.id):
         return
     templates = await list_broadcast_templates()
     if not templates:
-        reminders_enabled = await get_bool_setting(FORM_REMINDERS_SETTING_KEY, True)
         await message.answer(
             "Пока нет сохранённых шаблонов.",
-            reply_markup=admin_broadcast_keyboard(reminders_enabled=reminders_enabled),
+            reply_markup=admin_broadcast_keyboard(),
         )
         return
     titles = [tpl["title"] for tpl in templates]
@@ -8017,10 +7998,9 @@ async def admin_broadcast_change_segment(message: types.Message, state: FSMConte
         return
     await state.set_state(BroadcastStates.waiting_segment)
     await state.update_data(change_segment=True)
-    reminders_enabled = await get_bool_setting(FORM_REMINDERS_SETTING_KEY, True)
     await message.answer(
         "Выбери новый сегмент для рассылки.",
-        reply_markup=admin_broadcast_keyboard(reminders_enabled=reminders_enabled),
+        reply_markup=admin_broadcast_keyboard(),
     )
 
 

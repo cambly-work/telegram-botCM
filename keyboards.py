@@ -372,16 +372,9 @@ def admin_onboarding_delete_keyboard(steps: list[str]) -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
 
-def admin_broadcast_keyboard(*, reminders_enabled: bool) -> ReplyKeyboardMarkup:
-    reminders_toggle = (
-        "✅ Напоминания анкет" if reminders_enabled else "❌ Напоминания анкет"
-    )
+def admin_broadcast_keyboard() -> ReplyKeyboardMarkup:
     rows = [
-        [
-            KeyboardButton(text=BROADCAST_ALL_BUTTON),
-            KeyboardButton(text=BROADCAST_LEADS_BUTTON),
-            KeyboardButton(text=reminders_toggle),
-        ],
+        [KeyboardButton(text=BROADCAST_ALL_BUTTON), KeyboardButton(text=BROADCAST_LEADS_BUTTON)],
         [KeyboardButton(text=BROADCAST_MEMBERS_BUTTON), KeyboardButton(text=BROADCAST_EXPIRED_BUTTON)],
         [KeyboardButton(text=BROADCAST_TEMPLATES_BUTTON)],
         [KeyboardButton(text=BACK_TO_ADMIN), KeyboardButton(text=BACK_TO_MAIN)],
