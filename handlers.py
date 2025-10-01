@@ -11,6 +11,7 @@ import time
 import html
 from collections import OrderedDict
 from datetime import datetime, date, timedelta, timezone
+from zoneinfo import ZoneInfo
 from typing import Optional, Iterable, Dict, List, Callable, Awaitable, Any
 from aiogram import Router, F, types
 from aiogram.enums import ParseMode
@@ -91,6 +92,13 @@ from keyboards import (
     ADMIN_CONTENT_EXPORT,
     ADMIN_CONTENT_IMPORT,
     ADMIN_USERS_BUTTON,
+    ADMIN_SCHEDULE_BUTTON,
+    ADMIN_SCHEDULE_ADD_EVENT,
+    ADMIN_SCHEDULE_EDIT_EVENT,
+    ADMIN_SCHEDULE_ARCHIVE_EVENT,
+    ADMIN_SCHEDULE_RESTORE_EVENT,
+    ADMIN_SCHEDULE_SHOW_ARCHIVE,
+    ADMIN_SCHEDULE_SHOW_ACTIVE,
     ADMIN_BROADCAST_BUTTON,
     ADMIN_BROADCAST_HISTORY_BUTTON,
     ADMIN_BEHAVIOR_BUTTON,
@@ -126,6 +134,7 @@ from keyboards import (
     admin_users_segments_keyboard,
     admin_users_pagination_keyboard,
     admin_user_card_keyboard,
+    admin_schedule_keyboard,
     ADMIN_USERS_SEGMENT_LEADS,
     ADMIN_USERS_SEGMENT_ACTIVE,
     ADMIN_USERS_SEGMENT_EXPIRED,
@@ -195,6 +204,12 @@ SUPPORT_CONTACT = os.getenv("SUPPORT_CONTACT", "@Tokyo_tokyo")
 AT_PRODUCT_ID_CLUB = os.getenv("AT_PRODUCT_ID_CLUB", "")
 CLUB_CHAT_ID = os.getenv("CLUB_CHAT_ID", "")  # ID приватной группы/канала (опц.)
 BOT_VERSION = "1.0.0"
+
+try:
+    BOT_ZONE = ZoneInfo(BOT_TIMEZONE)
+except Exception:  # pragma: no cover - fallback for misconfiguration
+    logger.warning("Invalid BOT_TIMEZONE=%s, falling back to Europe/Moscow", BOT_TIMEZONE)
+    BOT_ZONE = ZoneInfo("Europe/Moscow")
 
 
 def is_admin_id(user_id: int | str | None) -> bool:
@@ -1167,6 +1182,17 @@ class AdminBehaviorStates(StatesGroup):
     waiting_registration_text = State()
     waiting_onboarding_text = State()
     waiting_onboarding_delete = State()
+
+
+class AdminScheduleStates(StatesGroup):
+    waiting_week = State()
+    waiting_datetime = State()
+    waiting_type = State()
+    waiting_description = State()
+    waiting_link = State()
+    waiting_event_id_edit = State()
+    waiting_event_id_archive = State()
+    waiting_event_id_restore = State()
 
 
 class AdminUserStates(StatesGroup):
@@ -2568,6 +2594,253 @@ async def get_broadcast_flags() -> dict[str, bool]:
     return flags
 
 
+def _calculate_remind_at(scheduled_at: datetime) -> datetime:
+    return scheduled_at - timedelta(hours=1)
+
+
+def _format_schedule_datetime_plain(dt: datetime) -> tuple[str, str]:
+    local = dt.astimezone(BOT_ZONE)
+    tz_label = local.tzname() or BOT_TIMEZONE
+    return local.strftime("%d.%m %H:%M"), tz_label
+
+
+def _parse_local_datetime(text: str) -> datetime | None:
+    if not text:
+        return None
+    try:
+        naive = datetime.strptime(text.strip(), "%d.%m.%Y %H:%M")
+    except ValueError:
+        return None
+    localized = naive.replace(tzinfo=BOT_ZONE)
+    return localized.astimezone(timezone.utc)
+
+
+async def list_schedule_weeks(*, include_archived: bool = False) -> list[dict]:
+    where = "" if include_archived else "WHERE is_archived = FALSE"
+    query = (
+        """
+        SELECT id, week_number, title, start_date, end_date, is_archived
+        FROM schedule_cycle_weeks
+        {where}
+        ORDER BY
+            CASE WHEN start_date IS NULL THEN 1 ELSE 0 END,
+            start_date,
+            week_number
+        """
+    ).format(where=where)
+    return await fetch(query)
+
+
+async def get_schedule_week(week_id: int) -> dict | None:
+    return await fetchrow(
+        """
+        SELECT id, week_number, title, start_date, end_date, is_archived
+        FROM schedule_cycle_weeks
+        WHERE id = $1
+        """,
+        week_id,
+    )
+
+
+async def get_schedule_week_by_number(week_number: int) -> dict | None:
+    return await fetchrow(
+        """
+        SELECT id, week_number, title, start_date, end_date, is_archived
+        FROM schedule_cycle_weeks
+        WHERE week_number = $1
+        """,
+        week_number,
+    )
+
+
+async def get_current_schedule_week(*, today: Optional[date] = None) -> dict | None:
+    day = today or datetime.now(BOT_ZONE).date()
+    return await fetchrow(
+        """
+        SELECT id, week_number, title, start_date, end_date
+        FROM schedule_cycle_weeks
+        WHERE is_archived = FALSE
+          AND start_date IS NOT NULL
+          AND end_date IS NOT NULL
+          AND start_date <= $1
+          AND end_date >= $1
+        ORDER BY start_date
+        LIMIT 1
+        """,
+        day,
+    )
+
+
+async def list_schedule_events(
+    *,
+    include_archived: bool = False,
+    from_dt: datetime | None = None,
+    limit: int | None = None,
+) -> list[dict]:
+    conditions: list[str] = []
+    params: list[Any] = []
+    if not include_archived:
+        conditions.append("e.is_archived = FALSE")
+    if from_dt is not None:
+        conditions.append(f"e.scheduled_at >= ${len(params) + 1}")
+        params.append(from_dt)
+    where_sql = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+    limit_sql = f" LIMIT {int(limit)}" if limit is not None else ""
+    query = f"""
+        SELECT
+            e.*, w.week_number, w.title AS week_title, w.start_date, w.end_date
+        FROM schedule_events e
+        LEFT JOIN schedule_cycle_weeks w ON w.id = e.week_id
+        {where_sql}
+        ORDER BY e.scheduled_at
+        {limit_sql}
+    """
+    return await fetch(query, *params)
+
+
+async def get_schedule_event(event_id: int) -> dict | None:
+    return await fetchrow(
+        """
+        SELECT
+            e.*, w.week_number, w.title AS week_title, w.start_date, w.end_date
+        FROM schedule_events e
+        LEFT JOIN schedule_cycle_weeks w ON w.id = e.week_id
+        WHERE e.id = $1
+        """,
+        event_id,
+    )
+
+
+async def create_schedule_event(
+    *,
+    week_id: int | None,
+    scheduled_at: datetime,
+    event_type: str,
+    description: str,
+    link: str | None,
+) -> dict:
+    row = await fetchrow(
+        """
+        INSERT INTO schedule_events (week_id, scheduled_at, event_type, description, link, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, NOW(), NOW())
+        RETURNING *
+        """,
+        week_id,
+        scheduled_at,
+        event_type,
+        description,
+        link,
+    )
+    return row
+
+
+async def update_schedule_event(
+    event_id: int,
+    *,
+    week_id: int | None,
+    scheduled_at: datetime,
+    event_type: str,
+    description: str,
+    link: str | None,
+) -> dict | None:
+    row = await fetchrow(
+        """
+        UPDATE schedule_events
+        SET week_id = $1,
+            scheduled_at = $2,
+            event_type = $3,
+            description = $4,
+            link = $5,
+            updated_at = NOW()
+        WHERE id = $6
+        RETURNING *
+        """,
+        week_id,
+        scheduled_at,
+        event_type,
+        description,
+        link,
+        event_id,
+    )
+    if row:
+        await execute(
+            """
+            UPDATE schedule_event_reminders
+            SET remind_at = $1,
+                notified_at = NULL,
+                is_cancelled = FALSE,
+                updated_at = NOW()
+            WHERE event_id = $2
+            """,
+            _calculate_remind_at(row["scheduled_at"]),
+            event_id,
+        )
+    return row
+
+
+async def set_schedule_event_archived(event_id: int, *, archived: bool) -> dict | None:
+    row = await fetchrow(
+        """
+        UPDATE schedule_events
+        SET is_archived = $1,
+            updated_at = NOW()
+        WHERE id = $2
+        RETURNING *
+        """,
+        archived,
+        event_id,
+    )
+    if row:
+        if archived:
+            await execute(
+                """
+                UPDATE schedule_event_reminders
+                SET is_cancelled = TRUE,
+                    updated_at = NOW()
+                WHERE event_id = $1
+                """,
+                event_id,
+            )
+        else:
+            await execute(
+                """
+                UPDATE schedule_event_reminders
+                SET is_cancelled = FALSE,
+                    remind_at = $1,
+                    notified_at = NULL,
+                    updated_at = NOW()
+                WHERE event_id = $2
+                """,
+                _calculate_remind_at(row["scheduled_at"]),
+                event_id,
+            )
+    return row
+
+
+async def upsert_schedule_event_reminder(user_id: int, event_id: int) -> dict | None:
+    event_row = await get_schedule_event(event_id)
+    if not event_row or event_row.get("is_archived"):
+        return None
+    remind_at = _calculate_remind_at(event_row["scheduled_at"])
+    row = await fetchrow(
+        """
+        INSERT INTO schedule_event_reminders (event_id, user_id, remind_at, created_at, updated_at)
+        VALUES ($1, $2, $3, NOW(), NOW())
+        ON CONFLICT (event_id, user_id)
+        DO UPDATE SET
+            remind_at = EXCLUDED.remind_at,
+            is_cancelled = FALSE,
+            notified_at = NULL,
+            updated_at = NOW()
+        RETURNING *
+        """,
+        event_id,
+        user_id,
+        remind_at,
+    )
+    return row
+
+
 def _broadcast_status_labels(flags: dict[str, bool]) -> dict[str, bool]:
     labeled: dict[str, bool] = {}
     for key, default in _ADMIN_BROADCAST_SETTINGS_DEFAULTS.items():
@@ -2623,15 +2896,13 @@ async def answer_with_main_menu(
     *,
     section: str = "root",
     from_callback: bool = False,
-    custom_keyboard: ReplyKeyboardMarkup | None = None,
+    **answer_kwargs: Any,
 ) -> None:
     """Отправляет или обновляет сообщение с главным меню."""
     user_row = user or await get_user_with_id(message.from_user.id)
-    if custom_keyboard is not None:
-        kb = custom_keyboard
-    else:
-        kb = await build_menu_keyboard(user=user_row, is_admin=is_admin, section=section)
-    await message.answer(text, reply_markup=kb)
+    kb = await build_menu_keyboard(user=user_row, is_admin=is_admin, section=section)
+    await message.answer(text, reply_markup=kb, **answer_kwargs)
+
 
 
 async def send_menu_section(
@@ -3581,15 +3852,93 @@ async def send_schedule_section(
         )
         return
 
-    schedule_text = await get_content(
+    intro_template = await get_content(
         "schedule",
         (
-            "🗓️ Расписание эфиров:\n"
-            "• Понедельник 20:00 — Вводный эфир\n"
-            "• Четверг 19:00 — Практика в группе\n"
-            "• Воскресенье 18:00 — Подведение итогов"
+            "🗓️ Расписание клуба.\n"
+            "Ниже — текущая неделя цикла и ближайшие события.\n"
+            "Чтобы получить напоминание за час до начала, отправь команду /remind_<ID>."
         ),
     )
+
+    now_utc = datetime.now(timezone.utc)
+    events = await list_schedule_events(
+        from_dt=now_utc - timedelta(hours=1),
+        include_archived=False,
+        limit=10,
+    )
+    current_week = await get_current_schedule_week()
+    weeks = await list_schedule_weeks()
+    today_local = datetime.now(BOT_ZONE).date()
+
+    upcoming_week: dict | None = None
+    if not current_week:
+        for week in weeks:
+            start_date = week.get("start_date")
+            if start_date and start_date >= today_local:
+                upcoming_week = week
+                break
+
+    lines: list[str] = []
+    intro_text = (intro_template or "").strip()
+    if intro_text:
+        lines.append(intro_text)
+
+    if current_week:
+        start_date = current_week.get("start_date")
+        end_date = current_week.get("end_date")
+        period = ""
+        if start_date and end_date:
+            period = f" ({start_date.strftime('%d.%m')}–{end_date.strftime('%d.%m')})"
+        lines.append("")
+        lines.append(
+            f"Текущая неделя цикла: #{current_week['week_number']} — {current_week['title']}{period}".strip()
+        )
+    elif upcoming_week:
+        start_date = upcoming_week.get("start_date")
+        end_date = upcoming_week.get("end_date")
+        period = ""
+        if start_date and end_date:
+            period = f" ({start_date.strftime('%d.%m')}–{end_date.strftime('%d.%m')})"
+        lines.append("")
+        lines.append(
+            f"Ближайшая неделя цикла: #{upcoming_week['week_number']} — {upcoming_week['title']}{period}".strip()
+        )
+    elif weeks:
+        first_week = weeks[0]
+        lines.append("")
+        lines.append(
+            f"Текущий цикл: #{first_week['week_number']} — {first_week['title']}"
+        )
+
+    if events:
+        lines.append("")
+        lines.append("Ближайшие события:")
+        for event in events:
+            dt_label, tz_label = _format_schedule_datetime_plain(event["scheduled_at"])
+            week_number = event.get("week_number")
+            week_title = event.get("week_title")
+            week_info = ""
+            if week_number and week_title:
+                week_info = f" (неделя {week_number}: {week_title})"
+            elif week_number:
+                week_info = f" (неделя {week_number})"
+            header = (
+                f"{event['id']}. {dt_label} {tz_label} — {event['event_type']}{week_info}"
+            )
+            lines.append(header)
+            description = (event.get("description") or "").strip()
+            if description:
+                lines.append(f"   {description}")
+            link = (event.get("link") or "").strip()
+            if link:
+                lines.append(f"   Ссылка: {link}")
+            lines.append(f"   Напоминание: /remind_{event['id']}")
+    else:
+        lines.append("")
+        lines.append("Пока нет активных событий. Загляни позже — мы обновим расписание.")
+
+    schedule_text = "\n".join(lines).strip()
 
     await answer_with_main_menu(
         message,
@@ -3598,6 +3947,7 @@ async def send_schedule_section(
         schedule_text,
         section="materials",
         from_callback=from_callback,
+        disable_web_page_preview=True,
     )
 
 
@@ -3844,6 +4194,7 @@ async def send_admin_menu(
         "Здесь собраны основные инструменты:\n"
         "• 👥 Пользователи — сегменты, карточки профилей и управление доступом.\n"
         "• 📢 Рассылка — как отправлять сообщения сегментам.\n"
+        "• 📆 Расписание — управление событиями цикла и напоминаниями.\n"
         "• 🧾 Контент и тексты — редактирование сообщений бота без команд.\n"
         "• 🎛 Логика бота — сценарии приветствия, онбординг и доступ к оплатам.\n"
         "• 📊 Статистика — сводка по статусам, прогресс уроков и последние оплаты.\n"
@@ -3856,6 +4207,195 @@ async def send_admin_menu(
         reply_markup=admin_main_keyboard(),
         disable_web_page_preview=True,
     )
+
+
+def _format_admin_schedule_event(event: dict) -> str:
+    dt_label, tz_label = _format_schedule_datetime_plain(event["scheduled_at"])
+    week_number = event.get("week_number")
+    week_title = event.get("week_title")
+    week_info = ""
+    if week_number and week_title:
+        week_info = f" (неделя {week_number}: {week_title})"
+    elif week_number:
+        week_info = f" (неделя {week_number})"
+    header = f"#{event['id']}. {dt_label} {tz_label} — {event['event_type']}{week_info}"
+    lines = [header]
+    description = (event.get("description") or "").strip()
+    if description:
+        lines.append(f"   {description}")
+    link = (event.get("link") or "").strip()
+    if link:
+        lines.append(f"   {link}")
+    return "\n".join(lines)
+
+
+def _format_admin_schedule_weeks_list(weeks: list[dict]) -> str:
+    if not weeks:
+        return "— пока не добавлены."
+    lines: list[str] = []
+    for week in weeks:
+        start_date = week.get("start_date")
+        end_date = week.get("end_date")
+        period = ""
+        if start_date and end_date:
+            period = f" ({start_date.strftime('%d.%m')}–{end_date.strftime('%d.%m')})"
+        lines.append(f"#{week['week_number']} — {week['title']}{period}")
+    return "\n".join(lines)
+
+
+async def send_admin_schedule_menu(
+    message: types.Message,
+    *,
+    archived: bool = False,
+) -> None:
+    rows = await list_schedule_events(include_archived=True, from_dt=None)
+    events = [row for row in rows if bool(row.get("is_archived")) is archived]
+    events.sort(key=lambda item: item.get("scheduled_at"), reverse=archived)
+
+    mode_label = "Архив событий" if archived else "Активные события"
+    lines = [mode_label]
+
+    if events:
+        for event in events:
+            lines.append("")
+            lines.append(_format_admin_schedule_event(event))
+    else:
+        lines.extend(["", "Список пуст. Добавьте событие через кнопку ниже."])
+
+    weeks = await list_schedule_weeks(include_archived=False)
+    if weeks:
+        lines.append("")
+        lines.append("Недели цикла:")
+        for week in weeks:
+            start_date = week.get("start_date")
+            end_date = week.get("end_date")
+            period = ""
+            if start_date and end_date:
+                period = f" ({start_date.strftime('%d.%m')}–{end_date.strftime('%d.%m')})"
+            lines.append(f"  #{week['week_number']} — {week['title']}{period}")
+
+    lines.append("")
+    lines.append("Для напоминания пользователям используйте команду /remind_<ID> в списке событий.")
+
+    text = "\n".join(lines).strip()
+    await message.answer(
+        text,
+        reply_markup=admin_schedule_keyboard(archive_mode=archived),
+        disable_web_page_preview=True,
+    )
+
+
+async def _finalize_schedule_create(message: types.Message, state: FSMContext) -> None:
+    data = await state.get_data() or {}
+    scheduled_iso = data.get("schedule_datetime_iso")
+    event_type = (data.get("schedule_event_type") or "").strip()
+    if not scheduled_iso or not event_type:
+        await message.answer(
+            "Не хватает данных для создания события. Начни заново через «➕ Добавить событие»."
+        )
+        await state.clear()
+        await send_admin_schedule_menu(message)
+        return
+
+    try:
+        scheduled_at = datetime.fromisoformat(scheduled_iso)
+    except Exception:
+        await message.answer(
+            "Не удалось распознать дату события. Запусти создание заново и укажи дату ещё раз."
+        )
+        await state.clear()
+        await send_admin_schedule_menu(message)
+        return
+
+    week_id = data.get("schedule_week_id")
+    description = (data.get("schedule_description") or "").strip()
+    link = (data.get("schedule_link") or "").strip()
+
+    row = await create_schedule_event(
+        week_id=week_id,
+        scheduled_at=scheduled_at,
+        event_type=event_type,
+        description=description if description else None,
+        link=link if link else None,
+    )
+
+    event_row = await get_schedule_event(row["id"]) if row else None
+    summary = _format_admin_schedule_event(event_row) if event_row else f"#{row['id']}"
+
+    await log_admin_action(
+        message.from_user.id,
+        "schedule_event_create",
+        {
+            "event_id": row["id"] if row else None,
+            "week_id": week_id,
+            "scheduled_at": scheduled_at.isoformat(),
+        },
+    )
+
+    await message.answer(
+        f"Событие создано ✅\n\n{summary}",
+        disable_web_page_preview=True,
+    )
+    await state.clear()
+    await send_admin_schedule_menu(message)
+
+
+async def _finalize_schedule_edit(message: types.Message, state: FSMContext) -> None:
+    data = await state.get_data() or {}
+    event_id = data.get("schedule_event_id")
+    scheduled_iso = data.get("schedule_datetime_iso")
+    event_type = (data.get("schedule_event_type") or "").strip()
+    if not event_id or not scheduled_iso or not event_type:
+        await message.answer("Не удалось сохранить изменения. Попробуй выбрать событие снова.")
+        await state.clear()
+        await send_admin_schedule_menu(message)
+        return
+
+    try:
+        scheduled_at = datetime.fromisoformat(scheduled_iso)
+    except Exception:
+        await message.answer("Дата события выглядит некорректно. Запусти редактирование заново.")
+        await state.clear()
+        await send_admin_schedule_menu(message)
+        return
+
+    week_id = data.get("schedule_week_id")
+    description = (data.get("schedule_description") or "").strip()
+    link = (data.get("schedule_link") or "").strip()
+
+    row = await update_schedule_event(
+        int(event_id),
+        week_id=week_id,
+        scheduled_at=scheduled_at,
+        event_type=event_type,
+        description=description if description else None,
+        link=link if link else None,
+    )
+    if not row:
+        await message.answer("Событие не найдено или уже удалено. Обнови список.")
+        await state.clear()
+        await send_admin_schedule_menu(message)
+        return
+
+    event_row = await get_schedule_event(int(event_id))
+    summary = _format_admin_schedule_event(event_row) if event_row else f"#{event_id}"
+
+    await log_admin_action(
+        message.from_user.id,
+        "schedule_event_update",
+        {
+            "event_id": int(event_id),
+            "week_id": week_id,
+            "scheduled_at": scheduled_at.isoformat(),
+        },
+    )
+
+    await message.answer(
+        f"Событие обновлено ✅\n\n{summary}",
+        disable_web_page_preview=True,
+    )
+    await state.clear()
+    await send_admin_schedule_menu(message)
 
 
 async def send_admin_settings(
@@ -4801,6 +5341,91 @@ async def profile_receive_phone(message: types.Message, state: FSMContext):
 
 
 
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Напоминания о событиях
+# ──────────────────────────────────────────────────────────────────────────────
+async def _handle_schedule_reminder_request(message: types.Message, event_id: int) -> None:
+    if event_id <= 0:
+        await message.answer(
+            "Используй положительный идентификатор события. Номер можно посмотреть в разделе «Расписание»."
+        )
+        return
+
+    user_row = await get_user_with_id(message.from_user.id)
+    if not user_row:
+        user_row = await ensure_user(message.from_user)
+
+    if not await is_member(user_row):
+        await message.answer(
+            "Напоминания доступны участницам клуба. Активируй доступ, чтобы получать уведомления о событиях."
+        )
+        return
+
+    event_row = await get_schedule_event(event_id)
+    if not event_row or event_row.get("is_archived"):
+        await message.answer("Не нашла событие с таким номером. Проверь список в разделе «Расписание».")
+        return
+
+    scheduled_at: datetime = event_row["scheduled_at"]
+    if scheduled_at <= datetime.now(timezone.utc):
+        await message.answer("Это событие уже началось или завершилось. Выбери другое из расписания.")
+        return
+
+    reminder_row = await upsert_schedule_event_reminder(user_row["id"], event_id)
+    if not reminder_row:
+        await message.answer("Не удалось сохранить напоминание. Попробуй позже или напиши в поддержку.")
+        return
+
+    event_dt_label, event_tz = _format_schedule_datetime_plain(scheduled_at)
+    remind_dt_label, remind_tz = _format_schedule_datetime_plain(reminder_row["remind_at"])
+
+    lines = [
+        "Напоминание сохранено ✅",
+        f"Событие: {event_row['event_type']} — {event_dt_label} {event_tz}.",
+        f"Сообщение придёт {remind_dt_label} {remind_tz} (за час до начала).",
+    ]
+    link = (event_row.get("link") or "").strip()
+    if link:
+        lines.append(f"Ссылка: {link}")
+
+    await message.answer("\n".join(lines))
+    logger.info(
+        "schedule_reminder_saved user_id=%s event_id=%s remind_at=%s",
+        user_row["id"],
+        event_id,
+        reminder_row["remind_at"],
+    )
+
+
+@router.message(Command("remind"))
+async def cmd_schedule_remind(message: types.Message, command: CommandObject, state: FSMContext):
+    await _reset_state_if_needed(state)
+
+    raw_arg = (command.args or "").strip() if command else ""
+    if not raw_arg:
+        await message.answer(
+            "Использование: /remind <ID события>. Номер ищи в разделе «Расписание» — он указан в начале строки."
+        )
+        return
+
+    if not raw_arg.isdigit():
+        await message.answer(
+            "Идентификатор события должен быть числом. Посмотри номер в разделе «Расписание» и отправь его через /remind."
+        )
+        return
+
+    await _handle_schedule_reminder_request(message, int(raw_arg))
+
+
+@router.message(F.text.regexp(r"^/remind_(\d+)$"))
+async def cmd_schedule_remind_short(message: types.Message, state: FSMContext):
+    await _reset_state_if_needed(state)
+    match = re.match(r"^/remind_(\d+)$", message.text or "")
+    if not match:
+        return
+    await _handle_schedule_reminder_request(message, int(match.group(1)))
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -5862,6 +6487,23 @@ async def cancel_handler(message: types.Message, state: FSMContext):
     if (
         current_state
         in {
+            AdminScheduleStates.waiting_week.state,
+            AdminScheduleStates.waiting_datetime.state,
+            AdminScheduleStates.waiting_type.state,
+            AdminScheduleStates.waiting_description.state,
+            AdminScheduleStates.waiting_link.state,
+            AdminScheduleStates.waiting_event_id_edit.state,
+            AdminScheduleStates.waiting_event_id_archive.state,
+            AdminScheduleStates.waiting_event_id_restore.state,
+        }
+        and is_admin
+    ):
+        await send_admin_schedule_menu(message)
+        return
+
+    if (
+        current_state
+        in {
             AdminBehaviorStates.waiting_start_text.state,
             AdminBehaviorStates.waiting_registration_text.state,
         }
@@ -6237,6 +6879,383 @@ async def admin_onboarding_delete_step(message: types.Message, state: FSMContext
     await state.clear()
     await message.answer("Шаг удалён.")
     await send_admin_onboarding_menu(message)
+
+
+@router.message(F.text == ADMIN_SCHEDULE_BUTTON)
+async def admin_schedule_entry(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+    await _reset_state_if_needed(state)
+    await send_admin_schedule_menu(message)
+
+
+@router.message(F.text == ADMIN_SCHEDULE_SHOW_ARCHIVE)
+async def admin_schedule_show_archive(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+    await _reset_state_if_needed(state)
+    await send_admin_schedule_menu(message, archived=True)
+
+
+@router.message(F.text == ADMIN_SCHEDULE_SHOW_ACTIVE)
+async def admin_schedule_show_active(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+    await _reset_state_if_needed(state)
+    await send_admin_schedule_menu(message, archived=False)
+
+
+@router.message(F.text == ADMIN_SCHEDULE_ADD_EVENT)
+async def admin_schedule_add_event(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+    await _reset_state_if_needed(state)
+    weeks = await list_schedule_weeks(include_archived=False)
+    weeks_text = _format_admin_schedule_weeks_list(weeks)
+    await state.set_state(AdminScheduleStates.waiting_week)
+    await state.update_data(schedule_mode="create")
+    lines = [
+        "➕ Добавление события",
+        "",
+        "Недели цикла:",
+        weeks_text,
+        "",
+        f"Укажи номер недели (например, 2). Отправь 0, если событие вне цикла. Время указывается по {BOT_TIMEZONE}.",
+    ]
+    await message.answer(
+        "\n".join(lines),
+        reply_markup=cancel_keyboard(),
+        disable_web_page_preview=True,
+    )
+
+
+@router.message(F.text == ADMIN_SCHEDULE_EDIT_EVENT)
+async def admin_schedule_edit_prompt(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+    await _reset_state_if_needed(state)
+    await state.set_state(AdminScheduleStates.waiting_event_id_edit)
+    await message.answer(
+        "Введи ID события, которое нужно изменить. Номер смотри в списке выше.",
+        reply_markup=cancel_keyboard(),
+    )
+
+
+@router.message(F.text == ADMIN_SCHEDULE_ARCHIVE_EVENT)
+async def admin_schedule_archive_prompt(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+    await _reset_state_if_needed(state)
+    await state.set_state(AdminScheduleStates.waiting_event_id_archive)
+    await message.answer(
+        "Укажи ID события, которое нужно переместить в архив.",
+        reply_markup=cancel_keyboard(),
+    )
+
+
+@router.message(F.text == ADMIN_SCHEDULE_RESTORE_EVENT)
+async def admin_schedule_restore_prompt(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+    await _reset_state_if_needed(state)
+    await state.set_state(AdminScheduleStates.waiting_event_id_restore)
+    await message.answer(
+        "Введи ID события, которое нужно вернуть из архива.",
+        reply_markup=cancel_keyboard(),
+    )
+
+
+@router.message(AdminScheduleStates.waiting_event_id_edit, F.text.len() > 0)
+async def admin_schedule_receive_event_id_edit(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        await state.clear()
+        return
+    text = (message.text or "").strip()
+    if not text.isdigit():
+        await message.answer("Номер события должен быть числом. Попробуй снова.")
+        return
+    event_id = int(text)
+    event_row = await get_schedule_event(event_id)
+    if not event_row:
+        await message.answer("Не нашла событие с таким номером. Обнови список и попробуй снова.")
+        return
+    if event_row.get("is_archived"):
+        await message.answer("Событие находится в архиве. Восстанови его, чтобы редактировать.")
+        await state.clear()
+        await send_admin_schedule_menu(message, archived=True)
+        return
+
+    await state.update_data(
+        schedule_mode="edit",
+        schedule_event_id=event_id,
+        schedule_week_id=event_row.get("week_id"),
+        schedule_week_number=event_row.get("week_number"),
+        schedule_week_title=event_row.get("week_title"),
+        schedule_datetime_iso=event_row["scheduled_at"].isoformat(),
+        schedule_event_type=event_row["event_type"],
+        schedule_description=event_row.get("description") or "",
+        schedule_link=event_row.get("link") or "",
+    )
+
+    weeks = await list_schedule_weeks(include_archived=False)
+    weeks_text = _format_admin_schedule_weeks_list(weeks)
+    current_week = event_row.get("week_number")
+    current_week_title = event_row.get("week_title")
+    if current_week:
+        current_week_label = f"#{current_week} — {current_week_title}" if current_week_title else f"#{current_week}"
+    else:
+        current_week_label = "вне цикла"
+
+    await state.set_state(AdminScheduleStates.waiting_week)
+    lines = [
+        f"✏️ Редактирование события #{event_id}",
+        "",
+        "Недели цикла:",
+        weeks_text,
+        "",
+        f"Текущая неделя: {current_week_label}.",
+        "Отправь номер новой недели. '-' — оставить без изменений, 0 — событие вне цикла.",
+    ]
+    await message.answer(
+        "\n".join(lines),
+        reply_markup=cancel_keyboard(),
+        disable_web_page_preview=True,
+    )
+
+
+@router.message(AdminScheduleStates.waiting_event_id_archive, F.text.len() > 0)
+async def admin_schedule_archive_event(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        await state.clear()
+        return
+    text = (message.text or "").strip()
+    if not text.isdigit():
+        await message.answer("Номер события должен быть числом. Попробуй снова.")
+        return
+    event_id = int(text)
+    row = await set_schedule_event_archived(event_id, archived=True)
+    if not row:
+        await message.answer("Не удалось найти событие с таким номером.")
+        return
+    event_row = await get_schedule_event(event_id)
+    summary = _format_admin_schedule_event(event_row) if event_row else f"#{event_id}"
+    await log_admin_action(message.from_user.id, "schedule_event_archive", {"event_id": event_id})
+    await state.clear()
+    await message.answer(
+        f"Событие #{event_id} перемещено в архив.\n\n{summary}",
+        disable_web_page_preview=True,
+    )
+    await send_admin_schedule_menu(message, archived=False)
+
+
+@router.message(AdminScheduleStates.waiting_event_id_restore, F.text.len() > 0)
+async def admin_schedule_restore_event(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        await state.clear()
+        return
+    text = (message.text or "").strip()
+    if not text.isdigit():
+        await message.answer("Номер события должен быть числом. Попробуй снова.")
+        return
+    event_id = int(text)
+    row = await set_schedule_event_archived(event_id, archived=False)
+    if not row:
+        await message.answer("Не удалось найти событие с таким номером.")
+        return
+    event_row = await get_schedule_event(event_id)
+    summary = _format_admin_schedule_event(event_row) if event_row else f"#{event_id}"
+    await log_admin_action(message.from_user.id, "schedule_event_restore", {"event_id": event_id})
+    await state.clear()
+    await message.answer(
+        f"Событие #{event_id} восстановлено из архива.\n\n{summary}",
+        disable_web_page_preview=True,
+    )
+    await send_admin_schedule_menu(message, archived=True)
+
+
+@router.message(AdminScheduleStates.waiting_week, F.text.len() > 0)
+async def admin_schedule_receive_week(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        await state.clear()
+        return
+    text = (message.text or "").strip()
+    data = await state.get_data() or {}
+    mode = data.get("schedule_mode", "create")
+    text_lower = text.lower()
+
+    week_id = data.get("schedule_week_id")
+    week_number = data.get("schedule_week_number")
+    week_title = data.get("schedule_week_title")
+
+    if mode == "edit" and text == "-":
+        pass
+    else:
+        if text_lower in {"0", "нет", "none"}:
+            week_id = None
+            week_number = None
+            week_title = None
+        else:
+            if not text.isdigit():
+                await message.answer("Номер недели укажи числом. Например: 1, 2 или 0, если событие вне цикла.")
+                return
+            week_number_input = int(text)
+            week_row = await get_schedule_week_by_number(week_number_input)
+            if not week_row:
+                await message.answer("Такой недели нет. Проверь список или укажи 0, если событие вне цикла.")
+                return
+            week_id = week_row["id"]
+            week_number = week_row["week_number"]
+            week_title = week_row.get("title")
+
+    await state.update_data(
+        schedule_week_id=week_id,
+        schedule_week_number=week_number,
+        schedule_week_title=week_title,
+    )
+
+    existing_iso = data.get("schedule_datetime_iso") if mode == "edit" else None
+    current_label = ""
+    if existing_iso:
+        try:
+            existing_dt = datetime.fromisoformat(existing_iso)
+            current_label = existing_dt.astimezone(BOT_ZONE).strftime("%d.%m.%Y %H:%M")
+        except Exception:
+            current_label = ""
+
+    await state.set_state(AdminScheduleStates.waiting_datetime)
+    if mode == "edit":
+        prompt = (
+            f"Текущая дата и время: {current_label or 'не указаны'}.\n"
+            f"Отправь новую дату в формате ДД.ММ.ГГГГ ЧЧ:ММ ({BOT_TIMEZONE}) или '-' чтобы оставить без изменений."
+        )
+    else:
+        prompt = f"Укажи дату и время события в формате ДД.ММ.ГГГГ ЧЧ:ММ ({BOT_TIMEZONE})."
+    await message.answer(prompt, reply_markup=cancel_keyboard())
+
+
+@router.message(AdminScheduleStates.waiting_datetime, F.text.len() > 0)
+async def admin_schedule_receive_datetime(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        await state.clear()
+        return
+    text = (message.text or "").strip()
+    data = await state.get_data() or {}
+    mode = data.get("schedule_mode", "create")
+
+    if mode == "edit" and text == "-":
+        iso_value = data.get("schedule_datetime_iso")
+        if not iso_value:
+            await message.answer("Дата события ещё не задана. Укажи новое значение в формате ДД.ММ.ГГГГ ЧЧ:ММ.")
+            return
+    else:
+        dt = _parse_local_datetime(text)
+        if not dt:
+            await message.answer(
+                f"Не получилось распознать дату. Используй формат ДД.ММ.ГГГГ ЧЧ:ММ, например 24.09.2024 19:00 ({BOT_TIMEZONE})."
+            )
+            return
+        iso_value = dt.isoformat()
+
+    await state.update_data(schedule_datetime_iso=iso_value)
+    await state.set_state(AdminScheduleStates.waiting_type)
+    current_type = (data.get("schedule_event_type") or "").strip()
+    if mode == "edit":
+        prompt = (
+            f"Текущий тип: {current_type or '—'}.\n"
+            "Пришли новый тип события или '-' чтобы оставить без изменений."
+        )
+    else:
+        prompt = "Как назвать событие? Например: Вебинар, Практика, Созвон."
+    await message.answer(prompt, reply_markup=cancel_keyboard())
+
+
+@router.message(AdminScheduleStates.waiting_type, F.text.len() > 0)
+async def admin_schedule_receive_type(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        await state.clear()
+        return
+    text = (message.text or "").strip()
+    data = await state.get_data() or {}
+    mode = data.get("schedule_mode", "create")
+
+    if mode == "edit" and text == "-":
+        event_type = (data.get("schedule_event_type") or "").strip()
+        if not event_type:
+            await message.answer("Тип события пока пустой. Укажи новое значение.")
+            return
+    else:
+        if not text:
+            await message.answer("Название события не может быть пустым. Пример: Встреча, Практика.")
+            return
+        event_type = text
+
+    await state.update_data(schedule_event_type=event_type)
+    await state.set_state(AdminScheduleStates.waiting_description)
+    current_desc = (data.get("schedule_description") or "").strip()
+    if mode == "edit":
+        current_label = current_desc if current_desc else "—"
+        prompt = (
+            f"Текущее описание: {current_label}.\n"
+            "Пришли новое описание. '-' — оставить без изменений, '0' — очистить текст."
+        )
+    else:
+        prompt = "Добавь описание события. Отправь '-' или '0', если описание не нужно."
+    await message.answer(prompt, reply_markup=cancel_keyboard())
+
+
+@router.message(AdminScheduleStates.waiting_description, F.text.len() > 0)
+async def admin_schedule_receive_description(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        await state.clear()
+        return
+    text = (message.text or "").strip()
+    text_lower = text.lower()
+    data = await state.get_data() or {}
+    mode = data.get("schedule_mode", "create")
+
+    if mode == "edit" and text == "-":
+        description = data.get("schedule_description") or ""
+    elif text_lower in {"0", "нет", "none"} or (mode == "create" and text == "-"):
+        description = ""
+    else:
+        description = text
+
+    await state.update_data(schedule_description=description)
+    await state.set_state(AdminScheduleStates.waiting_link)
+    current_link = (data.get("schedule_link") or "").strip()
+    if mode == "edit":
+        current_label = current_link if current_link else "—"
+        prompt = (
+            f"Текущая ссылка: {current_label}.\n"
+            "Пришли новую ссылку. '-' — оставить без изменений, '0' — удалить ссылку."
+        )
+    else:
+        prompt = "Пришли ссылку на событие (если есть). Отправь '-' или '0', если ссылки нет."
+    await message.answer(prompt, reply_markup=cancel_keyboard())
+
+
+@router.message(AdminScheduleStates.waiting_link, F.text.len() > 0)
+async def admin_schedule_receive_link(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        await state.clear()
+        return
+    text = (message.text or "").strip()
+    text_lower = text.lower()
+    data = await state.get_data() or {}
+    mode = data.get("schedule_mode", "create")
+
+    if mode == "edit" and text == "-":
+        link = (data.get("schedule_link") or "").strip()
+    elif text_lower in {"0", "нет", "none"} or (mode == "create" and text == "-"):
+        link = ""
+    else:
+        link = text
+
+    await state.update_data(schedule_link=link)
+    if mode == "edit":
+        await _finalize_schedule_edit(message, state)
+    else:
+        await _finalize_schedule_create(message, state)
 
 
 @router.message(F.text == ADMIN_USERS_BUTTON)

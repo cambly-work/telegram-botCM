@@ -4,6 +4,7 @@ from keyboards import (
     ADMIN_BEHAVIOR_REGISTRATION,
     ADMIN_BEHAVIOR_START,
     ADMIN_BROADCAST_BUTTON,
+    ADMIN_SCHEDULE_BUTTON,
     ADMIN_BROADCAST_HISTORY_BUTTON,
     ADMIN_BROADCAST_REMINDER_TEXT,
     ADMIN_CONTENT_MENU,
@@ -79,6 +80,7 @@ def test_admin_main_keyboard_layout():
     rows = _keyboard_texts(admin_main_keyboard())
     assert rows == [
         [ADMIN_USERS_BUTTON],
+        [ADMIN_SCHEDULE_BUTTON],
         [ADMIN_BROADCAST_BUTTON, ADMIN_CONTENT_MENU],
         [ADMIN_MATERIALS_BUTTON, ADMIN_BEHAVIOR_BUTTON],
         [ADMIN_SETTINGS_BUTTON, ADMIN_STATS_BUTTON],
