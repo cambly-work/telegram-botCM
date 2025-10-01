@@ -48,6 +48,7 @@ from keyboards import (
     feedback_keyboard,
     cancel_keyboard,
     admin_main_keyboard,
+    admin_materials_keyboard,
     admin_settings_keyboard,
     admin_content_keyboard,
     admin_content_suggestions_keyboard,
@@ -60,6 +61,7 @@ from keyboards import (
     admin_materials_keyboard,
     admin_materials_categories_keyboard,
     admin_broadcast_keyboard,
+    admin_broadcast_segments_keyboard,
     admin_broadcast_history_keyboard,
     admin_broadcast_confirm_keyboard,
     admin_broadcast_templates_keyboard,
@@ -93,15 +95,10 @@ from keyboards import (
     ADMIN_CONTENT_EXPORT,
     ADMIN_CONTENT_IMPORT,
     ADMIN_USERS_BUTTON,
-    ADMIN_SCHEDULE_BUTTON,
-    ADMIN_SCHEDULE_ADD_EVENT,
-    ADMIN_SCHEDULE_EDIT_EVENT,
-    ADMIN_SCHEDULE_ARCHIVE_EVENT,
-    ADMIN_SCHEDULE_RESTORE_EVENT,
-    ADMIN_SCHEDULE_SHOW_ARCHIVE,
-    ADMIN_SCHEDULE_SHOW_ACTIVE,
+    ADMIN_MATERIALS_BUTTON,
     ADMIN_BROADCAST_BUTTON,
     ADMIN_BROADCAST_HISTORY_BUTTON,
+    ADMIN_BROADCAST_NEW_BUTTON,
     ADMIN_BEHAVIOR_BUTTON,
     BROADCAST_ALL_BUTTON,
     BROADCAST_LEADS_BUTTON,
@@ -1337,6 +1334,13 @@ _ADMIN_TEXT_GROUPS: dict[str, list[tuple[str, str]]] = {
     ],
     "📝 Анкеты": [
         ("Напоминание о незавершённой анкете", "forms.reminder_template"),
+    ],
+    "🛠 Подсказки админки": [
+        ("Описание главного меню админки", "admin.prompts.root"),
+        ("Описание раздела «Материалы»", "admin.prompts.materials"),
+        ("Описание раздела «Рассылки»", "admin.prompts.broadcasts"),
+        ("Описание раздела «Геймификация»", "admin.prompts.gamification"),
+        ("Подсказка выбора сегмента рассылки", "admin.prompts.broadcast_segments"),
     ],
 }
 
@@ -4577,19 +4581,19 @@ async def send_admin_menu(
     *,
     from_callback: bool = False,
 ) -> None:
-    admin_text = (
+    admin_text_default = (
         "<b>Админ-панель</b>\n\n"
         "Здесь собраны основные инструменты:\n"
         "• 👥 Пользователи — сегменты, карточки профилей и управление доступом.\n"
-        "• 📢 Рассылка — как отправлять сообщения сегментам.\n"
-        "• 📆 Расписание — управление событиями цикла и напоминаниями.\n"
-        "• 🧾 Контент и тексты — редактирование сообщений бота без команд.\n"
-        "• 🎛 Логика бота — сценарии приветствия, онбординг и доступ к оплатам.\n"
+        "• 📚 Материалы — переход к редактору контента и текстов.\n"
+        "• 📣 Рассылки — отправка сообщений сегментам и управление шаблонами.\n"
+        "• 🎮 Геймификация — сценарии приветствия, онбординг и доступ к оплатам.\n"
         "• 📊 Статистика — сводка по статусам, прогресс уроков и последние оплаты.\n"
         "• 🛠️ Диагностика — проверка важных настроек.\n"
         "• ⚙️ Настройки — управление разделами меню и вспомогательными опциями.\n\n"
-        "Выберите раздел, чтобы открыть расширенную статистику, карточки пользователей или настроить сценарии бота."
+        "Выберите раздел, чтобы открыть инструменты или вернуться в главное меню."
     )
+    admin_text = await get_content("admin.prompts.root", admin_text_default)
     await message.answer(
         admin_text,
         reply_markup=admin_main_keyboard(),
@@ -4650,22 +4654,32 @@ async def send_admin_schedule_menu(
     else:
         lines.extend(["", "Список пуст. Добавьте событие через кнопку ниже."])
 
-    weeks = await list_schedule_weeks(include_archived=False)
-    if weeks:
-        lines.append("")
-        lines.append("Недели цикла:")
-        for week in weeks:
-            start_date = week.get("start_date")
-            end_date = week.get("end_date")
-            period = ""
-            if start_date and end_date:
-                period = f" ({start_date.strftime('%d.%m')}–{end_date.strftime('%d.%m')})"
-            lines.append(f"  #{week['week_number']} — {week['title']}{period}")
+async def send_admin_materials_menu(message: types.Message) -> None:
+    default_text = (
+        "<b>Материалы</b>\n\n"
+        "Раздел объединяет редактор текстов и подсказок бота.\n"
+        f"• «{ADMIN_CONTENT_MENU}» открывает знакомый конструктор экранов.\n"
+        "• В списке текстов удобно искать нужный ключ по категориям.\n\n"
+        f"Нажми на инструмент и возвращайся через «{BACK_TO_ADMIN}», когда закончишь."
+    )
+    prompt = await get_content("admin.prompts.materials", default_text)
+    await message.answer(
+        prompt,
+        reply_markup=admin_materials_keyboard(),
+        disable_web_page_preview=True,
+    )
 
-    lines.append("")
-    lines.append("Для напоминания пользователям используйте команду /remind_<ID> в списке событий.")
 
-    text = "\n".join(lines).strip()
+async def send_admin_behavior_menu(message: types.Message) -> None:
+    default_text = (
+        "<b>Геймификация</b>\n\n"
+        "Настрой сценарии, которые поддерживают вовлечение:\n"
+        "• Приветствие при /start и сообщение после регистрации.\n"
+        "• Шаги онбординга для новых участниц.\n"
+        f"• Раздел «{ADMIN_PAYMENTS_BUTTON}» для ручных операций с доступом.\n\n"
+        f"Выбирай нужный блок и возвращайся через «{BACK_TO_ADMIN}», когда всё готово."
+    )
+    text = await get_content("admin.prompts.gamification", default_text)
     await message.answer(
         text,
         reply_markup=admin_schedule_keyboard(archive_mode=archived),
@@ -4854,7 +4868,7 @@ async def send_admin_payments_overview(message: types.Message) -> None:
             "• «🧾 Последние платежи» обновляет список ниже.",
             "• «✅ Подтвердить доступ» и «🚫 Приостановить доступ» требуют @username или ID участницы.",
             "• Кнопки отметки платежа добавят отметку о ручной проверке в карточку платежа.",
-            "• «⬅️ К логике бота» вернёт к настройкам сценариев и оплат.",
+            f"• «{BACK_TO_BEHAVIOR}» вернёт к настройкам сценариев и оплат.",
         ]
     )
 
@@ -4890,22 +4904,19 @@ async def send_admin_broadcast_menu(message: types.Message) -> None:
     recent = await list_recent_broadcasts(limit=1)
     if recent:
         last_broadcast_line = _format_broadcast_history_entry(recent[0], short=True)
-        last_broadcast_text = f"Последняя рассылка: {last_broadcast_line}"
+        last_broadcast_text = f"<b>Последняя рассылка:</b> {last_broadcast_line}"
     else:
-        last_broadcast_text = "Последняя рассылка: пока ничего не отправляли."
+        last_broadcast_text = "<b>Последняя рассылка:</b> пока ничего не отправляли."
 
     active_jobs = [
         label
         for key, label in _ADMIN_BROADCAST_SETTINGS_LABELS.items()
         if broadcast_flags.get(key, _ADMIN_BROADCAST_SETTINGS_DEFAULTS.get(key, True))
     ]
-    if active_jobs:
-        jobs_text = "Автоджобы: " + ", ".join(active_jobs)
-    else:
-        jobs_text = "Автоджобы: выключены."
-
-    history_hint = (
-        f"История — кнопка «{ADMIN_BROADCAST_HISTORY_BUTTON}», «{BROADCAST_HISTORY_MORE_BUTTON}» покажет ещё записи."
+    jobs_text = (
+        "Автоджобы включены: " + ", ".join(active_jobs)
+        if active_jobs
+        else "Автоджобы выключены."
     )
 
     status_lines = []
@@ -4916,26 +4927,50 @@ async def send_admin_broadcast_menu(message: types.Message) -> None:
         status_lines.append(f"• {label}: {'включены' if enabled else 'выключены'}")
     status_text = "\n".join(status_lines)
     keyboard = admin_broadcast_keyboard(_broadcast_status_labels(broadcast_flags))
-
-    text = (
-        "<b>Рассылка</b>\n\n"
-        "<b>Краткий дайджест</b>\n"
-        f"{last_broadcast_text}\n"
-        f"{jobs_text}\n"
-        f"{history_hint}\n\n"
-        "Выберите сегмент, напишите текст — бот покажет предпросмотр и спросит подтверждение.\n"
-        "Можно сохранять тексты как шаблоны и переиспользовать их позже.\n\n"
-        "<b>Текст напоминаний:</b>\n"
-        f"{reminder_preview}\n\n"
-        "<b>Автоматические напоминания:</b>\n"
-        f"{status_text}\n\n"
-        "Нужна пауза? Нажми на соответствующую строку, чтобы включить или выключить рассылку.\n\n"
-        "Нужно обновить шаблон напоминания о незавершённых анкетах?"
-        f" Нажми «{ADMIN_BROADCAST_REMINDER_TEXT}» — откроется знакомый редактор текста."
+    intro_default = (
+        f"<b>Рассылки</b>\n\n"
+        f"• «{ADMIN_BROADCAST_NEW_BUTTON}» — выбери сегмент и отправь сообщение.\n"
+        f"• «{BROADCAST_TEMPLATES_BUTTON}» хранит заготовки для повторного использования.\n"
+        f"• «{ADMIN_BROADCAST_HISTORY_BUTTON}» покажет отправленные сообщения (кнопка «{BROADCAST_HISTORY_MORE_BUTTON}» листает дальше).\n"
+        f"• «{ADMIN_BROADCAST_REMINDER_TEXT}» открывает редактор автоматических сообщений.\n\n"
+        "Нажми на строку с названием напоминания ниже, чтобы включить или выключить автоджобу."
     )
+    intro = await get_content("admin.prompts.broadcasts", intro_default)
+
+    reminder_block = reminder_preview or (
+        f"Шаблон пока пустой. Используй «{ADMIN_BROADCAST_REMINDER_TEXT}», чтобы добавить текст."
+    )
+
+    lines = [
+        intro.strip(),
+        "",
+        last_broadcast_text,
+        jobs_text,
+        "",
+        "<b>Текст напоминаний:</b>",
+        reminder_block,
+        "",
+        "<b>Автоматические напоминания:</b>",
+        status_text,
+    ]
+    text = "\n".join(line for line in lines if line is not None)
     await message.answer(
         text,
         reply_markup=keyboard,
+        disable_web_page_preview=True,
+    )
+
+
+async def send_admin_broadcast_segment_prompt(message: types.Message) -> None:
+    default_text = (
+        "<b>Новая рассылка</b>\n\n"
+        "Выбери сегмент для отправки. После выбора пришли текст одним сообщением — бот покажет предпросмотр и спросит подтверждение перед отправкой.\n\n"
+        f"Если передумала, нажми «{BACK_TO_BROADCAST}» или «{BACK_TO_ADMIN}»."
+    )
+    prompt = await get_content("admin.prompts.broadcast_segments", default_text)
+    await message.answer(
+        prompt,
+        reply_markup=admin_broadcast_segments_keyboard(),
         disable_web_page_preview=True,
     )
 
@@ -8637,9 +8672,17 @@ async def admin_materials_delete_confirm(message: types.Message, state: FSMConte
     slug = (data or {}).get("materials_delete_slug")
     title = (data or {}).get("materials_delete_title", slug)
 
-    if answer not in {"да", "yes", "y"}:
-        await state.clear()
-        await message.answer("Удаление отменено.", reply_markup=admin_materials_keyboard())
+@router.message(F.text == ADMIN_BROADCAST_NEW_BUTTON)
+async def admin_broadcast_start_new(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+    await _reset_state_if_needed(state)
+    await send_admin_broadcast_segment_prompt(message)
+
+
+@router.message(F.text == BACK_TO_BROADCAST)
+async def admin_broadcast_back_to_menu(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
         return
 
     deleted = await fetchrow(
@@ -8718,33 +8761,18 @@ async def admin_materials_receive_grant(message: types.Message, state: FSMContex
     tg_raw = payload.get("tg")
     user_id_raw = payload.get("user") or payload.get("user_id")
 
-    if tg_raw:
-        try:
-            tg_id = int(tg_raw)
-        except ValueError:
-            user_error = "Telegram ID должен быть числом."
-        else:
-            user_row = await fetchrow(
-                "SELECT * FROM users WHERE tg_user_id=$1",
-                tg_id,
-            )
-            if not user_row:
-                user_error = f"Пользователь с tg-id {tg_id} не найден."
-    elif user_id_raw:
-        try:
-            internal_id = int(user_id_raw)
-        except ValueError:
-            user_error = "Поле user должно быть числом."
-        else:
-            user_row = await fetchrow(
-                "SELECT * FROM users WHERE id=$1",
-                internal_id,
-            )
-            if not user_row:
-                user_error = f"Пользователь с id {internal_id} не найден."
-    else:
-        user_error = "Укажи <code>tg</code> или <code>user</code> для выдачи доступа."
+@router.message(F.text == ADMIN_MATERIALS_BUTTON)
+async def admin_materials_menu(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+    await _reset_state_if_needed(state)
+    await send_admin_materials_menu(message)
 
+
+@router.message(F.text.func(lambda text: _admin_broadcast_toggle_key_from_text(text) is not None))
+async def admin_broadcast_toggle_setting(message: types.Message):
+    if not is_admin_id(message.from_user.id):
+        return
     if user_error:
         await message.answer(
             user_error,
@@ -11422,10 +11450,7 @@ async def admin_broadcast_change_segment(message: types.Message, state: FSMConte
         return
     await state.set_state(BroadcastStates.waiting_segment)
     await state.update_data(change_segment=True)
-    await message.answer(
-        "Выбери новый сегмент для рассылки.",
-        reply_markup=await build_admin_broadcast_keyboard(),
-    )
+    await send_admin_broadcast_segment_prompt(message)
 
 
 @router.message(BroadcastStates.waiting_template_title, F.text.len() > 0)
