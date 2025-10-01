@@ -7172,7 +7172,14 @@ async def admin_content_quick_reply_update(message: types.Message, state: FSMCon
     if not is_admin_id(message.from_user.id):
         return
 
-    if await state.get_state():
+    current_state = await state.get_state()
+    allowed_states = {
+        AdminContentStates.waiting_view_key.state,
+        AdminContentStates.waiting_history_key.state,
+        AdminContentStates.waiting_history_choice.state,
+    }
+
+    if current_state and current_state not in allowed_states:
         return
 
     if (message.text or "").strip() == ADMIN_CONTENT_HISTORY:
@@ -7209,6 +7216,14 @@ async def admin_content_quick_reply_update(message: types.Message, state: FSMCon
         reply_markup=admin_content_keyboard(),
         disable_web_page_preview=True,
     )
+
+    if current_state == AdminContentStates.waiting_view_key.state:
+        await state.set_state(AdminContentStates.waiting_view_key)
+    elif current_state in (
+        AdminContentStates.waiting_history_key.state,
+        AdminContentStates.waiting_history_choice.state,
+    ):
+        await state.clear()
 
 
 @router.message(
