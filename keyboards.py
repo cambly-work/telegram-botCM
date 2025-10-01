@@ -61,6 +61,8 @@ ADMIN_SETTINGS_BUTTON = "⚙️ Настройки"
 ADMIN_PAYMENTS_BUTTON = "💳 Оплаты"
 ADMIN_BEHAVIOR_BUTTON = "🎛 Логика бота"
 ADMIN_BROADCAST_REMINDER_TEXT = "✏️ Текст напоминаний"
+ADMIN_BROADCAST_HISTORY_BUTTON = "📜 История рассылок"
+BROADCAST_HISTORY_MORE_BUTTON = "➕ Ещё"
 
 ADMIN_BEHAVIOR_START = "✉️ Приветствие /start"
 ADMIN_BEHAVIOR_REGISTRATION = "✅ Сообщение после регистрации"
@@ -377,13 +379,23 @@ def admin_broadcast_keyboard(status_flags: dict[str, bool]) -> ReplyKeyboardMark
     rows = [
         [KeyboardButton(text=BROADCAST_ALL_BUTTON), KeyboardButton(text=BROADCAST_LEADS_BUTTON)],
         [KeyboardButton(text=BROADCAST_MEMBERS_BUTTON), KeyboardButton(text=BROADCAST_EXPIRED_BUTTON)],
-        [KeyboardButton(text=BROADCAST_TEMPLATES_BUTTON)],
+        [KeyboardButton(text=BROADCAST_TEMPLATES_BUTTON), KeyboardButton(text=ADMIN_BROADCAST_HISTORY_BUTTON)],
+        [KeyboardButton(text=BROADCAST_HISTORY_MORE_BUTTON)],
         [KeyboardButton(text=ADMIN_BROADCAST_REMINDER_TEXT)],
     ]
     for label, enabled in status_flags.items():
         status = "✅" if enabled else "❌"
         rows.append([KeyboardButton(text=f"{status} {label}")])
     rows.append([KeyboardButton(text=BACK_TO_ADMIN), KeyboardButton(text=BACK_TO_MAIN)])
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
+
+
+def admin_broadcast_history_keyboard(*, has_more: bool) -> ReplyKeyboardMarkup:
+    rows: list[list[KeyboardButton]] = []
+    if has_more:
+        rows.append([KeyboardButton(text=BROADCAST_HISTORY_MORE_BUTTON)])
+    rows.append([KeyboardButton(text=BACK_TO_BROADCAST), KeyboardButton(text=BACK_TO_ADMIN)])
+    rows.append([KeyboardButton(text=BACK_TO_MAIN)])
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
 

@@ -51,6 +51,7 @@ from keyboards import (
     admin_onboarding_steps_keyboard,
     admin_onboarding_delete_keyboard,
     admin_broadcast_keyboard,
+    admin_broadcast_history_keyboard,
     admin_broadcast_confirm_keyboard,
     admin_broadcast_templates_keyboard,
     admin_broadcast_delete_keyboard,
@@ -83,6 +84,7 @@ from keyboards import (
     ADMIN_CONTENT_IMPORT,
     ADMIN_USERS_BUTTON,
     ADMIN_BROADCAST_BUTTON,
+    ADMIN_BROADCAST_HISTORY_BUTTON,
     ADMIN_BEHAVIOR_BUTTON,
     BROADCAST_ALL_BUTTON,
     BROADCAST_LEADS_BUTTON,
@@ -95,6 +97,7 @@ from keyboards import (
     CHANGE_BROADCAST_SEGMENT_BUTTON,
     BACK_TO_BROADCAST,
     DELETE_BROADCAST_TEMPLATE_BUTTON,
+    BROADCAST_HISTORY_MORE_BUTTON,
     ADD_ONBOARDING_STEP,
     DELETE_ONBOARDING_STEP,
     ADMIN_BEHAVIOR_START,
@@ -1013,6 +1016,87 @@ async def delete_broadcast_template(title: str) -> bool:
         title,
     )
     return bool(row)
+
+
+async def list_recent_broadcasts(limit: int = 5, offset: int = 0) -> list[dict]:
+    normalized_limit = max(0, int(limit))
+    if normalized_limit <= 0:
+        return []
+    normalized_offset = max(0, int(offset))
+    rows = await fetch(
+        """
+        SELECT id, admin_id, payload, created_at
+        FROM admin_log
+        WHERE action = 'broadcast'
+        ORDER BY created_at DESC
+        LIMIT $1 OFFSET $2
+        """,
+        normalized_limit,
+        normalized_offset,
+    )
+    result: list[dict] = []
+    for row in rows:
+        entry = dict(row)
+        payload = entry.get("payload")
+        if isinstance(payload, str):
+            try:
+                payload = json.loads(payload)
+            except json.JSONDecodeError:
+                payload = {"raw": payload}
+        elif payload is None:
+            payload = {}
+        else:
+            payload = dict(payload)
+        entry["payload"] = payload
+        result.append(entry)
+    return result
+
+
+def _format_broadcast_history_entry(entry: dict, *, short: bool = False) -> str:
+    payload = entry.get("payload") or {}
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except json.JSONDecodeError:
+            payload = {"raw": payload}
+    elif not isinstance(payload, dict):
+        payload = dict(payload)
+
+    created_at_text = _format_datetime_safe(entry.get("created_at"))
+    segment = payload.get("segment") or "all"
+    segment_label = _BROADCAST_SEGMENT_LABELS.get(segment, segment)
+    recipients = payload.get("recipients")
+    ok = payload.get("ok")
+    fail = payload.get("fail")
+    template = payload.get("template") or payload.get("template_title")
+
+    recipients_text = str(recipients) if recipients is not None else "—"
+    ok_text = str(ok) if ok is not None else "—"
+    fail_text = str(fail) if fail is not None else "—"
+
+    if short:
+        template_short = html.escape(template) if template else "без шаблона"
+        delivery = f"{ok_text} доставлено"
+        if fail is not None:
+            delivery += f", ошибок {fail_text}"
+        return (
+            f"{created_at_text} • {segment_label} • получателей: {recipients_text}, "
+            f"{delivery}, {template_short}"
+        )
+
+    template_text = html.escape(template) if template else "—"
+    lines = [
+        f"<b>{created_at_text}</b>",
+        f"Сегмент: <code>{html.escape(segment_label)}</code>",
+        f"Получателей: {recipients_text}",
+        f"Успешно/ошибки: {ok_text}/{fail_text}",
+        f"Шаблон: {template_text}",
+    ]
+
+    if payload.get("use_html"):
+        lines.append("Формат: HTML")
+
+    return "\n".join(lines)
 def _flatten_yaml_keys(src: Any, prefix: str = "") -> Iterable[str]:
     if isinstance(src, dict):
         for k, v in (src or {}).items():
@@ -3250,6 +3334,27 @@ async def send_admin_broadcast_menu(message: types.Message) -> None:
     reminder_template = await get_content("forms.reminder_template", default="")
     reminder_preview = _preview_text_for_admin(reminder_template, limit=400)
     broadcast_flags = await get_broadcast_flags()
+    recent = await list_recent_broadcasts(limit=1)
+    if recent:
+        last_broadcast_line = _format_broadcast_history_entry(recent[0], short=True)
+        last_broadcast_text = f"Последняя рассылка: {last_broadcast_line}"
+    else:
+        last_broadcast_text = "Последняя рассылка: пока ничего не отправляли."
+
+    active_jobs = [
+        label
+        for key, label in _ADMIN_BROADCAST_SETTINGS_LABELS.items()
+        if broadcast_flags.get(key, _ADMIN_BROADCAST_SETTINGS_DEFAULTS.get(key, True))
+    ]
+    if active_jobs:
+        jobs_text = "Автоджобы: " + ", ".join(active_jobs)
+    else:
+        jobs_text = "Автоджобы: выключены."
+
+    history_hint = (
+        f"История — кнопка «{ADMIN_BROADCAST_HISTORY_BUTTON}», «{BROADCAST_HISTORY_MORE_BUTTON}» покажет ещё записи."
+    )
+
     status_lines = []
     for key, label in _ADMIN_BROADCAST_SETTINGS_LABELS.items():
         enabled = broadcast_flags.get(
@@ -3261,6 +3366,10 @@ async def send_admin_broadcast_menu(message: types.Message) -> None:
 
     text = (
         "<b>Рассылка</b>\n\n"
+        "<b>Краткий дайджест</b>\n"
+        f"{last_broadcast_text}\n"
+        f"{jobs_text}\n"
+        f"{history_hint}\n\n"
         "Выберите сегмент, напишите текст — бот покажет предпросмотр и спросит подтверждение.\n"
         "Можно сохранять тексты как шаблоны и переиспользовать их позже.\n\n"
         "<b>Текст напоминаний:</b>\n"
@@ -3303,6 +3412,54 @@ async def send_admin_broadcast_templates(message: types.Message) -> None:
         reply_markup=admin_broadcast_templates_keyboard(titles),
         disable_web_page_preview=True,
     )
+
+
+async def _send_admin_broadcast_history(
+    message: types.Message,
+    state: FSMContext,
+    *,
+    offset: int = 0,
+    page_size: int = 5,
+) -> bool:
+    normalized_offset = max(0, int(offset))
+    page = max(1, int(page_size))
+    rows = await list_recent_broadcasts(limit=page + 1, offset=normalized_offset)
+    entries = rows[:page]
+    has_more = len(rows) > page
+
+    if not entries:
+        if normalized_offset == 0:
+            text = (
+                "<b>История рассылок</b>\n\n"
+                "Пока ещё не было отправленных рассылок."
+            )
+        else:
+            text = (
+                "Больше записей нет."
+            )
+        await state.update_data(broadcast_history_offset=normalized_offset)
+        await message.answer(
+            text,
+            reply_markup=admin_broadcast_history_keyboard(has_more=False),
+            disable_web_page_preview=True,
+        )
+        return False
+
+    lines = ["<b>История рассылок</b>", ""]
+    for entry in entries:
+        lines.append(_format_broadcast_history_entry(entry))
+        lines.append("")
+
+    text = "\n".join(lines).strip()
+    new_offset = normalized_offset + len(entries)
+    await state.update_data(broadcast_history_offset=new_offset)
+
+    await message.answer(
+        text,
+        reply_markup=admin_broadcast_history_keyboard(has_more=has_more),
+        disable_web_page_preview=True,
+    )
+    return True
 
 
 async def send_admin_content_menu(message: types.Message) -> None:
@@ -5498,6 +5655,28 @@ async def admin_broadcast_templates(message: types.Message, state: FSMContext):
         return
     await _reset_state_if_needed(state)
     await send_admin_broadcast_templates(message)
+
+
+@router.message(F.text == ADMIN_BROADCAST_HISTORY_BUTTON)
+async def admin_broadcast_history(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+    await _reset_state_if_needed(state)
+    await state.update_data(broadcast_history_offset=0)
+    await _send_admin_broadcast_history(message, state, offset=0)
+
+
+@router.message(F.text == BROADCAST_HISTORY_MORE_BUTTON)
+async def admin_broadcast_history_more(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+    data = await state.get_data()
+    offset = int((data or {}).get("broadcast_history_offset", 0) or 0)
+    if offset <= 0:
+        await state.update_data(broadcast_history_offset=0)
+        await _send_admin_broadcast_history(message, state, offset=0)
+        return
+    await _send_admin_broadcast_history(message, state, offset=offset)
 
 
 @router.message(F.text == ADMIN_BROADCAST_REMINDER_TEXT)
