@@ -532,9 +532,8 @@ class BroadcastBody(BaseModel):
     segment: str = Field(..., description="all | lead_funnel | member_active | member_expired")
     text: str
     
-    @field_validator("segment")
-    @classmethod
-    def validate_segment(cls, v: str) -> str:
+    @field_validator('segment')
+    def validate_segment(cls, v):
         if v not in {"all", "lead_funnel", "member_active", "member_expired"}:
             raise ValueError("invalid segment")
         return v
