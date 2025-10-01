@@ -223,6 +223,52 @@ except Exception:  # pragma: no cover - fallback for misconfiguration
     BOT_ZONE = ZoneInfo("Europe/Moscow")
 
 
+_SUPPORT_CHANNELS_CONFIG: tuple[dict[str, str]] = (
+    {
+        "key": "telegram",
+        "setting": "settings.support.telegram_url",
+        "title": "Telegram-чат",
+        "emoji": "💬",
+        "description": "Связь с командой поддержки.",
+        "type": "telegram",
+    },
+    {
+        "key": "youtube",
+        "setting": "settings.support.youtube_url",
+        "title": "YouTube",
+        "emoji": "📺",
+        "description": "Разборы и эфиры проекта.",
+        "type": "url",
+    },
+    {
+        "key": "instagram",
+        "setting": "settings.support.instagram_url",
+        "title": "Instagram",
+        "emoji": "📸",
+        "description": "Новости и закулисье.",
+        "type": "url",
+    },
+    {
+        "key": "email",
+        "setting": "settings.support.email",
+        "title": "Email",
+        "emoji": "✉️",
+        "description": "Почта поддержки.",
+        "type": "email",
+    },
+    {
+        "key": "site",
+        "setting": "settings.support.site_url",
+        "title": "Сайт",
+        "emoji": "🌐",
+        "description": "Полезные ссылки и база знаний.",
+        "type": "url",
+    },
+)
+
+_SUPPORT_QUESTION_CALLBACK = "support:ask"
+
+
 def is_admin_id(user_id: int | str | None) -> bool:
     if user_id is None:
         return False
@@ -1424,6 +1470,12 @@ class HWStates(StatesGroup):
     waiting_answer = State()  # ждём текстовый ответ на ДЗ ({"lesson_num": int})
     waiting_feedback = State() # ждём обратную связь после урока
     waiting_question = State() # ждём уточнение вопроса для поддержки
+
+
+class SupportStates(StatesGroup):
+    waiting_question = State()
+
+
 class BroadcastStates(StatesGroup):
     waiting_segment = State()   # ждём выбор сегмента в мастере
     waiting_body = State()      # ждём текст рассылки ({"segment": str})
@@ -1600,6 +1652,11 @@ _ADMIN_TEXT_GROUPS: dict[str, list[tuple[str, str]]] = {
         ("Оплата закрыта", "menu.pay.closed"),
         ("Комментарий о проверке оплаты", "menu.pay.manual_review"),
         ("Окно «Поддержка»", "menu.support"),
+        ("Ссылка поддержки: Telegram", "settings.support.telegram_url"),
+        ("Ссылка поддержки: YouTube", "settings.support.youtube_url"),
+        ("Ссылка поддержки: Instagram", "settings.support.instagram_url"),
+        ("Email поддержки", "settings.support.email"),
+        ("Ссылка поддержки: сайт", "settings.support.site_url"),
     ],
     "📝 Анкеты": [
         ("Напоминание о незавершённой анкете", "forms.reminder_template"),
@@ -1630,7 +1687,32 @@ _ADMIN_TEXT_PLACEHOLDERS: dict[str, dict[str, list[str]]] = {
     },
     "menu.support": {
         "required": ["{support}"],
-        "optional": ["{{SUPPORT_CONTACT}}"],
+        "optional": [
+            "{{SUPPORT_CONTACT}}",
+            "{support_channels}",
+            "{support_channels_text}",
+            "{support_telegram_url}",
+            "{support_telegram_label}",
+            "{support_telegram_description}",
+            "{support_telegram_display}",
+            "{support_youtube_url}",
+            "{support_youtube_label}",
+            "{support_youtube_description}",
+            "{support_youtube_display}",
+            "{support_instagram_url}",
+            "{support_instagram_label}",
+            "{support_instagram_description}",
+            "{support_instagram_display}",
+            "{support_email}",
+            "{support_email_url}",
+            "{support_email_label}",
+            "{support_email_description}",
+            "{support_email_display}",
+            "{support_site_url}",
+            "{support_site_label}",
+            "{support_site_description}",
+            "{support_site_display}",
+        ],
     },
     "forms.reminder_template": {
         "required": ["{form_label}"],
@@ -1643,6 +1725,37 @@ _ADMIN_TEXT_PREVIEW_SAMPLE_DATA: dict[str, str] = {
     "checkout_url": YOOMONEY_CHECKOUT_URL or "https://pay.example.com/checkout",
     "support": SUPPORT_CONTACT,
     "support_contact": SUPPORT_CONTACT,
+    "support_channels": (
+        "• Telegram — https://t.me/codemagnetic_support\n"
+        "• YouTube — https://youtube.com/@codemagnetic\n"
+        "• Instagram — https://instagram.com/codemagnetic"
+    ),
+    "support_channels_text": (
+        "• Telegram — https://t.me/codemagnetic_support\n"
+        "• YouTube — https://youtube.com/@codemagnetic\n"
+        "• Instagram — https://instagram.com/codemagnetic"
+    ),
+    "support_telegram_url": "https://t.me/codemagnetic_support",
+    "support_telegram_label": "💬 Telegram-чат",
+    "support_telegram_description": "Связь с командой.",
+    "support_telegram_display": "@codemagnetic_support",
+    "support_youtube_url": "https://youtube.com/@codemagnetic",
+    "support_youtube_label": "📺 YouTube",
+    "support_youtube_description": "Разборы и эфиры.",
+    "support_youtube_display": "https://youtube.com/@codemagnetic",
+    "support_instagram_url": "https://instagram.com/codemagnetic",
+    "support_instagram_label": "📸 Instagram",
+    "support_instagram_description": "Новости проекта.",
+    "support_instagram_display": "https://instagram.com/codemagnetic",
+    "support_email": "hello@codemagnetic.ru",
+    "support_email_url": "mailto:hello@codemagnetic.ru",
+    "support_email_label": "✉️ Email",
+    "support_email_description": "Почта поддержки.",
+    "support_email_display": "hello@codemagnetic.ru",
+    "support_site_url": "https://codemagnetic.ru",
+    "support_site_label": "🌐 Сайт",
+    "support_site_description": "Полезные ссылки.",
+    "support_site_display": "https://codemagnetic.ru",
 }
 
 
@@ -3201,12 +3314,15 @@ async def answer_with_main_menu(
     *,
     section: str = "root",
     from_callback: bool = False,
+    use_main_menu_keyboard: bool = True,
     **answer_kwargs: Any,
 ) -> None:
     """Отправляет или обновляет сообщение с главным меню."""
     user_row = user or await get_user_with_id(message.from_user.id)
-    kb = await build_menu_keyboard(user=user_row, is_admin=is_admin, section=section)
-    await message.answer(text, reply_markup=kb, **answer_kwargs)
+    if use_main_menu_keyboard:
+        kb = await build_menu_keyboard(user=user_row, is_admin=is_admin, section=section)
+        answer_kwargs.setdefault("reply_markup", kb)
+    await message.answer(text, **answer_kwargs)
 
 
 
@@ -3434,6 +3550,134 @@ async def send_test_section(
     return test_text, slug
 
 
+def _normalize_support_link(raw: str, kind: str) -> tuple[str, str]:
+    value = (raw or "").strip()
+    if not value:
+        return "", ""
+
+    if kind == "telegram":
+        normalized = value
+        if normalized.startswith("@"):
+            username = normalized[1:]
+            return f"https://t.me/{username}", f"@{username}"
+        parsed = urlparse(normalized)
+        if parsed.scheme:
+            display = normalized
+            if (
+                parsed.scheme in {"http", "https"}
+                and parsed.netloc.lower() == "t.me"
+                and parsed.path
+            ):
+                username = parsed.path.strip("/")
+                if username:
+                    display = f"@{username}"
+            return normalized, display
+        normalized = normalized.replace("t.me/", "").lstrip("@")
+        if not normalized:
+            return "", ""
+        return f"https://t.me/{normalized}", f"@{normalized}"
+
+    if kind == "email":
+        if value.startswith("mailto:"):
+            address = value.split("mailto:", 1)[1] or value
+            return value, address
+        return f"mailto:{value}", value
+
+    parsed = urlparse(value)
+    if not parsed.scheme:
+        value = f"https://{value.lstrip('/')}"
+    return value, value
+
+
+async def _prepare_support_channels() -> tuple[list[dict[str, str]], dict[str, str]]:
+    placeholders: dict[str, str] = {}
+    channels: list[dict[str, str]] = []
+
+    for config in _SUPPORT_CHANNELS_CONFIG:
+        raw_value = (await get_content(config["setting"], default="")).strip()
+        if not raw_value and config["key"] == "telegram":
+            raw_value = SUPPORT_CONTACT
+
+        url, display = _normalize_support_link(raw_value, config.get("type", "url"))
+        if not url:
+            continue
+
+        label = f"{config['emoji']} {config['title']}"
+        description = config.get("description", "")
+        line = (
+            f"{config['emoji']} <a href=\"{html.escape(url, quote=True)}\">"
+            f"{html.escape(config['title'])}</a>"
+        )
+        if description:
+            line += f" — {html.escape(description)}"
+
+        channels.append(
+            {
+                "key": config["key"],
+                "label": label,
+                "url": url,
+                "description": description,
+                "display": display,
+                "line": line,
+            }
+        )
+
+        placeholders[f"support_{config['key']}_url"] = url
+        placeholders[f"support_{config['key']}_label"] = label
+        placeholders[f"support_{config['key']}_description"] = description
+        placeholders[f"support_{config['key']}_display"] = display
+
+        if config["key"] == "email":
+            placeholders["support_email"] = display
+            placeholders["support_email_url"] = url
+
+        if config["key"] in {"youtube", "instagram"}:
+            placeholders[f"{config['key']}_url"] = url
+
+    if not channels:
+        fallback_url, fallback_display = _normalize_support_link(SUPPORT_CONTACT, "telegram")
+        if fallback_url:
+            telegram_cfg = next(
+                (cfg for cfg in _SUPPORT_CHANNELS_CONFIG if cfg["key"] == "telegram"),
+                None,
+            )
+            title = telegram_cfg["title"] if telegram_cfg else "Поддержка"
+            emoji = telegram_cfg["emoji"] if telegram_cfg else "💬"
+            description = telegram_cfg.get("description", "") if telegram_cfg else "Связь с командой."
+            label = f"{emoji} {title}"
+            line = (
+                f"{emoji} <a href=\"{html.escape(fallback_url, quote=True)}\">"
+                f"{html.escape(title)}</a>"
+            )
+            if description:
+                line += f" — {html.escape(description)}"
+
+            channels.append(
+                {
+                    "key": "telegram",
+                    "label": label,
+                    "url": fallback_url,
+                    "description": description,
+                    "display": fallback_display,
+                    "line": line,
+                }
+            )
+
+            placeholders.setdefault("support_telegram_url", fallback_url)
+            placeholders.setdefault("support_telegram_label", label)
+            placeholders.setdefault("support_telegram_description", description)
+            placeholders.setdefault("support_telegram_display", fallback_display)
+
+    channels_text = "\n".join(channel["line"] for channel in channels)
+    if not channels_text:
+        channels_text = f"• {html.escape(SUPPORT_CONTACT)}"
+
+    placeholders["support_channels_text"] = channels_text
+    placeholders["support_channels"] = channels_text
+
+    return channels, placeholders
+
+
 async def send_support_section(
     message: types.Message,
     user: Optional[dict],
@@ -3441,6 +3685,8 @@ async def send_support_section(
     *,
     from_callback: bool = False,
 ) -> None:
+    channels, channel_placeholders = await _prepare_support_channels()
+
     support_template = await get_content(
         "menu.support",
         (
@@ -3448,11 +3694,36 @@ async def send_support_section(
             "Если есть вопросы или сложности — пиши сюда: {support}. Мы отвечаем лично и максимально быстро."
         ),
     )
-    support_text = render_content(
-        support_template,
-        support=SUPPORT_CONTACT,
-        SUPPORT_CONTACT=SUPPORT_CONTACT,
-    )
+
+    placeholders = {
+        "support": SUPPORT_CONTACT,
+        "support_contact": SUPPORT_CONTACT,
+    }
+    placeholders.update(channel_placeholders)
+
+    support_text = render_content(support_template, **placeholders)
+
+    inline_rows: list[list[InlineKeyboardButton]] = [
+        [InlineKeyboardButton(text=channel["label"], url=channel["url"])]
+        for channel in channels
+        if channel.get("url")
+    ]
+    if ADMIN_IDS:
+        inline_rows.append(
+            [
+                InlineKeyboardButton(
+                    text="✉️ Задать вопрос команде",
+                    callback_data=_SUPPORT_QUESTION_CALLBACK,
+                )
+            ]
+        )
+
+    inline_keyboard = InlineKeyboardMarkup(inline_keyboard=inline_rows) if inline_rows else None
+
+    answer_kwargs: dict[str, Any] = {"disable_web_page_preview": True}
+    use_main_menu_keyboard = inline_keyboard is None
+    if inline_keyboard:
+        answer_kwargs["reply_markup"] = inline_keyboard
 
     await answer_with_main_menu(
         message,
@@ -3461,6 +3732,91 @@ async def send_support_section(
         support_text,
         section="root",
         from_callback=from_callback,
+        use_main_menu_keyboard=use_main_menu_keyboard,
+        **answer_kwargs,
+    )
+
+
+@router.callback_query(F.data == _SUPPORT_QUESTION_CALLBACK)
+async def support_prompt_question(callback: types.CallbackQuery, state: FSMContext) -> None:
+    await state.set_state(SupportStates.waiting_question)
+    await state.update_data(support_context="menu.support")
+
+    prompt_text = (
+        "Напиши вопрос одним сообщением — команда поддержки увидит его сразу.\n\n"
+        f"Если передумала — нажми «{CANCEL_TEXT}»."
+    )
+
+    if callback.message:
+        await callback.message.answer(prompt_text, reply_markup=cancel_keyboard())
+    await callback.answer()
+
+
+@router.message(SupportStates.waiting_question)
+async def support_receive_question(message: types.Message, state: FSMContext) -> None:
+    if message.text and message.text.strip().lower() == CANCEL_TEXT.lower():
+        await cancel_handler(message, state)
+        return
+
+    data = await state.get_data() or {}
+    context_label = str(data.get("support_context") or "menu.support").strip()
+
+    question_text = (message.text or message.caption or "").strip()
+    user_row = await get_user_with_id(message.from_user.id)
+    is_admin = is_admin_id(message.from_user.id)
+
+    summary_lines = [
+        "🆘 Новый вопрос в поддержку",
+        f"tg-id: <code>{message.from_user.id}</code>",
+    ]
+    if user_row and user_row.get("id"):
+        summary_lines.append(f"user-id: <code>{user_row['id']}</code>")
+    if user_row and user_row.get("full_name"):
+        summary_lines.append(f"Имя: {html.escape(user_row['full_name'])}")
+    if message.from_user.username:
+        summary_lines.append(f"Username: @{message.from_user.username}")
+    if context_label:
+        summary_lines.append(f"Контекст: {html.escape(context_label)}")
+    if question_text:
+        summary_lines.append(f"Вопрос: {html.escape(question_text)}")
+    else:
+        summary_lines.append(f"Вопрос: [сообщение типа {message.content_type}]")
+
+    notify_admins = _get_notify_admins()
+    if notify_admins:
+        try:
+            await notify_admins("\n".join(summary_lines))
+        except Exception as exc:
+            logger.warning(
+                "support_question: notify_admins failed tg_user_id=%s err=%s",
+                message.from_user.id,
+                exc,
+            )
+
+    for admin_id in ADMIN_IDS:
+        try:
+            await message.forward(admin_id)
+        except Exception as exc:
+            logger.warning(
+                "support_question: forward failed tg_user_id=%s admin_id=%s err=%s",
+                message.from_user.id,
+                admin_id,
+                exc,
+            )
+
+    await state.clear()
+
+    confirm_text = (
+        "Передала вопрос команде поддержки. "
+        f"Ответ придёт в поддержку: {SUPPORT_CONTACT}."
+    )
+
+    await answer_with_main_menu(
+        message,
+        user_row,
+        is_admin,
+        confirm_text,
+        section="root",
     )
 
 
@@ -7194,6 +7550,13 @@ async def cancel_handler(message: types.Message, state: FSMContext):
     data = await state.get_data()
     await state.clear()
     user, is_admin = await _get_user_and_admin(message)
+
+    if current_state == SupportStates.waiting_question.state:
+        await message.answer(
+            "Вопрос не отправлен. Можно выбрать канал поддержки ещё раз или вернуться в меню.",
+        )
+        await send_support_section(message, user, is_admin)
+        return
 
     if current_state == HWStates.waiting_question.state:
         lesson_num = int((data or {}).get("lesson_num", 0) or 0)
