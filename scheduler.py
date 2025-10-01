@@ -22,13 +22,7 @@ RetryAfterTypes = tuple(
 from db import fetch, fetchrow, execute
 from keyboards import lesson_keyboard
 # переиспользуем минимум логики из handlers, чтобы не дублировать
-from handlers import (
-    _load_yaml_content,
-    upsert_funnel_delivery,
-    FORM_LABELS,
-    FORM_REMINDERS_SETTING_KEY,
-    get_bool_setting,
-)
+from handlers import _load_yaml_content, upsert_funnel_delivery, FORM_LABELS, get_content
 
 logger = logging.getLogger("scheduler")
 
@@ -226,10 +220,6 @@ async def job_soft_reminders(bot: Bot):
 
 async def job_form_reminders(bot: Bot):
     """Раз в час напоминаем о незавершённых анкетах."""
-    enabled = await get_bool_setting(FORM_REMINDERS_SETTING_KEY, True)
-    if not enabled:
-        logger.info("[job_form_reminders] disabled via settings")
-        return
     rows = await fetch(
         """
         SELECT fs.id, fs.user_id, u.tg_user_id, fs.form_slug, fs.started_at, fs.last_reminder_at, fs.reminder_count
@@ -245,14 +235,17 @@ async def job_form_reminders(bot: Bot):
         logger.info("[job_form_reminders] nothing to remind")
         return
 
+    template = await get_content(
+        "forms.reminder_template",
+        "Напоминание: анкета «{form_label}» ждёт завершения.\n"
+        "Если уже отправила форму, просто игнорируй это сообщение.",
+    )
+
     sent, errors = 0, 0
     for r in rows:
         try:
             label = FORM_LABELS.get(r["form_slug"], r["form_slug"])
-            reminder_text = (
-                f"Напоминание: анкета «{label}» ждёт завершения.\n"
-                "Если уже отправила форму, просто игнорируй это сообщение."
-            )
+            reminder_text = template.format(form_label=label)
             ok = await _send_with_retries(bot, r["tg_user_id"], reminder_text)
             if ok:
                 await execute(
