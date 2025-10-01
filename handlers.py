@@ -25,7 +25,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.utils.chat_action import ChatActionSender
-from aiogram.exceptions import TelegramRetryAfter
+from aiogram.exceptions import TelegramRetryAfter, TelegramBadRequest
 
 try:
     from aiogram.exceptions import EventSkip
@@ -57,6 +57,7 @@ from keyboards import (
     admin_onboarding_steps_keyboard,
     admin_onboarding_delete_keyboard,
     admin_materials_keyboard,
+    admin_keys_keyboard,
     admin_materials_categories_keyboard,
     admin_broadcast_keyboard,
     admin_broadcast_history_keyboard,
@@ -130,6 +131,10 @@ from keyboards import (
     ADMIN_MATERIALS_DELETE,
     ADMIN_MATERIALS_GRANT,
     ADMIN_MATERIALS_REVOKE,
+    ADMIN_KEYS_BUTTON,
+    ADMIN_KEYS_BULK_GRANT,
+    ADMIN_KEYS_REVOKE,
+    ADMIN_KEYS_UPLOAD,
     ADMIN_BROADCAST_REMINDER_TEXT,
     admin_users_segments_keyboard,
     admin_users_pagination_keyboard,
@@ -191,6 +196,15 @@ FORM_ALIASES: dict[str, str] = {
     "magnetism-window": "magnetism-window",
     "magnetism_window": "magnetism-window",
 }
+
+WEEKLY_KEY_STATUS_ACTIVE = "active"
+USER_KEY_STATUS_AVAILABLE = "available"
+USER_KEY_STATUS_CLAIMED = "claimed"
+USER_KEY_STATUS_REVOKED = "revoked"
+SYSTEM_ADMIN_ACTOR = 0
+
+
+router = Router(name="main-router")
 # ──────────────────────────────────────────────────────────────────────────────
 # Конфиг из окружения
 # ──────────────────────────────────────────────────────────────────────────────
@@ -1215,6 +1229,12 @@ class AdminMaterialsStates(StatesGroup):
     waiting_delete_confirm = State()
     waiting_grant_payload = State()
     waiting_revoke_payload = State()
+
+
+class AdminWeeklyKeysStates(StatesGroup):
+    waiting_bulk_payload = State()
+    waiting_revoke_payload = State()
+    waiting_upload_payload = State()
 
 
 class TestStates(StatesGroup):
@@ -3216,6 +3236,31 @@ async def send_profile_overview(
     phone_value = user_row.get("phone") or "—"
     name_value = user_row.get("name") or (user_row.get("full_name") or "—")
 
+    try:
+        weekly_keys = await list_weekly_keys_for_user(user_row.get("id"))
+    except AssertionError:
+        weekly_keys = []
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("profile weekly keys fetch failed: %s", exc)
+        weekly_keys = []
+    keys_lines: list[str] = []
+    for key in weekly_keys:
+        base_title = key.get("title") or key.get("key_description")
+        if base_title:
+            label = f"Неделя {key['week']}: {base_title}"
+        else:
+            label = f"Неделя {key['week']}"
+        status = key.get("user_status")
+        if status == USER_KEY_STATUS_AVAILABLE:
+            suffix = " — бонус доступен"
+        elif status == USER_KEY_STATUS_CLAIMED:
+            suffix = " — бонус получен"
+        elif status == USER_KEY_STATUS_REVOKED:
+            suffix = " — доступ отозван"
+        else:
+            suffix = " — ещё закрыт"
+        keys_lines.append(f"{_weekly_key_icon(status)} {html.escape(label)}{suffix}")
+
     profile_text = (
         "<b>Твой профиль</b>\n\n"
         f"Имя: {html.escape(name_value)}\n"
@@ -3225,6 +3270,9 @@ async def send_profile_overview(
         f"{access_line}\n\n"
         "Используй кнопки ниже, чтобы обновить контакты."
     )
+
+    if keys_lines:
+        profile_text += "\n\n🔑 <b>Ключи недели</b>\n" + "\n".join(keys_lines)
 
     keyboard = await build_menu_keyboard(
         user=user_row,
@@ -3311,6 +3359,265 @@ async def send_learning_progress_section(
     await message.answer(progress_text, reply_markup=keyboard)
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Weekly keys helpers
+# ──────────────────────────────────────────────────────────────────────────────
+async def get_weekly_key_by_week(week: int) -> dict | None:
+    row = await fetchrow("SELECT * FROM weekly_keys WHERE week = $1", week)
+    return dict(row) if row else None
+
+
+async def list_weekly_keys_for_user(user_id: int | None) -> list[dict]:
+    if user_id is None:
+        rows = await fetch(
+            """
+            SELECT id, week, status AS key_status, title, key_description, bonus_description, bonus_link
+            FROM weekly_keys
+            WHERE status = $1
+            ORDER BY week
+            """,
+            WEEKLY_KEY_STATUS_ACTIVE,
+        )
+        result: list[dict] = []
+        for row in rows:
+            item = dict(row)
+            item.setdefault("user_status", None)
+            result.append(item)
+        return result
+
+    rows = await fetch(
+        """
+        SELECT
+            wk.id,
+            wk.week,
+            wk.status     AS key_status,
+            wk.title,
+            wk.key_description,
+            wk.bonus_description,
+            wk.bonus_link,
+            uk.status     AS user_status,
+            uk.claimed_at,
+            uk.granted_at
+        FROM weekly_keys wk
+        LEFT JOIN user_keys uk
+          ON uk.weekly_key_id = wk.id AND uk.user_id = $1
+        WHERE wk.status = $2
+        ORDER BY wk.week
+        """,
+        user_id,
+        WEEKLY_KEY_STATUS_ACTIVE,
+    )
+    result: list[dict] = []
+    for row in rows:
+        item = dict(row)
+        item.setdefault("user_status", None)
+        result.append(item)
+    return result
+
+
+async def upsert_weekly_key(entry: dict) -> dict:
+    week = int(entry.get("week"))
+    status = str(entry.get("status", WEEKLY_KEY_STATUS_ACTIVE)).strip().lower()
+    if status not in {WEEKLY_KEY_STATUS_ACTIVE, "inactive"}:
+        status = "inactive"
+
+    row = await fetchrow(
+        """
+        INSERT INTO weekly_keys (week, status, title, key_description, bonus_description, bonus_link, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, NOW())
+        ON CONFLICT (week)
+        DO UPDATE SET
+            status = EXCLUDED.status,
+            title = EXCLUDED.title,
+            key_description = EXCLUDED.key_description,
+            bonus_description = EXCLUDED.bonus_description,
+            bonus_link = EXCLUDED.bonus_link,
+            updated_at = NOW()
+        RETURNING *
+        """,
+        week,
+        status,
+        entry.get("title"),
+        entry.get("key_description"),
+        entry.get("bonus_description"),
+        entry.get("bonus_link"),
+    )
+    return dict(row)
+
+
+async def grant_weekly_key(
+    user_id: int,
+    week: int,
+    *,
+    granted_by: int | None = None,
+) -> dict:
+    async with transaction() as conn:
+        weekly_row = await conn.fetchrow(
+            "SELECT * FROM weekly_keys WHERE week = $1",
+            week,
+        )
+        if not weekly_row:
+            return {"success": False, "error": "not_configured"}
+
+        weekly = dict(weekly_row)
+        if weekly.get("status") != WEEKLY_KEY_STATUS_ACTIVE:
+            return {"success": False, "error": "inactive", "weekly": weekly}
+
+        existing_row = await conn.fetchrow(
+            "SELECT * FROM user_keys WHERE user_id = $1 AND weekly_key_id = $2",
+            user_id,
+            weekly_row["id"],
+        )
+        if existing_row and existing_row["status"] == USER_KEY_STATUS_CLAIMED:
+            return {
+                "success": False,
+                "error": "already_claimed",
+                "weekly": weekly,
+                "user_key": dict(existing_row),
+            }
+
+        result_row = await conn.fetchrow(
+            """
+            INSERT INTO user_keys (user_id, weekly_key_id, week, status, bonus_link, granted_by, granted_at)
+            VALUES ($1, $2, $3, $4, $5, $6, NOW())
+            ON CONFLICT (user_id, weekly_key_id)
+            DO UPDATE SET
+                status = EXCLUDED.status,
+                bonus_link = COALESCE(EXCLUDED.bonus_link, user_keys.bonus_link),
+                granted_by = EXCLUDED.granted_by,
+                granted_at = NOW(),
+                revoked_at = NULL,
+                revoked_by = NULL,
+                week = EXCLUDED.week
+            RETURNING *
+            """,
+            user_id,
+            weekly_row["id"],
+            week,
+            USER_KEY_STATUS_AVAILABLE,
+            weekly_row.get("bonus_link"),
+            granted_by,
+        )
+
+        previous_status = existing_row["status"] if existing_row else None
+        updated = previous_status != USER_KEY_STATUS_AVAILABLE
+
+        return {
+            "success": True,
+            "updated": updated,
+            "weekly": weekly,
+            "user_key": dict(result_row),
+        }
+
+
+async def revoke_weekly_key(
+    user_id: int,
+    week: int,
+    *,
+    revoked_by: int | None = None,
+) -> dict:
+    async with transaction() as conn:
+        weekly_row = await conn.fetchrow(
+            "SELECT * FROM weekly_keys WHERE week = $1",
+            week,
+        )
+        if not weekly_row:
+            return {"success": False, "error": "not_configured"}
+
+        weekly = dict(weekly_row)
+        existing_row = await conn.fetchrow(
+            "SELECT * FROM user_keys WHERE user_id = $1 AND weekly_key_id = $2",
+            user_id,
+            weekly_row["id"],
+        )
+        if not existing_row:
+            return {"success": False, "error": "not_granted", "weekly": weekly}
+
+        if existing_row["status"] == USER_KEY_STATUS_REVOKED:
+            return {
+                "success": False,
+                "error": "already_revoked",
+                "weekly": weekly,
+                "user_key": dict(existing_row),
+            }
+
+        result_row = await conn.fetchrow(
+            """
+            UPDATE user_keys
+               SET status = $3,
+                   revoked_at = NOW(),
+                   revoked_by = $4
+             WHERE user_id = $1 AND weekly_key_id = $2
+             RETURNING *
+            """,
+            user_id,
+            weekly_row["id"],
+            USER_KEY_STATUS_REVOKED,
+            revoked_by,
+        )
+
+        return {
+            "success": True,
+            "updated": True,
+            "weekly": weekly,
+            "user_key": dict(result_row),
+        }
+
+
+async def claim_weekly_bonus(user_id: int, week: int) -> dict:
+    async with transaction() as conn:
+        weekly_row = await conn.fetchrow(
+            "SELECT * FROM weekly_keys WHERE week = $1",
+            week,
+        )
+        if not weekly_row:
+            return {"success": False, "error": "not_configured"}
+
+        weekly = dict(weekly_row)
+        if weekly.get("status") != WEEKLY_KEY_STATUS_ACTIVE:
+            return {"success": False, "error": "inactive", "weekly": weekly}
+
+        user_key_row = await conn.fetchrow(
+            "SELECT * FROM user_keys WHERE user_id = $1 AND weekly_key_id = $2",
+            user_id,
+            weekly_row["id"],
+        )
+        if not user_key_row:
+            return {"success": False, "error": "not_granted", "weekly": weekly}
+
+        if user_key_row["status"] == USER_KEY_STATUS_REVOKED:
+            return {"success": False, "error": "revoked", "weekly": weekly}
+
+        if user_key_row["status"] == USER_KEY_STATUS_CLAIMED:
+            return {"success": False, "error": "already_claimed", "weekly": weekly}
+
+        if user_key_row["status"] != USER_KEY_STATUS_AVAILABLE:
+            return {"success": False, "error": "not_ready", "weekly": weekly}
+
+        bonus_link = user_key_row.get("bonus_link") or weekly.get("bonus_link")
+
+        result_row = await conn.fetchrow(
+            """
+            UPDATE user_keys
+               SET status = $2,
+                   claimed_at = NOW(),
+                   bonus_link = COALESCE($3, user_keys.bonus_link)
+             WHERE id = $1
+             RETURNING *
+            """,
+            user_key_row["id"],
+            USER_KEY_STATUS_CLAIMED,
+            bonus_link,
+        )
+
+        return {
+            "success": True,
+            "weekly": weekly,
+            "user_key": dict(result_row),
+            "bonus_link": bonus_link,
+        }
+
+
 def _normalize_materials_choice(text: str | None) -> str:
     if not text:
         return ""
@@ -3341,6 +3648,79 @@ async def _materials_update_state(
 
 async def _materials_reset_state(state: FSMContext | None) -> None:
     await _materials_update_state(state, stack=[], options={})
+
+
+def _weekly_key_icon(status: str | None) -> str:
+    if status in (USER_KEY_STATUS_AVAILABLE, USER_KEY_STATUS_CLAIMED):
+        return "✅"
+    return "🔒"
+
+
+async def send_weekly_keys_overview_message(
+    message: types.Message,
+    user_row: dict,
+    *,
+    from_callback: bool = False,
+    allow_edit: bool = False,
+) -> bool:
+    try:
+        keys = await list_weekly_keys_for_user(user_row.get("id"))
+    except AssertionError:
+        return False
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("weekly keys overview failed: %s", exc)
+        return False
+    if not keys:
+        return False
+
+    lines = ["🔑 Ключи недели:"]
+    buttons: list[list[InlineKeyboardButton]] = []
+
+    for key in keys:
+        status = key.get("user_status")
+        icon = _weekly_key_icon(status)
+        title = key.get("title") or key.get("key_description") or f"Неделя {key['week']}"
+        parts: list[str] = [f"{icon} {title}"]
+
+        if status == USER_KEY_STATUS_AVAILABLE:
+            parts.append("— бонус доступен")
+            buttons.append(
+                [
+                    InlineKeyboardButton(
+                        text=f"🎁 Бонус недели {key['week']}",
+                        callback_data=f"weekly_bonus:{key['week']}",
+                    )
+                ]
+            )
+        elif status == USER_KEY_STATUS_CLAIMED:
+            parts.append("— бонус получен")
+        elif status == USER_KEY_STATUS_REVOKED:
+            parts.append("— доступ отозван")
+        else:
+            parts.append("— ещё закрыт")
+
+        lines.append(" ".join(parts))
+
+    text = "\n".join(lines)
+    markup = InlineKeyboardMarkup(inline_keyboard=buttons) if buttons else None
+
+    if from_callback and allow_edit and getattr(message, "chat", None):
+        try:
+            await message.edit_text(
+                text,
+                reply_markup=markup,
+                disable_web_page_preview=True,
+            )
+            return True
+        except TelegramBadRequest:
+            pass
+
+    await message.answer(
+        text,
+        reply_markup=markup,
+        disable_web_page_preview=True,
+    )
+    return True
 
 
 async def get_material_category_by_slug(
@@ -3602,6 +3982,13 @@ async def send_weekly_materials_section(
         )
         return
 
+    await send_weekly_keys_overview_message(
+        message,
+        user_row,
+        from_callback=from_callback,
+        allow_edit=from_callback,
+    )
+
     weekly_text = await get_content(
         "weekly_materials",
         (
@@ -3621,6 +4008,88 @@ async def send_weekly_materials_section(
         section="materials",
         from_callback=from_callback,
     )
+
+
+@router.callback_query(F.data.startswith("weekly_bonus:"))
+async def weekly_bonus_callback(call: types.CallbackQuery, state: FSMContext):
+    if not call.from_user:
+        return
+
+    try:
+        _, raw_week = call.data.split(":", 1)
+        week = int(raw_week)
+    except (ValueError, AttributeError, TypeError):
+        await call.answer("Некорректный ключ.", show_alert=True)
+        return
+
+    user = await get_user_with_id(call.from_user.id)
+    if not user:
+        await call.answer("Перезапусти /start.", show_alert=True)
+        return
+
+    result = await claim_weekly_bonus(user["id"], week)
+    if not result.get("success"):
+        error = result.get("error")
+        messages = {
+            "not_configured": "Ключ ещё не настроен. Попробуй позже.",
+            "inactive": "Эта неделя пока закрыта.",
+            "not_granted": "Ключ ещё не активирован.",
+            "revoked": "Ключ был отозван администратором.",
+            "already_claimed": "Бонус уже выдан.",
+        }
+        await call.answer(messages.get(error, "Не получилось выдать бонус. Попробуй позже."), show_alert=True)
+        if call.message:
+            await send_weekly_keys_overview_message(
+                call.message,
+                user,
+                from_callback=True,
+                allow_edit=True,
+            )
+        return
+
+    weekly = result.get("weekly", {})
+    bonus_link = result.get("bonus_link")
+    bonus_description = weekly.get("bonus_description")
+
+    lines = [f"🎁 <b>Бонус недели {week}</b>"]
+    if bonus_description:
+        lines.append(html.escape(bonus_description))
+    if bonus_link:
+        lines.append("")
+        lines.append(bonus_link)
+
+    await log_admin_action(
+        SYSTEM_ADMIN_ACTOR,
+        "weekly_bonus_claim",
+        {
+            "week": week,
+            "user_id": user["id"],
+            "bonus_link": bonus_link,
+        },
+    )
+
+    await call.answer("Бонус отправлен!", show_alert=False)
+
+    target_message = call.message
+    if target_message:
+        await send_weekly_keys_overview_message(
+            target_message,
+            user,
+            from_callback=True,
+            allow_edit=True,
+        )
+        await target_message.answer(
+            "\n".join(lines),
+            parse_mode=ParseMode.HTML,
+            disable_web_page_preview=True,
+        )
+    else:
+        await call.bot.send_message(
+            call.from_user.id,
+            "\n".join(lines),
+            parse_mode=ParseMode.HTML,
+            disable_web_page_preview=True,
+        )
 
 
 async def send_materials_catalog_section(
@@ -5029,7 +5498,6 @@ def validate_email(email: str) -> bool:
 # ──────────────────────────────────────────────────────────────────────────────
 # Router и хэндлеры
 # ──────────────────────────────────────────────────────────────────────────────
-router = Router(name="main-router")
 @router.my_chat_member()
 async def on_my_chat_member(event: types.ChatMemberUpdated):
     try:
@@ -5202,8 +5670,40 @@ async def hw_receive_answer(message: types.Message, state: FSMContext):
         await message.answer("Перезапусти /start.")
         return
     await mark_lesson_done(user["id"], lesson_num, hw_answer=message.text.strip())
+
+    grant_result = await grant_weekly_key(
+        user["id"],
+        lesson_num,
+        granted_by=SYSTEM_ADMIN_ACTOR,
+    )
+    if grant_result.get("success") and grant_result.get("updated"):
+        await log_admin_action(
+            SYSTEM_ADMIN_ACTOR,
+            "weekly_key_auto_grant",
+            {
+                "week": lesson_num,
+                "user_id": user["id"],
+                "source": "lesson_complete",
+                "lesson": lesson_num,
+            },
+        )
+        await message.answer(
+            "🔑 Ключ недели разблокирован! Загляни в раздел «Материалы недели», чтобы получить бонус.",
+        )
+    elif grant_result.get("error") in {"inactive", "not_configured"}:
+        await log_admin_action(
+            SYSTEM_ADMIN_ACTOR,
+            "weekly_key_auto_grant_failed",
+            {
+                "week": lesson_num,
+                "user_id": user["id"],
+                "source": "lesson_complete",
+                "lesson": lesson_num,
+                "error": grant_result.get("error"),
+            },
+        )
     await state.clear()
-    
+
     lesson_titles = {
         1: "Внимание",
         2: "Мысли",
@@ -7671,8 +8171,75 @@ async def admin_broadcast_use_template(message: types.Message, state: FSMContext
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Админка: материалы
+# Админка: материалы и ключи
 # ──────────────────────────────────────────────────────────────────────────────
+
+
+def _parse_int_list(raw: Any) -> tuple[list[int], list[str]]:
+    if raw is None:
+        return [], []
+
+    if isinstance(raw, (list, tuple, set)):
+        tokens = [str(item) for item in raw]
+    else:
+        tokens = re.split(r"[\s,;]+", str(raw))
+
+    values: list[int] = []
+    errors: list[str] = []
+    for token in tokens:
+        piece = token.strip()
+        if not piece:
+            continue
+        try:
+            values.append(int(piece))
+        except ValueError:
+            errors.append(piece)
+    return values, errors
+
+
+async def _collect_users_from_payload(payload: dict[str, str]) -> tuple[list[dict], list[str]]:
+    users_map: "OrderedDict[int, dict]" = OrderedDict()
+    errors: list[str] = []
+
+    tg_values, tg_invalid = _parse_int_list(payload.get("tg") or payload.get("tg_ids"))
+    user_values, user_invalid = _parse_int_list(payload.get("users") or payload.get("user_ids"))
+    single_user_values, single_user_invalid = _parse_int_list(payload.get("user"))
+
+    combined_user_values = user_values[:]
+    for value in single_user_values:
+        if value not in combined_user_values:
+            combined_user_values.append(value)
+
+    errors.extend([f"tg «{item}» — не число" for item in tg_invalid])
+    errors.extend([f"user «{item}» — не число" for item in user_invalid + single_user_invalid])
+
+    if tg_values:
+        rows = await fetch(
+            "SELECT * FROM users WHERE tg_user_id = ANY($1::bigint[])",
+            tg_values,
+        )
+        by_tg = {row["tg_user_id"]: dict(row) for row in rows if row.get("tg_user_id") is not None}
+        for tg_id in tg_values:
+            row = by_tg.get(tg_id)
+            if row:
+                users_map[row["id"]] = row
+            else:
+                errors.append(f"tg {tg_id} не найден")
+
+    if combined_user_values:
+        rows = await fetch(
+            "SELECT * FROM users WHERE id = ANY($1::int[])",
+            combined_user_values,
+        )
+        by_id = {row["id"]: dict(row) for row in rows}
+        for user_id in combined_user_values:
+            row = by_id.get(user_id)
+            if row:
+                users_map[row["id"]] = row
+            else:
+                errors.append(f"user {user_id} не найден")
+
+    return list(users_map.values()), errors
 
 
 def _parse_materials_payload(text: str | None) -> dict[str, str]:
@@ -8378,6 +8945,379 @@ async def admin_materials_receive_revoke(message: types.Message, state: FSMConte
     await message.answer(
         "Доступ отозван ✅",
         reply_markup=admin_materials_keyboard(),
+    )
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Админка: ключи недели
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+async def send_admin_keys_menu(message: types.Message) -> None:
+    intro = (
+        "<b>Ключи недели</b>\n\n"
+        "Управляй выдачей бонусов, обновляй описания и контролируй статус ключей."
+    )
+    await message.answer(
+        intro,
+        reply_markup=admin_keys_keyboard(),
+        parse_mode=ParseMode.HTML,
+        disable_web_page_preview=True,
+    )
+
+
+@router.message(F.text == ADMIN_KEYS_BUTTON)
+async def admin_keys_menu(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+    await _reset_state_if_needed(state)
+    await send_admin_keys_menu(message)
+
+
+@router.message(F.text == ADMIN_KEYS_BULK_GRANT)
+async def admin_keys_bulk_grant_prompt(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+    await _reset_state_if_needed(state)
+    await state.set_state(AdminWeeklyKeysStates.waiting_bulk_payload)
+    instructions = (
+        "<b>Массовая выдача ключей</b>\n\n"
+        "Формат: <code>week=12;tg=111111111,222222222</code> или <code>week=5;users=10,12</code>.\n"
+        "Можно указать оба списка через запятую. Ключ выдаётся только для активных недель."
+    )
+    await message.answer(
+        instructions,
+        reply_markup=cancel_keyboard(),
+        parse_mode=ParseMode.HTML,
+        disable_web_page_preview=True,
+    )
+
+
+@router.message(AdminWeeklyKeysStates.waiting_bulk_payload, F.text.len() > 0)
+async def admin_keys_receive_bulk(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        await state.clear()
+        return
+
+    payload = _parse_materials_payload(message.text)
+    week_raw = payload.get("week")
+    if not week_raw:
+        await message.answer(
+            "Укажи <code>week</code> — номер недели.",
+            reply_markup=cancel_keyboard(),
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    try:
+        week = int(week_raw)
+    except ValueError:
+        await message.answer(
+            "Неделя должна быть числом, например <code>week=5</code>.",
+            reply_markup=cancel_keyboard(),
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    users, lookup_errors = await _collect_users_from_payload(payload)
+    if not users and lookup_errors:
+        await message.answer(
+            "Не удалось найти участниц:\n" + "\n".join(f"• {err}" for err in lookup_errors),
+            reply_markup=cancel_keyboard(),
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    if not users:
+        await message.answer(
+            "Укажи хотя бы один Telegram ID или внутренний идентификатор участницы.",
+            reply_markup=cancel_keyboard(),
+        )
+        return
+
+    granted: list[int] = []
+    already_active: list[int] = []
+    already_claimed: list[int] = []
+    failures: list[str] = []
+    inactive = False
+    not_configured = False
+
+    for user_row in users:
+        result = await grant_weekly_key(user_row["id"], week, granted_by=message.from_user.id)
+        if not result.get("success"):
+            error = result.get("error")
+            if error == "already_claimed":
+                already_claimed.append(user_row["id"])
+            elif error == "inactive":
+                inactive = True
+            elif error == "not_configured":
+                not_configured = True
+            else:
+                failures.append(f"id {user_row['id']}: {error}")
+            continue
+        if result.get("updated"):
+            granted.append(user_row["id"])
+        else:
+            already_active.append(user_row["id"])
+
+    await state.clear()
+
+    await log_admin_action(
+        message.from_user.id,
+        "weekly_keys_bulk_grant",
+        {
+            "week": week,
+            "user_ids": [user["id"] for user in users],
+            "granted": granted,
+            "already": already_active,
+            "claimed": already_claimed,
+            "inactive": inactive,
+            "not_configured": not_configured,
+        },
+    )
+
+    summary_lines = [f"<b>Неделя {week}</b>: обработано {len(users)} участниц."]
+    summary_lines.append(f"Новых ключей: {len(granted)}")
+    if already_active:
+        summary_lines.append("Уже активны: " + ", ".join(map(str, already_active)))
+    if already_claimed:
+        summary_lines.append("Ранее получены: " + ", ".join(map(str, already_claimed)))
+    if inactive:
+        summary_lines.append("⚠️ Неделя отключена в справочнике.")
+    if not_configured:
+        summary_lines.append("⚠️ Ключ не найден. Загрузите описание недели.")
+    if failures:
+        summary_lines.append("⚠️ Ошибки: " + "; ".join(failures))
+    if lookup_errors:
+        summary_lines.append("⚠️ Не обработаны: " + "; ".join(lookup_errors))
+
+    await message.answer(
+        "\n".join(summary_lines),
+        reply_markup=admin_keys_keyboard(),
+        parse_mode=ParseMode.HTML,
+        disable_web_page_preview=True,
+    )
+
+
+@router.message(F.text == ADMIN_KEYS_REVOKE)
+async def admin_keys_revoke_prompt(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+    await _reset_state_if_needed(state)
+    await state.set_state(AdminWeeklyKeysStates.waiting_revoke_payload)
+    instructions = (
+        "<b>Отзыв ключей</b>\n\n"
+        "Формат: <code>week=12;tg=111111111</code> или <code>week=7;users=10,12</code>."
+    )
+    await message.answer(
+        instructions,
+        reply_markup=cancel_keyboard(),
+        parse_mode=ParseMode.HTML,
+        disable_web_page_preview=True,
+    )
+
+
+@router.message(AdminWeeklyKeysStates.waiting_revoke_payload, F.text.len() > 0)
+async def admin_keys_receive_revoke(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        await state.clear()
+        return
+
+    payload = _parse_materials_payload(message.text)
+    week_raw = payload.get("week")
+    if not week_raw:
+        await message.answer(
+            "Укажи <code>week</code> — номер недели.",
+            reply_markup=cancel_keyboard(),
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    try:
+        week = int(week_raw)
+    except ValueError:
+        await message.answer(
+            "Неделя должна быть числом, например <code>week=3</code>.",
+            reply_markup=cancel_keyboard(),
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    users, lookup_errors = await _collect_users_from_payload(payload)
+    if not users and lookup_errors:
+        await message.answer(
+            "Не удалось найти участниц:\n" + "\n".join(f"• {err}" for err in lookup_errors),
+            reply_markup=cancel_keyboard(),
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    if not users:
+        await message.answer(
+            "Укажи хотя бы один Telegram ID или внутренний идентификатор участницы.",
+            reply_markup=cancel_keyboard(),
+        )
+        return
+
+    revoked_ids: list[int] = []
+    already_revoked: list[int] = []
+    not_granted: list[int] = []
+    failures: list[str] = []
+    not_configured = False
+
+    for user_row in users:
+        result = await revoke_weekly_key(user_row["id"], week, revoked_by=message.from_user.id)
+        if not result.get("success"):
+            error = result.get("error")
+            if error == "already_revoked":
+                already_revoked.append(user_row["id"])
+            elif error == "not_granted":
+                not_granted.append(user_row["id"])
+            elif error == "not_configured":
+                not_configured = True
+            else:
+                failures.append(f"id {user_row['id']}: {error}")
+            continue
+        revoked_ids.append(user_row["id"])
+
+    await state.clear()
+
+    await log_admin_action(
+        message.from_user.id,
+        "weekly_keys_revoke",
+        {
+            "week": week,
+            "user_ids": [user["id"] for user in users],
+            "revoked": revoked_ids,
+            "already_revoked": already_revoked,
+            "not_granted": not_granted,
+            "not_configured": not_configured,
+        },
+    )
+
+    summary_lines = [f"<b>Неделя {week}</b>: обработано {len(users)} участниц."]
+    summary_lines.append(f"Отозвано ключей: {len(revoked_ids)}")
+    if already_revoked:
+        summary_lines.append("Уже отозваны: " + ", ".join(map(str, already_revoked)))
+    if not_granted:
+        summary_lines.append("Не было активных ключей: " + ", ".join(map(str, not_granted)))
+    if not_configured:
+        summary_lines.append("⚠️ Ключ не найден в справочнике.")
+    if failures:
+        summary_lines.append("⚠️ Ошибки: " + "; ".join(failures))
+    if lookup_errors:
+        summary_lines.append("⚠️ Не обработаны: " + "; ".join(lookup_errors))
+
+    await message.answer(
+        "\n".join(summary_lines),
+        reply_markup=admin_keys_keyboard(),
+        parse_mode=ParseMode.HTML,
+        disable_web_page_preview=True,
+    )
+
+
+@router.message(F.text == ADMIN_KEYS_UPLOAD)
+async def admin_keys_upload_prompt(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+    await _reset_state_if_needed(state)
+    await state.set_state(AdminWeeklyKeysStates.waiting_upload_payload)
+    instructions = (
+        "<b>Загрузка описаний ключей</b>\n\n"
+        "Отправь JSON-список объектов: <code>[{\"week\": 1, \"status\": \"active\", \"title\": \"Неделя 1\","
+        " \"key_description\": \"Описание\", \"bonus_description\": \"Бонус\", \"bonus_link\": \"https://...\"}]</code>.\n"
+        "Статус может быть <code>active</code> или <code>inactive</code>."
+    )
+    await message.answer(
+        instructions,
+        reply_markup=cancel_keyboard(),
+        parse_mode=ParseMode.HTML,
+        disable_web_page_preview=True,
+    )
+
+
+@router.message(AdminWeeklyKeysStates.waiting_upload_payload, F.text.len() > 0)
+async def admin_keys_receive_upload(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        await state.clear()
+        return
+
+    raw_text = message.text or ""
+    try:
+        data = json.loads(raw_text)
+    except json.JSONDecodeError as exc:
+        await message.answer(
+            f"Не удалось разобрать JSON: <code>{html.escape(str(exc))}</code>.",
+            reply_markup=cancel_keyboard(),
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    if isinstance(data, dict) and "week" not in data:
+        entries: list[dict] = []
+        for week_key, payload_value in data.items():
+            if isinstance(payload_value, dict):
+                entry = dict(payload_value)
+                entry.setdefault("week", week_key)
+                entries.append(entry)
+    elif isinstance(data, list):
+        entries = [dict(item) for item in data if isinstance(item, dict)]
+    elif isinstance(data, dict):
+        entries = [dict(data)]
+    else:
+        entries = []
+
+    if not entries:
+        await message.answer(
+            "Не найдено объектов для обновления. Проверь формат JSON.",
+            reply_markup=cancel_keyboard(),
+        )
+        return
+
+    processed: list[int] = []
+    active_count = 0
+    inactive_count = 0
+    errors: list[str] = []
+
+    for entry in entries:
+        try:
+            result = await upsert_weekly_key(entry)
+        except Exception as exc:  # noqa: BLE001 — конвертация и валидация
+            week_label = entry.get("week")
+            errors.append(f"Неделя {week_label}: {exc}")
+            continue
+
+        week_value = int(result.get("week"))
+        processed.append(week_value)
+        status = (result.get("status") or "inactive").lower()
+        if status == WEEKLY_KEY_STATUS_ACTIVE:
+            active_count += 1
+        else:
+            inactive_count += 1
+
+    await state.clear()
+
+    if processed:
+        await log_admin_action(
+            message.from_user.id,
+            "weekly_keys_upload",
+            {
+                "weeks": processed,
+                "active": active_count,
+                "inactive": inactive_count,
+            },
+        )
+
+    summary_lines = [f"Обновлено записей: {len(processed)}."]
+    summary_lines.append(f"Активные: {active_count}, неактивные: {inactive_count}.")
+    if errors:
+        summary_lines.append("⚠️ Ошибки:\n" + "\n".join(f"• {html.escape(err)}" for err in errors))
+
+    await message.answer(
+        "\n".join(summary_lines),
+        reply_markup=admin_keys_keyboard(),
+        parse_mode=ParseMode.HTML,
+        disable_web_page_preview=True,
     )
 
 

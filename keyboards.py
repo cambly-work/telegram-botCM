@@ -67,6 +67,7 @@ ADMIN_DEBUG_BUTTON = "🛠️ Диагностика"
 ADMIN_SETTINGS_BUTTON = "⚙️ Настройки"
 ADMIN_PAYMENTS_BUTTON = "💳 Оплаты"
 ADMIN_MATERIALS_BUTTON = "📚 Материалы"
+ADMIN_KEYS_BUTTON = "🔑 Ключи"
 ADMIN_BEHAVIOR_BUTTON = "🎛 Логика бота"
 ADMIN_BROADCAST_REMINDER_TEXT = "✏️ Текст напоминаний"
 ADMIN_BROADCAST_HISTORY_BUTTON = "📜 История рассылок"
@@ -78,6 +79,10 @@ ADMIN_MATERIALS_UPDATE = "✏️ Изменить категорию"
 ADMIN_MATERIALS_DELETE = "🗑️ Удалить категорию"
 ADMIN_MATERIALS_GRANT = "✅ Выдать доступ"
 ADMIN_MATERIALS_REVOKE = "🚫 Отозвать доступ"
+
+ADMIN_KEYS_BULK_GRANT = "🎁 Массовая выдача"
+ADMIN_KEYS_REVOKE = "🔄 Отозвать ключ"
+ADMIN_KEYS_UPLOAD = "⬆️ Загрузить описания"
 
 ADMIN_BEHAVIOR_START = "✉️ Приветствие /start"
 ADMIN_BEHAVIOR_REGISTRATION = "✅ Сообщение после регистрации"
@@ -337,6 +342,7 @@ def admin_main_keyboard() -> ReplyKeyboardMarkup:
         [KeyboardButton(text=ADMIN_SCHEDULE_BUTTON)],
         [KeyboardButton(text=ADMIN_BROADCAST_BUTTON), KeyboardButton(text=ADMIN_CONTENT_MENU)],
         [KeyboardButton(text=ADMIN_MATERIALS_BUTTON), KeyboardButton(text=ADMIN_BEHAVIOR_BUTTON)],
+        [KeyboardButton(text=ADMIN_KEYS_BUTTON)],
         [KeyboardButton(text=ADMIN_SETTINGS_BUTTON), KeyboardButton(text=ADMIN_STATS_BUTTON)],
         [KeyboardButton(text=ADMIN_DEBUG_BUTTON)],
         [KeyboardButton(text=BACK_TO_MAIN)],
@@ -354,6 +360,16 @@ def admin_materials_keyboard() -> ReplyKeyboardMarkup:
         [KeyboardButton(text=ADMIN_MATERIALS_CREATE), KeyboardButton(text=ADMIN_MATERIALS_UPDATE)],
         [KeyboardButton(text=ADMIN_MATERIALS_DELETE)],
         [KeyboardButton(text=ADMIN_MATERIALS_GRANT), KeyboardButton(text=ADMIN_MATERIALS_REVOKE)],
+        [KeyboardButton(text=BACK_TO_ADMIN), KeyboardButton(text=BACK_TO_MAIN)],
+    ]
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
+
+
+def admin_keys_keyboard() -> ReplyKeyboardMarkup:
+    rows = [
+        [KeyboardButton(text=ADMIN_KEYS_BULK_GRANT)],
+        [KeyboardButton(text=ADMIN_KEYS_REVOKE)],
+        [KeyboardButton(text=ADMIN_KEYS_UPLOAD)],
         [KeyboardButton(text=BACK_TO_ADMIN), KeyboardButton(text=BACK_TO_MAIN)],
     ]
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)

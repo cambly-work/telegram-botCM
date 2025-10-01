@@ -283,6 +283,83 @@ CREATE INDEX IF NOT EXISTS idx_schedule_event_reminders_due
   ON schedule_event_reminders(remind_at)
   WHERE is_cancelled = FALSE AND notified_at IS NULL;
 
+-- WEEKLY_KEYS
+CREATE TABLE IF NOT EXISTS weekly_keys (
+  id                SERIAL PRIMARY KEY,
+  week              INT NOT NULL UNIQUE,
+  status            TEXT NOT NULL DEFAULT 'inactive' CHECK (status IN ('inactive','active')),
+  title             TEXT,
+  key_description   TEXT,
+  bonus_description TEXT,
+  bonus_link        TEXT,
+  created_at        TIMESTAMPTZ DEFAULT NOW(),
+  updated_at        TIMESTAMPTZ DEFAULT NOW()
+);
+
+ALTER TABLE weekly_keys
+  ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'inactive',
+  ADD COLUMN IF NOT EXISTS title TEXT,
+  ADD COLUMN IF NOT EXISTS key_description TEXT,
+  ADD COLUMN IF NOT EXISTS bonus_description TEXT,
+  ADD COLUMN IF NOT EXISTS bonus_link TEXT,
+  ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW(),
+  ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
+
+DO $$
+BEGIN
+  BEGIN
+    EXECUTE $$ALTER TABLE weekly_keys
+      ADD CONSTRAINT weekly_keys_status_check
+      CHECK (status IN ('inactive','active'))$$;
+  EXCEPTION WHEN duplicate_object THEN
+    NULL;
+  END;
+END$$;
+
+CREATE INDEX IF NOT EXISTS idx_weekly_keys_status ON weekly_keys(status);
+
+-- USER_KEYS
+CREATE TABLE IF NOT EXISTS user_keys (
+  id             SERIAL PRIMARY KEY,
+  user_id        INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  weekly_key_id  INT NOT NULL REFERENCES weekly_keys(id) ON DELETE CASCADE,
+  week           INT NOT NULL,
+  status         TEXT NOT NULL DEFAULT 'available' CHECK (status IN ('available','claimed','revoked')),
+  bonus_link     TEXT,
+  granted_by     BIGINT,
+  granted_at     TIMESTAMPTZ DEFAULT NOW(),
+  claimed_at     TIMESTAMPTZ,
+  revoked_by     BIGINT,
+  revoked_at     TIMESTAMPTZ,
+  UNIQUE (user_id, weekly_key_id)
+);
+
+ALTER TABLE user_keys
+  ADD COLUMN IF NOT EXISTS weekly_key_id INT REFERENCES weekly_keys(id) ON DELETE CASCADE,
+  ADD COLUMN IF NOT EXISTS week INT,
+  ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'available',
+  ADD COLUMN IF NOT EXISTS bonus_link TEXT,
+  ADD COLUMN IF NOT EXISTS granted_by BIGINT,
+  ADD COLUMN IF NOT EXISTS granted_at TIMESTAMPTZ DEFAULT NOW(),
+  ADD COLUMN IF NOT EXISTS claimed_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS revoked_by BIGINT,
+  ADD COLUMN IF NOT EXISTS revoked_at TIMESTAMPTZ;
+
+DO $$
+BEGIN
+  BEGIN
+    EXECUTE $$ALTER TABLE user_keys
+      ADD CONSTRAINT user_keys_status_check
+      CHECK (status IN ('available','claimed','revoked'))$$;
+  EXCEPTION WHEN duplicate_object THEN
+    NULL;
+  END;
+END$$;
+
+CREATE INDEX IF NOT EXISTS idx_user_keys_user ON user_keys(user_id);
+CREATE INDEX IF NOT EXISTS idx_user_keys_week ON user_keys(week);
+CREATE INDEX IF NOT EXISTS idx_user_keys_status ON user_keys(status);
+
 -- Legacy compatibility: remove the old index and rename slug → form_slug when needed.
 DROP INDEX IF EXISTS ux_form_sessions_user_slug;
 
