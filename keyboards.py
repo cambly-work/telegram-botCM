@@ -92,6 +92,11 @@ FEEDBACK_OPTIONS: dict[str, str] = {
     "Плохо": "poor",
 }
 
+LEARNING_PROGRESS_BUTTON = "Мой прогресс"
+MATERIALS_CATALOG_BUTTON = "Каталог материалов"
+MATERIALS_PRACTICES_BUTTON = "Практики"
+MATERIALS_CHALLENGES_BUTTON = "Челленджи"
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Главное меню и разделы
 # ──────────────────────────────────────────────────────────────────────────────
@@ -142,9 +147,13 @@ def learning_menu_keyboard() -> ReplyKeyboardMarkup:
     rows = [
         [
             KeyboardButton(text="Бесплатные уроки"),
-            KeyboardButton(text="Окно в Магнетизм"),
+            KeyboardButton(text=LEARNING_PROGRESS_BUTTON),
         ],
-        [KeyboardButton(text="Записаться на разбор"), KeyboardButton(text="Пройти тест")],
+        [
+            KeyboardButton(text="Окно в Магнетизм"),
+            KeyboardButton(text="Записаться на разбор"),
+        ],
+        [KeyboardButton(text="Пройти тест")],
         [KeyboardButton(text=BACK_TO_MAIN)],
     ]
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
@@ -158,7 +167,14 @@ def materials_menu_keyboard(
     weekly_text = "Материалы недели" if weekly_enabled else "Материалы недели 🔒"
     schedule_text = "Расписание" if schedule_enabled else "Расписание 🔒"
     rows = [
-        [KeyboardButton(text=weekly_text)],
+        [
+            KeyboardButton(text=weekly_text),
+            KeyboardButton(text=MATERIALS_CATALOG_BUTTON),
+        ],
+        [
+            KeyboardButton(text=MATERIALS_PRACTICES_BUTTON),
+            KeyboardButton(text=MATERIALS_CHALLENGES_BUTTON),
+        ],
         [KeyboardButton(text=schedule_text)],
         [KeyboardButton(text=BACK_TO_MAIN)],
     ]

@@ -136,6 +136,10 @@ from keyboards import (
     ADMIN_STATS_PAYMENTS_BREAKDOWN,
     ADMIN_STATS_RECENT_PAYMENTS,
     ADMIN_STATS_FORMS_BREAKDOWN,
+    LEARNING_PROGRESS_BUTTON,
+    MATERIALS_CATALOG_BUTTON,
+    MATERIALS_PRACTICES_BUTTON,
+    MATERIALS_CHALLENGES_BUTTON,
 )
 # ──────────────────────────────────────────────────────────────────────────────
 # Логгер
@@ -1169,11 +1173,26 @@ class TestStates(StatesGroup):
 # Улучшенные клавиатуры
 # ──────────────────────────────────────────────────────────────────────────────
 _MENU_SECTION_PROMPTS: dict[str, tuple[str, str]] = {
-    "root": ("menu.prompts.root", "Главное меню\n\nВыбери раздел, чтобы продолжить."),
+    "root": (
+        "menu.prompts.root",
+        (
+            "Главное меню.\n\n"
+            "Разделы: «О клубе», «Обучение», «Материалы» и «Профиль». Выбери, что интересно прямо сейчас."
+        ),
+    ),
     "info": ("menu.prompts.info", "Раздел «О клубе».\n\nВыбери интересующий пункт."),
-    "learning": ("menu.prompts.learning", "Раздел «Обучение».\n\nВыбери, с чего продолжить."),
-    "materials": ("menu.prompts.materials", "Раздел «Материалы».\n\nДоступ к материалам зависит от статуса участия."),
-    "profile": ("menu.prompts.profile", "Раздел «Профиль».\n\nУправляй своими данными и доступами."),
+    "learning": (
+        "menu.prompts.learning",
+        "Раздел «Обучение».\n\nЗдесь собраны бесплатные уроки, «Мой прогресс», тест и запись на разбор.",
+    ),
+    "materials": (
+        "menu.prompts.materials",
+        "Раздел «Материалы».\n\nМатериалы недели, каталог клуба, практики, челленджи и расписание эфиров.",
+    ),
+    "profile": (
+        "menu.prompts.profile",
+        "Раздел «Профиль».\n\nПроверяй контакты, статус доступа и обновляй данные.",
+    ),
 }
 
 _ADMIN_SETTINGS_DEFAULTS: dict[str, bool] = {
@@ -2916,6 +2935,82 @@ async def send_profile_overview(
     await message.answer(profile_text, reply_markup=keyboard)
 
 
+async def send_learning_progress_section(
+    message: types.Message,
+    user: Optional[dict],
+    is_admin: bool,
+    *,
+    from_callback: bool = False,
+) -> None:
+    user_row = user or await get_user_with_id(message.from_user.id)
+    if not user_row:
+        await answer_with_main_menu(
+            message,
+            user_row,
+            is_admin,
+            "Перезапусти /start, чтобы сохранить прогресс и открыть уроки.",
+            section="learning",
+            from_callback=from_callback,
+        )
+        return
+
+    rows = await fetch(
+        "SELECT lesson_num, hw_status FROM funnel_progress WHERE user_id=$1 ORDER BY lesson_num",
+        user_row["id"],
+    )
+    status_map = {int(row["lesson_num"]): row["hw_status"] for row in rows or []}
+    next_lesson = await next_lesson_to_deliver(user_row["id"])
+
+    status_lines: list[str] = []
+    for lesson_num in range(1, 5):
+        status_code = status_map.get(lesson_num)
+        if status_code == "submitted":
+            icon, description = "✅", "завершён"
+        elif status_code == "skipped":
+            icon, description = "⏭️", "пропущен"
+        elif status_code == "pending":
+            icon, description = "⏳", "в работе"
+        else:
+            if next_lesson == 5 or lesson_num < next_lesson:
+                icon, description = "✅", "завершён"
+            elif lesson_num == next_lesson:
+                icon, description = "🚀", "готов к старту"
+            else:
+                icon, description = "🔒", "откроется после предыдущего"
+        status_lines.append(f"{icon} Урок {lesson_num}: {description}")
+
+    progress_rows = "\n".join(status_lines)
+
+    if next_lesson == 5:
+        summary = "Ты прошла все 4 урока! Продолжай практики или изучай материалы клуба."
+        next_label = ""
+    else:
+        summary = f"Следующий шаг: открой урок {next_lesson} через «Бесплатные уроки»."
+        next_label = str(next_lesson)
+
+    template = await get_content(
+        "menu.learning.progress",
+        "<b>Мой прогресс</b>\n\n{progress_rows}\n\n{summary}",
+    )
+    progress_text = render_content(
+        template,
+        progress_rows=progress_rows,
+        PROGRESS_ROWS=progress_rows,
+        summary=summary,
+        SUMMARY=summary,
+        next_lesson=next_label,
+        NEXT_LESSON=next_label,
+    )
+
+    keyboard = await build_menu_keyboard(
+        user=user_row,
+        is_admin=is_admin,
+        section="learning",
+    )
+
+    await message.answer(progress_text, reply_markup=keyboard)
+
+
 async def send_weekly_materials_section(
     message: types.Message,
     user: Optional[dict],
@@ -2977,6 +3072,84 @@ async def send_weekly_materials_section(
         user_row,
         is_admin,
         weekly_text,
+        section="materials",
+        from_callback=from_callback,
+    )
+
+
+async def send_materials_catalog_section(
+    message: types.Message,
+    user: Optional[dict],
+    is_admin: bool,
+    *,
+    from_callback: bool = False,
+) -> None:
+    user_row = user or await get_user_with_id(message.from_user.id)
+    catalog_text = await get_content(
+        "menu.materials.catalog",
+        (
+            "Каталог материалов клуба.\n\n"
+            "Здесь собраны ссылки на базовые модули, записи эфиров и дополнительные форматы."
+        ),
+    )
+
+    await answer_with_main_menu(
+        message,
+        user_row,
+        is_admin,
+        catalog_text,
+        section="materials",
+        from_callback=from_callback,
+    )
+
+
+async def send_materials_practices_section(
+    message: types.Message,
+    user: Optional[dict],
+    is_admin: bool,
+    *,
+    from_callback: bool = False,
+) -> None:
+    user_row = user or await get_user_with_id(message.from_user.id)
+    practices_text = await get_content(
+        "menu.materials.practices",
+        (
+            "Практики клуба.\n\n"
+            "Возвращайся к упражнениям, чтобы закреплять результаты и отслеживать изменения."
+        ),
+    )
+
+    await answer_with_main_menu(
+        message,
+        user_row,
+        is_admin,
+        practices_text,
+        section="materials",
+        from_callback=from_callback,
+    )
+
+
+async def send_materials_challenges_section(
+    message: types.Message,
+    user: Optional[dict],
+    is_admin: bool,
+    *,
+    from_callback: bool = False,
+) -> None:
+    user_row = user or await get_user_with_id(message.from_user.id)
+    challenges_text = await get_content(
+        "menu.materials.challenges",
+        (
+            "Челленджи и тематические марафоны.\n\n"
+            "Выбирай формат под задачу и отмечай прогресс в «Материалах недели»."
+        ),
+    )
+
+    await answer_with_main_menu(
+        message,
+        user_row,
+        is_admin,
+        challenges_text,
         section="materials",
         from_callback=from_callback,
     )
@@ -4568,6 +4741,15 @@ async def menu_test(message: types.Message, state: FSMContext):
     await message.answer(message_text, reply_markup=cancel_keyboard())
 
 
+@router.message(F.text == LEARNING_PROGRESS_BUTTON)
+async def menu_learning_progress(message: types.Message, state: FSMContext):
+    await _reset_state_if_needed(state)
+    user, is_admin = await _get_user_and_admin(message)
+    if not user:
+        user = await ensure_user(message.from_user)
+    await send_learning_progress_section(message, user, is_admin)
+
+
 @router.message(TestStates.waiting_birthdate, F.text.casefold() == CANCEL_TEXT.lower())
 async def test_cancel_birthdate(message: types.Message, state: FSMContext):
     await cancel_handler(message, state)
@@ -4744,6 +4926,27 @@ async def menu_weekly_materials(message: types.Message, state: FSMContext):
     await _reset_state_if_needed(state)
     user, is_admin = await _get_user_and_admin(message)
     await send_weekly_materials_section(message, user, is_admin)
+
+
+@router.message(F.text == MATERIALS_CATALOG_BUTTON)
+async def menu_materials_catalog(message: types.Message, state: FSMContext):
+    await _reset_state_if_needed(state)
+    user, is_admin = await _get_user_and_admin(message)
+    await send_materials_catalog_section(message, user, is_admin)
+
+
+@router.message(F.text == MATERIALS_PRACTICES_BUTTON)
+async def menu_materials_practices(message: types.Message, state: FSMContext):
+    await _reset_state_if_needed(state)
+    user, is_admin = await _get_user_and_admin(message)
+    await send_materials_practices_section(message, user, is_admin)
+
+
+@router.message(F.text == MATERIALS_CHALLENGES_BUTTON)
+async def menu_materials_challenges(message: types.Message, state: FSMContext):
+    await _reset_state_if_needed(state)
+    user, is_admin = await _get_user_and_admin(message)
+    await send_materials_challenges_section(message, user, is_admin)
 
 
 @router.message(F.text.in_({"Расписание", "Расписание 🔒"}))

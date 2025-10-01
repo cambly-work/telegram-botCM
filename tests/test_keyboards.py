@@ -29,7 +29,12 @@ from keyboards import (
     BROADCAST_HISTORY_MORE_BUTTON,
     BROADCAST_MEMBERS_BUTTON,
     BROADCAST_TEMPLATES_BUTTON,
+    LEARNING_PROGRESS_BUTTON,
+    MATERIALS_CATALOG_BUTTON,
+    MATERIALS_PRACTICES_BUTTON,
+    MATERIALS_CHALLENGES_BUTTON,
     materials_menu_keyboard,
+    learning_menu_keyboard,
     admin_behavior_keyboard,
     admin_broadcast_keyboard,
     admin_main_keyboard,
@@ -101,12 +106,24 @@ def test_admin_payments_keyboard_back_navigation():
     assert rows_closed[5] == [BACK_TO_MAIN]
 
 
+def test_learning_menu_keyboard_layout():
+    rows = _keyboard_texts(learning_menu_keyboard())
+
+    assert rows == [
+        ["Бесплатные уроки", LEARNING_PROGRESS_BUTTON],
+        ["Окно в Магнетизм", "Записаться на разбор"],
+        ["Пройти тест"],
+        [BACK_TO_MAIN],
+    ]
+
+
 def test_materials_menu_keyboard_all_sections_available():
     rows = _keyboard_texts(
         materials_menu_keyboard(weekly_enabled=True, schedule_enabled=True)
     )
     assert rows == [
-        ["Материалы недели"],
+        ["Материалы недели", MATERIALS_CATALOG_BUTTON],
+        [MATERIALS_PRACTICES_BUTTON, MATERIALS_CHALLENGES_BUTTON],
         ["Расписание"],
         [BACK_TO_MAIN],
     ]
@@ -116,18 +133,21 @@ def test_materials_menu_keyboard_highlights_locked_sections():
     rows = _keyboard_texts(
         materials_menu_keyboard(weekly_enabled=False, schedule_enabled=False)
     )
-    assert rows[0] == ["Материалы недели 🔒"]
-    assert rows[1] == ["Расписание 🔒"]
-    assert rows[2] == [BACK_TO_MAIN]
+    assert rows[0][0] == "Материалы недели 🔒"
+    assert rows[0][1] == MATERIALS_CATALOG_BUTTON
+    assert rows[1] == [MATERIALS_PRACTICES_BUTTON, MATERIALS_CHALLENGES_BUTTON]
+    assert rows[2] == ["Расписание 🔒"]
+    assert rows[3] == [BACK_TO_MAIN]
 
 
 def test_materials_menu_keyboard_mixed_flags():
     rows = _keyboard_texts(
         materials_menu_keyboard(weekly_enabled=True, schedule_enabled=False)
     )
-    assert rows[0] == ["Материалы недели"]
-    assert rows[1] == ["Расписание 🔒"]
-    assert rows[2] == [BACK_TO_MAIN]
+    assert rows[0] == ["Материалы недели", MATERIALS_CATALOG_BUTTON]
+    assert rows[1] == [MATERIALS_PRACTICES_BUTTON, MATERIALS_CHALLENGES_BUTTON]
+    assert rows[2] == ["Расписание 🔒"]
+    assert rows[3] == [BACK_TO_MAIN]
 
 
 def test_admin_settings_keyboard_no_content_shortcuts():
