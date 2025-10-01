@@ -38,6 +38,13 @@ ADMIN_CONTENT_ROLLBACK_PREFIX = "↩️ Откатить"
 ADMIN_CONTENT_EXPORT = "⬇️ Экспорт"
 ADMIN_CONTENT_IMPORT = "⬆️ Импорт"
 ADMIN_USERS_BUTTON = "👥 Пользователи"
+ADMIN_SCHEDULE_BUTTON = "📆 Расписание"
+ADMIN_SCHEDULE_ADD_EVENT = "➕ Добавить событие"
+ADMIN_SCHEDULE_EDIT_EVENT = "✏️ Изменить событие"
+ADMIN_SCHEDULE_ARCHIVE_EVENT = "🗄️ Архивировать событие"
+ADMIN_SCHEDULE_RESTORE_EVENT = "♻️ Восстановить событие"
+ADMIN_SCHEDULE_SHOW_ARCHIVE = "📂 Архив событий"
+ADMIN_SCHEDULE_SHOW_ACTIVE = "📅 Активные события"
 ADMIN_USERS_SEGMENT_LEADS = "🎯 Лиды"
 ADMIN_USERS_SEGMENT_ACTIVE = "🔥 Активные"
 ADMIN_USERS_SEGMENT_EXPIRED = "🧊 Завершившие"
@@ -66,6 +73,13 @@ ADMIN_BROADCAST_REMINDER_TEXT = "✏️ Текст напоминаний"
 ADMIN_BROADCAST_HISTORY_BUTTON = "📜 История рассылок"
 BROADCAST_HISTORY_MORE_BUTTON = "➕ Ещё"
 
+ADMIN_MATERIALS_LIST = "📂 Список категорий"
+ADMIN_MATERIALS_CREATE = "➕ Добавить категорию"
+ADMIN_MATERIALS_UPDATE = "✏️ Изменить категорию"
+ADMIN_MATERIALS_DELETE = "🗑️ Удалить категорию"
+ADMIN_MATERIALS_GRANT = "✅ Выдать доступ"
+ADMIN_MATERIALS_REVOKE = "🚫 Отозвать доступ"
+
 ADMIN_BEHAVIOR_START = "✉️ Приветствие /start"
 ADMIN_BEHAVIOR_REGISTRATION = "✅ Сообщение после регистрации"
 ADMIN_BEHAVIOR_ONBOARDING = "🚀 Шаги онбординга"
@@ -93,6 +107,14 @@ FEEDBACK_OPTIONS: dict[str, str] = {
     "Нормально": "average",
     "Плохо": "poor",
 }
+
+LEARNING_PROGRESS_BUTTON = "Мой прогресс"
+ADMIN_USERS_EDIT_PROGRESS = "📈 Обновить прогресс"
+MATERIALS_CATALOG_BUTTON = "Каталог материалов"
+MATERIALS_PODCASTS_BUTTON = "Подкасты"
+MATERIALS_PRACTICES_BUTTON = "Практики"
+MATERIALS_CHALLENGES_BUTTON = "Челленджи"
+MATERIALS_ARCHIVE_BUTTON = "Архив недель"
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Главное меню и разделы
@@ -144,9 +166,13 @@ def learning_menu_keyboard() -> ReplyKeyboardMarkup:
     rows = [
         [
             KeyboardButton(text="Бесплатные уроки"),
-            KeyboardButton(text="Окно в Магнетизм"),
+            KeyboardButton(text=LEARNING_PROGRESS_BUTTON),
         ],
-        [KeyboardButton(text="Записаться на разбор"), KeyboardButton(text="Пройти тест")],
+        [
+            KeyboardButton(text="Окно в Магнетизм"),
+            KeyboardButton(text="Записаться на разбор"),
+        ],
+        [KeyboardButton(text="Пройти тест")],
         [KeyboardButton(text=BACK_TO_MAIN)],
     ]
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
@@ -156,15 +182,51 @@ def materials_menu_keyboard(
     *,
     weekly_enabled: bool,
     schedule_enabled: bool,
+    submenu: str | None = None,
+    submenu_items: list[dict] | None = None,
 ) -> ReplyKeyboardMarkup:
     weekly_text = "Материалы недели" if weekly_enabled else "Материалы недели 🔒"
     schedule_text = "Расписание" if schedule_enabled else "Расписание 🔒"
+
+    if submenu:
+        rows: list[list[KeyboardButton]] = []
+        for item in submenu_items or []:
+            title = item.get("title", "")
+            locked = item.get("locked", False)
+            has_children = item.get("has_children", False)
+            label = title
+            if locked:
+                label = f"{label} 🔒"
+            elif has_children:
+                label = f"{label} ▶️"
+            rows.append([KeyboardButton(text=label)])
+
+        rows.append([KeyboardButton(text=BACK_TO_MATERIALS)])
+        rows.append([KeyboardButton(text=BACK_TO_MAIN)])
+
+        placeholder_map = {
+            "catalog": "Каталог материалов",
+        }
+        placeholder = placeholder_map.get(submenu, "Выбери материалы")
+        return ReplyKeyboardMarkup(
+            keyboard=rows,
+            resize_keyboard=True,
+            input_field_placeholder=placeholder,
+        )
+
     rows = [
-        [KeyboardButton(text=weekly_text)],
+        [
+            KeyboardButton(text=weekly_text),
+            KeyboardButton(text=MATERIALS_CATALOG_BUTTON),
+        ],
         [KeyboardButton(text=schedule_text)],
         [KeyboardButton(text=BACK_TO_MAIN)],
     ]
-    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
+    return ReplyKeyboardMarkup(
+        keyboard=rows,
+        resize_keyboard=True,
+        input_field_placeholder="Раздел «Материалы»",
+    )
 
 
 def profile_menu_keyboard(
@@ -173,7 +235,10 @@ def profile_menu_keyboard(
     payments_open: bool,
 ) -> ReplyKeyboardMarkup:
     rows: list[list[KeyboardButton]] = [
-        [KeyboardButton(text="Мой профиль")],
+        [
+            KeyboardButton(text="Мой профиль"),
+            KeyboardButton(text=LEARNING_PROGRESS_BUTTON),
+        ],
         [KeyboardButton(text="Изменить email"), KeyboardButton(text="Изменить телефон")],
     ]
 
@@ -348,11 +413,30 @@ def admin_user_card_keyboard() -> ReplyKeyboardMarkup:
             KeyboardButton(text=ADMIN_USERS_GRANT_ACCESS),
             KeyboardButton(text=ADMIN_USERS_REVOKE_ACCESS),
         ],
-        [KeyboardButton(text=ADMIN_USERS_UPDATE_CONTACTS)],
+        [
+            KeyboardButton(text=ADMIN_USERS_UPDATE_CONTACTS),
+            KeyboardButton(text=ADMIN_USERS_EDIT_PROGRESS),
+        ],
         [KeyboardButton(text=ADMIN_USERS_BACK_TO_LIST)],
         [KeyboardButton(text=ADMIN_USERS_BACK_TO_SEGMENTS)],
         [KeyboardButton(text=BACK_TO_ADMIN), KeyboardButton(text=BACK_TO_MAIN)],
     ]
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
+
+
+def admin_schedule_keyboard(*, archive_mode: bool = False) -> ReplyKeyboardMarkup:
+    rows: list[list[KeyboardButton]] = []
+    if not archive_mode:
+        rows.append([KeyboardButton(text=ADMIN_SCHEDULE_ADD_EVENT)])
+        rows.append([
+            KeyboardButton(text=ADMIN_SCHEDULE_EDIT_EVENT),
+            KeyboardButton(text=ADMIN_SCHEDULE_ARCHIVE_EVENT),
+        ])
+        rows.append([KeyboardButton(text=ADMIN_SCHEDULE_SHOW_ARCHIVE)])
+    else:
+        rows.append([KeyboardButton(text=ADMIN_SCHEDULE_RESTORE_EVENT)])
+        rows.append([KeyboardButton(text=ADMIN_SCHEDULE_SHOW_ACTIVE)])
+    rows.append([KeyboardButton(text=BACK_TO_ADMIN), KeyboardButton(text=BACK_TO_MAIN)])
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
 

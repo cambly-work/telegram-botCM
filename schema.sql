@@ -191,6 +191,98 @@ BEGIN
 END
 $$;
 
+-- SCHEDULE CYCLE WEEKS
+CREATE TABLE IF NOT EXISTS schedule_cycle_weeks (
+  id           SERIAL PRIMARY KEY,
+  week_number  INT NOT NULL,
+  title        TEXT NOT NULL,
+  start_date   DATE,
+  end_date     DATE,
+  is_archived  BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at   TIMESTAMPTZ DEFAULT NOW(),
+  updated_at   TIMESTAMPTZ DEFAULT NOW()
+);
+
+ALTER TABLE schedule_cycle_weeks
+  ADD COLUMN IF NOT EXISTS week_number INT,
+  ADD COLUMN IF NOT EXISTS title TEXT,
+  ADD COLUMN IF NOT EXISTS start_date DATE,
+  ADD COLUMN IF NOT EXISTS end_date DATE,
+  ADD COLUMN IF NOT EXISTS is_archived BOOLEAN NOT NULL DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW(),
+  ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
+
+DO $$
+BEGIN
+  BEGIN
+    ALTER TABLE schedule_cycle_weeks
+      ADD CONSTRAINT schedule_cycle_weeks_week_number_unique UNIQUE (week_number);
+  EXCEPTION WHEN duplicate_object THEN
+    NULL;
+  END;
+END$$;
+
+CREATE INDEX IF NOT EXISTS idx_schedule_cycle_weeks_active
+  ON schedule_cycle_weeks(is_archived, start_date NULLS LAST);
+
+CREATE INDEX IF NOT EXISTS idx_schedule_cycle_weeks_dates
+  ON schedule_cycle_weeks(start_date, end_date);
+
+-- SCHEDULE EVENTS
+CREATE TABLE IF NOT EXISTS schedule_events (
+  id           SERIAL PRIMARY KEY,
+  week_id      INT REFERENCES schedule_cycle_weeks(id) ON DELETE SET NULL,
+  scheduled_at TIMESTAMPTZ NOT NULL,
+  event_type   TEXT NOT NULL,
+  description  TEXT,
+  link         TEXT,
+  is_archived  BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at   TIMESTAMPTZ DEFAULT NOW(),
+  updated_at   TIMESTAMPTZ DEFAULT NOW()
+);
+
+ALTER TABLE schedule_events
+  ADD COLUMN IF NOT EXISTS week_id INT,
+  ADD COLUMN IF NOT EXISTS scheduled_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS event_type TEXT,
+  ADD COLUMN IF NOT EXISTS description TEXT,
+  ADD COLUMN IF NOT EXISTS link TEXT,
+  ADD COLUMN IF NOT EXISTS is_archived BOOLEAN NOT NULL DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW(),
+  ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
+
+CREATE INDEX IF NOT EXISTS idx_schedule_events_active
+  ON schedule_events(is_archived, scheduled_at);
+
+CREATE INDEX IF NOT EXISTS idx_schedule_events_week
+  ON schedule_events(week_id);
+
+-- SCHEDULE EVENT REMINDERS
+CREATE TABLE IF NOT EXISTS schedule_event_reminders (
+  id           SERIAL PRIMARY KEY,
+  event_id     INT NOT NULL REFERENCES schedule_events(id) ON DELETE CASCADE,
+  user_id      INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  remind_at    TIMESTAMPTZ NOT NULL,
+  notified_at  TIMESTAMPTZ,
+  is_cancelled BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at   TIMESTAMPTZ DEFAULT NOW(),
+  updated_at   TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(event_id, user_id)
+);
+
+ALTER TABLE schedule_event_reminders
+  ADD COLUMN IF NOT EXISTS event_id INT,
+  ADD COLUMN IF NOT EXISTS user_id INT,
+  ADD COLUMN IF NOT EXISTS remind_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS notified_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS is_cancelled BOOLEAN NOT NULL DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW(),
+  ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
+
+CREATE INDEX IF NOT EXISTS idx_schedule_event_reminders_due
+  ON schedule_event_reminders(remind_at)
+  WHERE is_cancelled = FALSE AND notified_at IS NULL;
+
 -- Legacy compatibility: remove the old index and rename slug → form_slug when needed.
 DROP INDEX IF EXISTS ux_form_sessions_user_slug;
 
@@ -273,6 +365,68 @@ WHERE action IS NULL AND event IS NOT NULL;
 -- 3) Теперь индексы (после того, как колонка 'action' гарантированно есть)
 CREATE INDEX IF NOT EXISTS idx_admin_log_action ON admin_log(action);
 CREATE INDEX IF NOT EXISTS idx_admin_log_event  ON admin_log(event);
+
+-- =========================
+-- Конец schema.sql v3.1
+-- =========================
+
+-- MATERIAL_CATEGORIES
+CREATE TABLE IF NOT EXISTS material_categories (
+  id              SERIAL PRIMARY KEY,
+  slug            TEXT NOT NULL UNIQUE,
+  title           TEXT NOT NULL,
+  content_key     TEXT NOT NULL UNIQUE,
+  parent_id       INT REFERENCES material_categories(id) ON DELETE CASCADE,
+  requires_access BOOLEAN NOT NULL DEFAULT TRUE,
+  is_active       BOOLEAN NOT NULL DEFAULT TRUE,
+  sort_order      INT NOT NULL DEFAULT 100,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_material_categories_parent
+  ON material_categories(parent_id);
+
+CREATE TABLE IF NOT EXISTS material_category_access (
+  id          SERIAL PRIMARY KEY,
+  category_id INT NOT NULL REFERENCES material_categories(id) ON DELETE CASCADE,
+  user_id     INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  granted_by  BIGINT,
+  granted_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  expires_at  TIMESTAMPTZ,
+  UNIQUE (category_id, user_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_material_category_access_user
+  ON material_category_access(user_id);
+
+CREATE INDEX IF NOT EXISTS idx_material_category_access_category
+  ON material_category_access(category_id);
+
+INSERT INTO material_categories (slug, title, content_key, requires_access, sort_order)
+VALUES
+  ('podcasts', 'Подкасты', 'menu.materials.podcasts', TRUE, 10),
+  ('practices', 'Практики', 'menu.materials.practices', TRUE, 20),
+  ('challenges', 'Челленджи', 'menu.materials.challenges', TRUE, 30),
+  ('archive', 'Архив недель', 'menu.materials.archive', TRUE, 40)
+ON CONFLICT (slug) DO UPDATE
+  SET title = EXCLUDED.title,
+      content_key = EXCLUDED.content_key,
+      requires_access = EXCLUDED.requires_access,
+      sort_order = EXCLUDED.sort_order,
+      updated_at = NOW();
+
+INSERT INTO material_categories (slug, title, content_key, parent_id, requires_access, sort_order)
+SELECT 'archive.week1', 'Неделя 1', 'menu.materials.archive.week1', id, TRUE, 41
+FROM material_categories
+WHERE slug = 'archive'
+ON CONFLICT (slug) DO UPDATE
+  SET title = EXCLUDED.title,
+      content_key = EXCLUDED.content_key,
+      parent_id = EXCLUDED.parent_id,
+      requires_access = EXCLUDED.requires_access,
+      sort_order = EXCLUDED.sort_order,
+      updated_at = NOW();
 
 -- =========================
 -- Конец schema.sql v3.1

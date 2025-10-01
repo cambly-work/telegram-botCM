@@ -5,16 +5,23 @@ import json
 import math
 import os
 import re
+import shlex
 import yaml
 import logging
 import time
 import html
 from collections import OrderedDict
 from datetime import datetime, date, timedelta, timezone
+from zoneinfo import ZoneInfo
 from typing import Optional, Iterable, Dict, List, Callable, Awaitable, Any
 from aiogram import Router, F, types
 from aiogram.enums import ParseMode
-from aiogram.types import ReplyKeyboardMarkup, BufferedInputFile
+from aiogram.types import (
+    ReplyKeyboardMarkup,
+    BufferedInputFile,
+    InlineKeyboardMarkup,
+    InlineKeyboardButton,
+)
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.filters import Command, CommandObject, CommandStart
@@ -51,6 +58,8 @@ from keyboards import (
     admin_behavior_keyboard,
     admin_onboarding_steps_keyboard,
     admin_onboarding_delete_keyboard,
+    admin_materials_keyboard,
+    admin_materials_categories_keyboard,
     admin_broadcast_keyboard,
     admin_broadcast_segments_keyboard,
     admin_broadcast_history_keyboard,
@@ -60,6 +69,7 @@ from keyboards import (
     BROADCAST_TEMPLATE_PREFIX,
     BACK_TO_MAIN,
     BACK_TO_LEARNING,
+    BACK_TO_MATERIALS,
     BACK_TO_ADMIN,
     BACK_TO_TEXT_GROUPS,
     BACK_TO_LESSONS,
@@ -111,10 +121,18 @@ from keyboards import (
     ADMIN_DEBUG_BUTTON,
     ADMIN_SETTINGS_BUTTON,
     ADMIN_PAYMENTS_BUTTON,
+    ADMIN_MATERIALS_BUTTON,
+    ADMIN_MATERIALS_LIST,
+    ADMIN_MATERIALS_CREATE,
+    ADMIN_MATERIALS_UPDATE,
+    ADMIN_MATERIALS_DELETE,
+    ADMIN_MATERIALS_GRANT,
+    ADMIN_MATERIALS_REVOKE,
     ADMIN_BROADCAST_REMINDER_TEXT,
     admin_users_segments_keyboard,
     admin_users_pagination_keyboard,
     admin_user_card_keyboard,
+    admin_schedule_keyboard,
     ADMIN_USERS_SEGMENT_LEADS,
     ADMIN_USERS_SEGMENT_ACTIVE,
     ADMIN_USERS_SEGMENT_EXPIRED,
@@ -125,6 +143,7 @@ from keyboards import (
     ADMIN_USERS_GRANT_ACCESS,
     ADMIN_USERS_REVOKE_ACCESS,
     ADMIN_USERS_UPDATE_CONTACTS,
+    ADMIN_USERS_EDIT_PROGRESS,
     admin_stats_keyboard,
     admin_payments_keyboard,
     ADMIN_PAYMENTS_OPEN_WINDOW,
@@ -140,6 +159,10 @@ from keyboards import (
     ADMIN_STATS_PAYMENTS_BREAKDOWN,
     ADMIN_STATS_RECENT_PAYMENTS,
     ADMIN_STATS_FORMS_BREAKDOWN,
+    LEARNING_PROGRESS_BUTTON,
+    MATERIALS_CATALOG_BUTTON,
+    MATERIALS_PRACTICES_BUTTON,
+    MATERIALS_CHALLENGES_BUTTON,
 )
 # ──────────────────────────────────────────────────────────────────────────────
 # Логгер
@@ -180,6 +203,12 @@ SUPPORT_CONTACT = os.getenv("SUPPORT_CONTACT", "@Tokyo_tokyo")
 AT_PRODUCT_ID_CLUB = os.getenv("AT_PRODUCT_ID_CLUB", "")
 CLUB_CHAT_ID = os.getenv("CLUB_CHAT_ID", "")  # ID приватной группы/канала (опц.)
 BOT_VERSION = "1.0.0"
+
+try:
+    BOT_ZONE = ZoneInfo(BOT_TIMEZONE)
+except Exception:  # pragma: no cover - fallback for misconfiguration
+    logger.warning("Invalid BOT_TIMEZONE=%s, falling back to Europe/Moscow", BOT_TIMEZONE)
+    BOT_ZONE = ZoneInfo("Europe/Moscow")
 
 
 def is_admin_id(user_id: int | str | None) -> bool:
@@ -1125,6 +1154,7 @@ class RegistrationStates(StatesGroup):
 class HWStates(StatesGroup):
     waiting_answer = State()  # ждём текстовый ответ на ДЗ ({"lesson_num": int})
     waiting_feedback = State() # ждём обратную связь после урока
+    waiting_question = State() # ждём уточнение вопроса для поддержки
 class BroadcastStates(StatesGroup):
     waiting_segment = State()   # ждём выбор сегмента в мастере
     waiting_body = State()      # ждём текст рассылки ({"segment": str})
@@ -1153,17 +1183,38 @@ class AdminBehaviorStates(StatesGroup):
     waiting_onboarding_delete = State()
 
 
+class AdminScheduleStates(StatesGroup):
+    waiting_week = State()
+    waiting_datetime = State()
+    waiting_type = State()
+    waiting_description = State()
+    waiting_link = State()
+    waiting_event_id_edit = State()
+    waiting_event_id_archive = State()
+    waiting_event_id_restore = State()
+
+
 class AdminUserStates(StatesGroup):
     choosing_segment = State()
     browsing_users = State()
     viewing_user = State()
     waiting_contacts = State()
+    waiting_progress = State()
 
 
 class AdminPaymentsStates(StatesGroup):
     waiting_access_user = State()
     waiting_revoke_user = State()
     waiting_payment_review = State()
+
+
+class AdminMaterialsStates(StatesGroup):
+    waiting_create_payload = State()
+    waiting_update_payload = State()
+    waiting_delete_slug = State()
+    waiting_delete_confirm = State()
+    waiting_grant_payload = State()
+    waiting_revoke_payload = State()
 
 
 class TestStates(StatesGroup):
@@ -1173,11 +1224,26 @@ class TestStates(StatesGroup):
 # Улучшенные клавиатуры
 # ──────────────────────────────────────────────────────────────────────────────
 _MENU_SECTION_PROMPTS: dict[str, tuple[str, str]] = {
-    "root": ("menu.prompts.root", "Главное меню\n\nВыбери раздел, чтобы продолжить."),
+    "root": (
+        "menu.prompts.root",
+        (
+            "Главное меню.\n\n"
+            "Разделы: «О клубе», «Обучение», «Материалы» и «Профиль». Выбери, что интересно прямо сейчас."
+        ),
+    ),
     "info": ("menu.prompts.info", "Раздел «О клубе».\n\nВыбери интересующий пункт."),
-    "learning": ("menu.prompts.learning", "Раздел «Обучение».\n\nВыбери, с чего продолжить."),
-    "materials": ("menu.prompts.materials", "Раздел «Материалы».\n\nДоступ к материалам зависит от статуса участия."),
-    "profile": ("menu.prompts.profile", "Раздел «Профиль».\n\nУправляй своими данными и доступами."),
+    "learning": (
+        "menu.prompts.learning",
+        "Раздел «Обучение».\n\nЗдесь собраны бесплатные уроки, «Мой прогресс», тест и запись на разбор.",
+    ),
+    "materials": (
+        "menu.prompts.materials",
+        "Раздел «Материалы».\n\nМатериалы недели, каталог клуба, практики, челленджи и расписание эфиров.",
+    ),
+    "profile": (
+        "menu.prompts.profile",
+        "Раздел «Профиль».\n\nПроверяй контакты, статус доступа и обновляй данные.",
+    ),
 }
 
 _ADMIN_SETTINGS_DEFAULTS: dict[str, bool] = {
@@ -1211,6 +1277,26 @@ _PROFILE_STATUS_TITLES: dict[str, str] = {
     "member_active": "Активный доступ",
     "member_expired": "Доступ истёк",
 }
+
+_MEMBERSHIP_STATUS_LABELS: dict[str, str] = {
+    "lead_funnel": "Funnel",
+    "member_active": "Member Active",
+    "member_expired": "Member Expired",
+}
+
+_PROGRESS_STATUS_LABELS: dict[str, str] = {
+    "submitted": "завершён",
+    "pending": "в работе",
+    "skipped": "пропущен",
+}
+
+_PROGRESS_STATUS_ICONS: dict[str, str] = {
+    "submitted": "✅",
+    "pending": "⏳",
+    "skipped": "⏭️",
+}
+
+_MSK_TZ = timezone(timedelta(hours=3))
 
 _ADMIN_TEXT_GROUPS: dict[str, list[tuple[str, str]]] = {
     "🏠 Вход и меню": [
@@ -1523,18 +1609,21 @@ def _admin_user_progress_summary(progress: list[tuple[int, str]] | None) -> str:
 async def _collect_progress_map(user_ids: list[int]) -> dict[int, list[tuple[int, str]]]:
     if not user_ids:
         return {}
-    rows = await fetch(
-        """
-        SELECT user_id, lesson_num, hw_status
-        FROM funnel_progress
-        WHERE user_id = ANY($1::int[])
-        ORDER BY user_id, lesson_num
-        """,
-        user_ids,
-    )
+
+    details = await _collect_progress_details(user_ids)
     progress: dict[int, list[tuple[int, str]]] = {}
-    for row in rows or []:
-        progress.setdefault(row["user_id"], []).append((row["lesson_num"], row["hw_status"]))
+
+    for user_id, lessons in details.items():
+        lesson_entries: list[tuple[int, str]] = []
+        for lesson_num, info in sorted(lessons.items()):
+            status = info.get("hw_status")
+            if not status and info.get("delivered"):
+                status = "submitted"
+            if status:
+                lesson_entries.append((lesson_num, status))
+        if lesson_entries:
+            progress[user_id] = lesson_entries
+
     return progress
 
 
@@ -2535,6 +2624,253 @@ async def get_broadcast_flags() -> dict[str, bool]:
     return flags
 
 
+def _calculate_remind_at(scheduled_at: datetime) -> datetime:
+    return scheduled_at - timedelta(hours=1)
+
+
+def _format_schedule_datetime_plain(dt: datetime) -> tuple[str, str]:
+    local = dt.astimezone(BOT_ZONE)
+    tz_label = local.tzname() or BOT_TIMEZONE
+    return local.strftime("%d.%m %H:%M"), tz_label
+
+
+def _parse_local_datetime(text: str) -> datetime | None:
+    if not text:
+        return None
+    try:
+        naive = datetime.strptime(text.strip(), "%d.%m.%Y %H:%M")
+    except ValueError:
+        return None
+    localized = naive.replace(tzinfo=BOT_ZONE)
+    return localized.astimezone(timezone.utc)
+
+
+async def list_schedule_weeks(*, include_archived: bool = False) -> list[dict]:
+    where = "" if include_archived else "WHERE is_archived = FALSE"
+    query = (
+        """
+        SELECT id, week_number, title, start_date, end_date, is_archived
+        FROM schedule_cycle_weeks
+        {where}
+        ORDER BY
+            CASE WHEN start_date IS NULL THEN 1 ELSE 0 END,
+            start_date,
+            week_number
+        """
+    ).format(where=where)
+    return await fetch(query)
+
+
+async def get_schedule_week(week_id: int) -> dict | None:
+    return await fetchrow(
+        """
+        SELECT id, week_number, title, start_date, end_date, is_archived
+        FROM schedule_cycle_weeks
+        WHERE id = $1
+        """,
+        week_id,
+    )
+
+
+async def get_schedule_week_by_number(week_number: int) -> dict | None:
+    return await fetchrow(
+        """
+        SELECT id, week_number, title, start_date, end_date, is_archived
+        FROM schedule_cycle_weeks
+        WHERE week_number = $1
+        """,
+        week_number,
+    )
+
+
+async def get_current_schedule_week(*, today: Optional[date] = None) -> dict | None:
+    day = today or datetime.now(BOT_ZONE).date()
+    return await fetchrow(
+        """
+        SELECT id, week_number, title, start_date, end_date
+        FROM schedule_cycle_weeks
+        WHERE is_archived = FALSE
+          AND start_date IS NOT NULL
+          AND end_date IS NOT NULL
+          AND start_date <= $1
+          AND end_date >= $1
+        ORDER BY start_date
+        LIMIT 1
+        """,
+        day,
+    )
+
+
+async def list_schedule_events(
+    *,
+    include_archived: bool = False,
+    from_dt: datetime | None = None,
+    limit: int | None = None,
+) -> list[dict]:
+    conditions: list[str] = []
+    params: list[Any] = []
+    if not include_archived:
+        conditions.append("e.is_archived = FALSE")
+    if from_dt is not None:
+        conditions.append(f"e.scheduled_at >= ${len(params) + 1}")
+        params.append(from_dt)
+    where_sql = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+    limit_sql = f" LIMIT {int(limit)}" if limit is not None else ""
+    query = f"""
+        SELECT
+            e.*, w.week_number, w.title AS week_title, w.start_date, w.end_date
+        FROM schedule_events e
+        LEFT JOIN schedule_cycle_weeks w ON w.id = e.week_id
+        {where_sql}
+        ORDER BY e.scheduled_at
+        {limit_sql}
+    """
+    return await fetch(query, *params)
+
+
+async def get_schedule_event(event_id: int) -> dict | None:
+    return await fetchrow(
+        """
+        SELECT
+            e.*, w.week_number, w.title AS week_title, w.start_date, w.end_date
+        FROM schedule_events e
+        LEFT JOIN schedule_cycle_weeks w ON w.id = e.week_id
+        WHERE e.id = $1
+        """,
+        event_id,
+    )
+
+
+async def create_schedule_event(
+    *,
+    week_id: int | None,
+    scheduled_at: datetime,
+    event_type: str,
+    description: str,
+    link: str | None,
+) -> dict:
+    row = await fetchrow(
+        """
+        INSERT INTO schedule_events (week_id, scheduled_at, event_type, description, link, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, NOW(), NOW())
+        RETURNING *
+        """,
+        week_id,
+        scheduled_at,
+        event_type,
+        description,
+        link,
+    )
+    return row
+
+
+async def update_schedule_event(
+    event_id: int,
+    *,
+    week_id: int | None,
+    scheduled_at: datetime,
+    event_type: str,
+    description: str,
+    link: str | None,
+) -> dict | None:
+    row = await fetchrow(
+        """
+        UPDATE schedule_events
+        SET week_id = $1,
+            scheduled_at = $2,
+            event_type = $3,
+            description = $4,
+            link = $5,
+            updated_at = NOW()
+        WHERE id = $6
+        RETURNING *
+        """,
+        week_id,
+        scheduled_at,
+        event_type,
+        description,
+        link,
+        event_id,
+    )
+    if row:
+        await execute(
+            """
+            UPDATE schedule_event_reminders
+            SET remind_at = $1,
+                notified_at = NULL,
+                is_cancelled = FALSE,
+                updated_at = NOW()
+            WHERE event_id = $2
+            """,
+            _calculate_remind_at(row["scheduled_at"]),
+            event_id,
+        )
+    return row
+
+
+async def set_schedule_event_archived(event_id: int, *, archived: bool) -> dict | None:
+    row = await fetchrow(
+        """
+        UPDATE schedule_events
+        SET is_archived = $1,
+            updated_at = NOW()
+        WHERE id = $2
+        RETURNING *
+        """,
+        archived,
+        event_id,
+    )
+    if row:
+        if archived:
+            await execute(
+                """
+                UPDATE schedule_event_reminders
+                SET is_cancelled = TRUE,
+                    updated_at = NOW()
+                WHERE event_id = $1
+                """,
+                event_id,
+            )
+        else:
+            await execute(
+                """
+                UPDATE schedule_event_reminders
+                SET is_cancelled = FALSE,
+                    remind_at = $1,
+                    notified_at = NULL,
+                    updated_at = NOW()
+                WHERE event_id = $2
+                """,
+                _calculate_remind_at(row["scheduled_at"]),
+                event_id,
+            )
+    return row
+
+
+async def upsert_schedule_event_reminder(user_id: int, event_id: int) -> dict | None:
+    event_row = await get_schedule_event(event_id)
+    if not event_row or event_row.get("is_archived"):
+        return None
+    remind_at = _calculate_remind_at(event_row["scheduled_at"])
+    row = await fetchrow(
+        """
+        INSERT INTO schedule_event_reminders (event_id, user_id, remind_at, created_at, updated_at)
+        VALUES ($1, $2, $3, NOW(), NOW())
+        ON CONFLICT (event_id, user_id)
+        DO UPDATE SET
+            remind_at = EXCLUDED.remind_at,
+            is_cancelled = FALSE,
+            notified_at = NULL,
+            updated_at = NOW()
+        RETURNING *
+        """,
+        event_id,
+        user_id,
+        remind_at,
+    )
+    return row
+
+
 def _broadcast_status_labels(flags: dict[str, bool]) -> dict[str, bool]:
     labeled: dict[str, bool] = {}
     for key, default in _ADMIN_BROADCAST_SETTINGS_DEFAULTS.items():
@@ -2590,11 +2926,13 @@ async def answer_with_main_menu(
     *,
     section: str = "root",
     from_callback: bool = False,
+    **answer_kwargs: Any,
 ) -> None:
     """Отправляет или обновляет сообщение с главным меню."""
     user_row = user or await get_user_with_id(message.from_user.id)
     kb = await build_menu_keyboard(user=user_row, is_admin=is_admin, section=section)
-    await message.answer(text, reply_markup=kb)
+    await message.answer(text, reply_markup=kb, **answer_kwargs)
+
 
 
 async def send_menu_section(
@@ -2851,6 +3189,376 @@ async def send_support_section(
     )
 
 
+def _coerce_datetime(value: Any) -> datetime | None:
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        dt = value
+    elif isinstance(value, str):
+        try:
+            dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    else:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def _format_access_date(value: Any) -> str:
+    dt = _coerce_datetime(value)
+    if not dt:
+        return ""
+    try:
+        return dt.astimezone(_MSK_TZ).strftime("%d.%m.%Y")
+    except Exception:
+        return ""
+
+
+def _membership_summary(user_row: dict | None) -> dict[str, str]:
+    user_row = user_row or {}
+    status_code = str(user_row.get("status") or "lead_funnel").lower()
+    status_label = _MEMBERSHIP_STATUS_LABELS.get(
+        status_code,
+        status_code.replace("_", " ").title(),
+    )
+    access_date = _format_access_date(user_row.get("access_until"))
+
+    if status_code == "member_active":
+        if access_date:
+            access_line = f"Доступ активен до {access_date}"
+            access_short = f"до {access_date}"
+        else:
+            access_line = "Доступ активен"
+            access_short = "активен"
+    elif status_code == "member_expired":
+        if access_date:
+            access_line = f"Доступ истёк {access_date}"
+            access_short = f"истёк {access_date}"
+        else:
+            access_line = "Доступ истёк"
+            access_short = "истёк"
+    else:
+        if access_date:
+            access_line = f"Доступ не активирован (ожидаем до {access_date})"
+            access_short = f"ожидает до {access_date}"
+        else:
+            access_line = "Доступ не активирован"
+            access_short = "не активирован"
+
+    return {
+        "status_code": status_code,
+        "status_label": status_label,
+        "access_date": access_date,
+        "access_line": access_line,
+        "status_line": f"Статус участия: {status_label}",
+        "summary": f"{status_label} · {access_short}" if access_short else status_label,
+        "access_short": access_short,
+    }
+
+
+def _feedback_suffix(count: int) -> str:
+    if count <= 0:
+        return ""
+    normalized = abs(count)
+    if 11 <= normalized % 100 <= 14:
+        word = "отзывов"
+    else:
+        last = normalized % 10
+        if last == 1:
+            word = "отзыв"
+        elif last in {2, 3, 4}:
+            word = "отзыва"
+        else:
+            word = "отзывов"
+    return f" ({count} {word})"
+
+
+async def _collect_progress_details(
+    user_ids: list[int],
+) -> dict[int, dict[int, dict[str, Any]]]:
+    if not user_ids:
+        return {}
+
+    rows = await fetch(
+        """
+        SELECT user_id, lesson_num, delivered_at, opened_at, hw_status, hw_answer
+        FROM funnel_progress
+        WHERE user_id = ANY($1::int[])
+        ORDER BY user_id, lesson_num
+        """,
+        user_ids,
+    )
+
+    details: dict[int, dict[int, dict[str, Any]]] = {}
+    for row in rows or []:
+        entry = details.setdefault(row["user_id"], {}).setdefault(
+            row["lesson_num"],
+            {
+                "lesson_num": row["lesson_num"],
+                "hw_status": row.get("hw_status") or None,
+                "delivered_at": row.get("delivered_at"),
+                "opened_at": row.get("opened_at"),
+                "hw_answer": row.get("hw_answer"),
+                "feedback_count": 0,
+                "feedback_types": [],
+                "delivered": True,
+            },
+        )
+        # ensure hw_status preserved even if None
+        entry["hw_status"] = row.get("hw_status") or entry.get("hw_status")
+
+    feedback_rows = await fetch(
+        """
+        SELECT user_id, lesson_num, COUNT(*) AS feedback_count,
+               array_agg(feedback_type ORDER BY created_at DESC) AS feedback_types
+        FROM lesson_feedback
+        WHERE user_id = ANY($1::int[])
+        GROUP BY user_id, lesson_num
+        """,
+        user_ids,
+    )
+
+    for row in feedback_rows or []:
+        entry = details.setdefault(row["user_id"], {}).setdefault(
+            row["lesson_num"],
+            {
+                "lesson_num": row["lesson_num"],
+                "hw_status": None,
+                "delivered_at": None,
+                "opened_at": None,
+                "hw_answer": None,
+                "feedback_count": 0,
+                "feedback_types": [],
+                "delivered": False,
+            },
+        )
+        count = int(row.get("feedback_count") or 0)
+        entry["feedback_count"] = count
+        types = row.get("feedback_types") or []
+        if isinstance(types, tuple):
+            types = list(types)
+        entry["feedback_types"] = list(types)
+        if count > 0:
+            entry["delivered"] = True
+            if entry.get("hw_status") is None:
+                entry["hw_status"] = "submitted"
+
+    return details
+
+
+async def get_user_progress(user_id: int) -> dict[int, dict[str, Any]]:
+    details = await _collect_progress_details([user_id])
+    return details.get(user_id, {})
+
+
+def _serialize_progress_update(entry: dict[str, Any]) -> dict[str, Any]:
+    serialized: dict[str, Any] = {}
+    for key, value in entry.items():
+        if value is None:
+            continue
+        if isinstance(value, datetime):
+            serialized[key] = value.isoformat()
+        else:
+            serialized[key] = value
+    return serialized
+
+
+async def sync_user_progress(
+    user_id: int,
+    updates: list[dict[str, Any]],
+    *,
+    actor_id: int | None = None,
+) -> dict[int, dict[str, Any]]:
+    if user_id is None:
+        raise ValueError("user_id is required for progress sync")
+
+    normalized_updates: list[dict[str, Any]] = []
+
+    if updates:
+        async with transaction() as conn:
+            for raw in updates:
+                if not isinstance(raw, dict):
+                    continue
+                lesson_raw = raw.get("lesson")
+                if lesson_raw is None:
+                    raise ValueError("progress entry missing lesson")
+                try:
+                    lesson_num = int(lesson_raw)
+                except (ValueError, TypeError):
+                    raise ValueError(f"lesson must be integer, got {lesson_raw!r}") from None
+                if lesson_num not in (1, 2, 3, 4):
+                    raise ValueError(f"lesson must be 1..4, got {lesson_num}")
+
+                reset = bool(raw.get("reset"))
+                status = raw.get("status")
+                if status:
+                    status = str(status).strip().lower()
+                    if status not in _PROGRESS_STATUS_LABELS:
+                        raise ValueError(
+                            f"invalid status '{status}' for lesson {lesson_num}"
+                        )
+                delivered_at = raw.get("delivered_at") or raw.get("delivered")
+                opened_at = raw.get("opened_at") or raw.get("opened")
+                hw_answer = raw.get("hw_answer") if "hw_answer" in raw else raw.get("answer")
+                feedback = raw.get("feedback")
+
+                delivered_dt = delivered_at
+                if isinstance(delivered_dt, str):
+                    delivered_dt = _coerce_datetime(delivered_dt)
+                    if delivered_dt is None:
+                        raise ValueError(
+                            f"invalid delivered_at value for lesson {lesson_num}"
+                        )
+                opened_dt = opened_at
+                if isinstance(opened_dt, str):
+                    opened_dt = _coerce_datetime(opened_dt)
+                    if opened_dt is None:
+                        raise ValueError(
+                            f"invalid opened_at value for lesson {lesson_num}"
+                        )
+
+                if feedback is None:
+                    feedback_list: list[str] | None = None
+                else:
+                    if isinstance(feedback, str):
+                        feedback_list = [
+                            chunk.strip()
+                            for chunk in feedback.split(",")
+                            if chunk.strip()
+                        ]
+                    else:
+                        feedback_list = [
+                            str(chunk).strip()
+                            for chunk in feedback
+                            if str(chunk).strip()
+                        ]
+
+                normalized_entry: dict[str, Any] = {
+                    "lesson": lesson_num,
+                    "status": status,
+                    "delivered_at": delivered_dt,
+                    "opened_at": opened_dt,
+                    "hw_answer": hw_answer,
+                    "feedback": feedback_list,
+                    "reset": reset,
+                }
+                normalized_updates.append(normalized_entry)
+
+                if reset:
+                    await conn.execute(
+                        "DELETE FROM funnel_progress WHERE user_id=$1 AND lesson_num=$2",
+                        user_id,
+                        lesson_num,
+                    )
+                    await conn.execute(
+                        "DELETE FROM lesson_feedback WHERE user_id=$1 AND lesson_num=$2",
+                        user_id,
+                        lesson_num,
+                    )
+                    continue
+
+                existing = await conn.fetchrow(
+                    "SELECT id FROM funnel_progress WHERE user_id=$1 AND lesson_num=$2",
+                    user_id,
+                    lesson_num,
+                )
+
+                if existing:
+                    updates_sql: list[str] = []
+                    params: list[Any] = [user_id, lesson_num]
+                    idx = 3
+                    if status:
+                        updates_sql.append(f"hw_status=${idx}")
+                        params.append(status)
+                        idx += 1
+                    if delivered_dt is not None:
+                        updates_sql.append(f"delivered_at=${idx}")
+                        params.append(delivered_dt)
+                        idx += 1
+                    if opened_dt is not None:
+                        updates_sql.append(f"opened_at=${idx}")
+                        params.append(opened_dt)
+                        idx += 1
+                    if hw_answer is not None:
+                        updates_sql.append(f"hw_answer=${idx}")
+                        params.append(hw_answer)
+                        idx += 1
+                    if updates_sql:
+                        await conn.execute(
+                            f"UPDATE funnel_progress SET {', '.join(updates_sql)} WHERE user_id=$1 AND lesson_num=$2",
+                            *params,
+                        )
+                else:
+                    await conn.execute(
+                        """
+                        INSERT INTO funnel_progress (user_id, lesson_num, delivered_at, opened_at, hw_answer, hw_status)
+                        VALUES ($1, $2, $3, $4, $5, $6)
+                        """,
+                        user_id,
+                        lesson_num,
+                        delivered_dt or datetime.now(timezone.utc),
+                        opened_dt,
+                        hw_answer,
+                        status or "pending",
+                    )
+
+                if feedback_list is not None:
+                    await conn.execute(
+                        "DELETE FROM lesson_feedback WHERE user_id=$1 AND lesson_num=$2",
+                        user_id,
+                        lesson_num,
+                    )
+                    for code in feedback_list:
+                        await conn.execute(
+                            """
+                            INSERT INTO lesson_feedback (user_id, lesson_num, feedback_type, created_at)
+                            VALUES ($1, $2, $3, NOW())
+                            """,
+                            user_id,
+                            lesson_num,
+                            code,
+                        )
+
+    if actor_id and normalized_updates:
+        payload = {
+            "user_id": user_id,
+            "lessons": [_serialize_progress_update(entry) for entry in normalized_updates],
+        }
+        await log_admin_action(actor_id, "progress_sync", payload)
+
+    details = await _collect_progress_details([user_id])
+    return details.get(user_id, {})
+
+
+def _progress_line_details(
+    lesson_num: int,
+    status: str | None,
+    delivered: bool,
+    feedback_count: int,
+    next_lesson: int,
+) -> tuple[str, str]:
+    if status in _PROGRESS_STATUS_LABELS:
+        icon = _PROGRESS_STATUS_ICONS.get(status, "•")
+        description = _PROGRESS_STATUS_LABELS[status]
+        if status == "submitted":
+            suffix = _feedback_suffix(feedback_count)
+            if suffix:
+                description += suffix
+        return icon, description
+
+    if delivered or lesson_num < next_lesson or next_lesson == 5:
+        suffix = _feedback_suffix(feedback_count)
+        description = _PROGRESS_STATUS_LABELS["submitted"] + suffix
+        return _PROGRESS_STATUS_ICONS["submitted"], description
+
+    if lesson_num == next_lesson:
+        return "🚀", "готов к старту"
+
+    return "🔒", "откроется после предыдущего"
+
+
 async def send_profile_overview(
     message: types.Message,
     user: Optional[dict],
@@ -2871,38 +3579,12 @@ async def send_profile_overview(
         return
 
     status_key = user_row.get("status") or "lead_funnel"
-    status_label = _PROFILE_STATUS_TITLES.get(status_key, "—")
-
-    access_until = user_row.get("access_until")
-    access_line = "Доступ пока не активирован."
-    if status_key == "member_active":
-        if access_until:
-            dt = access_until
-            if isinstance(dt, str):
-                try:
-                    dt = datetime.fromisoformat(dt.replace("Z", "+00:00"))
-                except ValueError:
-                    dt = None
-            if isinstance(dt, datetime):
-                access_line = f"Доступ активен до {tz_aware_msk(dt)}"
-            else:
-                access_line = "Доступ активен."
-        else:
-            access_line = "Доступ активен."
-    elif status_key == "member_expired":
-        if access_until:
-            dt = access_until
-            if isinstance(dt, str):
-                try:
-                    dt = datetime.fromisoformat(dt.replace("Z", "+00:00"))
-                except ValueError:
-                    dt = None
-            if isinstance(dt, datetime):
-                access_line = f"Доступ истёк {tz_aware_msk(dt)}"
-            else:
-                access_line = "Доступ истёк."
-        else:
-            access_line = "Доступ истёк."
+    ru_status_label = _PROFILE_STATUS_TITLES.get(status_key, "—")
+    membership = _membership_summary(user_row)
+    status_caption = membership["status_label"]
+    if ru_status_label and ru_status_label != status_caption:
+        status_caption = f"{status_caption} ({ru_status_label})"
+    access_line = membership["access_line"]
 
     email_value = user_row.get("email") or "—"
     phone_value = user_row.get("phone") or "—"
@@ -2913,7 +3595,7 @@ async def send_profile_overview(
         f"Имя: {html.escape(name_value)}\n"
         f"Email: {html.escape(email_value)}\n"
         f"Телефон: {html.escape(phone_value)}\n\n"
-        f"Статус: {status_label}\n"
+        f"Статус: {status_caption}\n"
         f"{access_line}\n\n"
         "Используй кнопки ниже, чтобы обновить контакты."
     )
@@ -2927,14 +3609,354 @@ async def send_profile_overview(
     await message.answer(profile_text, reply_markup=keyboard)
 
 
-async def send_weekly_materials_section(
+async def send_learning_progress_section(
     message: types.Message,
     user: Optional[dict],
     is_admin: bool,
     *,
     from_callback: bool = False,
+    menu_section: str = "learning",
 ) -> None:
     user_row = user or await get_user_with_id(message.from_user.id)
+    if not user_row:
+        await answer_with_main_menu(
+            message,
+            user_row,
+            is_admin,
+            "Перезапусти /start, чтобы сохранить прогресс и открыть уроки.",
+            section=menu_section,
+            from_callback=from_callback,
+        )
+        return
+
+    membership = _membership_summary(user_row)
+    progress_details = await get_user_progress(user_row["id"])
+    next_lesson = await next_lesson_to_deliver(user_row["id"])
+
+    status_lines: list[str] = []
+    for lesson_num in range(1, 5):
+        info = progress_details.get(lesson_num, {})
+        status_code = info.get("hw_status")
+        delivered = bool(info.get("delivered"))
+        feedback_count = int(info.get("feedback_count") or 0)
+        icon, description = _progress_line_details(
+            lesson_num,
+            status_code,
+            delivered,
+            feedback_count,
+            next_lesson,
+        )
+        status_lines.append(f"{icon} Урок {lesson_num}: {description}")
+
+    progress_rows = "\n".join(status_lines)
+
+    if next_lesson == 5:
+        summary = "Ты прошла все 4 урока! Продолжай практики или изучай материалы клуба."
+        next_label = ""
+    else:
+        summary = f"Следующий шаг: открой урок {next_lesson} через «Бесплатные уроки»."
+        next_label = str(next_lesson)
+
+    template = await get_content(
+        "menu.learning.progress",
+        (
+            "<b>Мой прогресс</b>\n"
+            "{membership_status_line}\n"
+            "{membership_access_line}\n\n"
+            "{progress_rows}\n\n"
+            "{summary}"
+        ),
+    )
+    membership_status_line = membership["status_line"]
+    membership_access_line = membership["access_line"]
+
+    progress_text = render_content(
+        template,
+        progress_rows=progress_rows,
+        PROGRESS_ROWS=progress_rows,
+        summary=summary,
+        SUMMARY=summary,
+        next_lesson=next_label,
+        NEXT_LESSON=next_label,
+        membership_status=membership["summary"],
+        MEMBERSHIP_STATUS=membership["summary"],
+        membership_status_line=membership_status_line,
+        MEMBERSHIP_STATUS_LINE=membership_status_line,
+        membership_access=membership["access_line"],
+        MEMBERSHIP_ACCESS=membership["access_line"],
+        membership_access_line=membership_access_line,
+        MEMBERSHIP_ACCESS_LINE=membership_access_line,
+        membership_status_label=membership["status_label"],
+        MEMBERSHIP_STATUS_LABEL=membership["status_label"],
+        membership_status_code=membership["status_code"],
+        MEMBERSHIP_STATUS_CODE=membership["status_code"],
+        membership_access_date=membership["access_date"],
+        MEMBERSHIP_ACCESS_DATE=membership["access_date"],
+    )
+
+    keyboard = await build_menu_keyboard(
+        user=user_row,
+        is_admin=is_admin,
+        section=menu_section,
+    )
+
+    await message.answer(progress_text, reply_markup=keyboard)
+
+
+def _normalize_materials_choice(text: str | None) -> str:
+    if not text:
+        return ""
+    normalized = text.strip()
+    for suffix in (" 🔒", " ▶️"):
+        if normalized.endswith(suffix):
+            normalized = normalized[: -len(suffix)].rstrip()
+    return normalized
+
+
+async def _materials_get_state(state: FSMContext | None) -> dict:
+    if state is None:
+        return {"stack": [], "options": {}}
+    data = await state.get_data()
+    return data.get("materials_menu", {"stack": [], "options": {}})
+
+
+async def _materials_update_state(
+    state: FSMContext | None,
+    *,
+    stack: list[str],
+    options: dict[str, dict],
+) -> None:
+    if state is None:
+        return
+    await state.update_data(materials_menu={"stack": stack, "options": options})
+
+
+async def _materials_reset_state(state: FSMContext | None) -> None:
+    await _materials_update_state(state, stack=[], options={})
+
+
+async def get_material_category_by_slug(
+    slug: str,
+    *,
+    include_inactive: bool = False,
+) -> Optional[dict]:
+    if not slug:
+        return None
+    row = await fetchrow(
+        """
+        SELECT c.*, parent.slug AS parent_slug,
+               EXISTS (
+                   SELECT 1 FROM material_categories child
+                   WHERE child.parent_id = c.id AND child.is_active
+               ) AS has_children
+        FROM material_categories c
+        LEFT JOIN material_categories parent ON parent.id = c.parent_id
+        WHERE c.slug=$1
+        """,
+        slug,
+    )
+    if not row:
+        return None
+    if not include_inactive and not row["is_active"]:
+        return None
+    return dict(row)
+
+
+async def list_material_categories(
+    parent_slug: str | None = None,
+    *,
+    include_inactive: bool = False,
+) -> list[dict]:
+    params: list[Any] = []
+    where_clauses: list[str] = []
+
+    if parent_slug:
+        parent_row = await fetchrow(
+            "SELECT id FROM material_categories WHERE slug=$1",
+            parent_slug,
+        )
+        if not parent_row:
+            return []
+        where_clauses.append("c.parent_id = $1")
+        params.append(parent_row["id"])
+    else:
+        where_clauses.append("c.parent_id IS NULL")
+
+    if not include_inactive:
+        where_clauses.append("c.is_active")
+
+    where_sql = " AND ".join(where_clauses) if where_clauses else "TRUE"
+
+    query = f"""
+        SELECT c.*, parent.slug AS parent_slug,
+               EXISTS (
+                   SELECT 1 FROM material_categories child
+                   WHERE child.parent_id = c.id AND child.is_active
+               ) AS has_children
+        FROM material_categories c
+        LEFT JOIN material_categories parent ON parent.id = c.parent_id
+        WHERE {where_sql}
+        ORDER BY c.sort_order, c.title
+    """
+
+    rows = await fetch(query, *params)
+    result = [dict(row) for row in rows]
+    if not include_inactive:
+        result = [row for row in result if row.get("is_active")]
+    return result
+
+
+async def user_has_material_access(
+    user_row: Optional[dict],
+    category: dict,
+    *,
+    is_admin: bool = False,
+) -> bool:
+    if not category:
+        return False
+    if is_admin:
+        return True
+    if not category.get("requires_access", True):
+        return True
+    if not user_row:
+        return False
+    if await is_member(user_row):
+        return True
+    access_row = await fetchrow(
+        """
+        SELECT 1
+        FROM material_category_access
+        WHERE category_id=$1 AND user_id=$2
+          AND (expires_at IS NULL OR expires_at > NOW())
+        """,
+        category["id"],
+        user_row["id"],
+    )
+    return access_row is not None
+
+
+async def _build_materials_keyboard(
+    user_row: Optional[dict],
+    *,
+    submenu: str | None,
+    is_admin: bool,
+) -> tuple[ReplyKeyboardMarkup, dict[str, dict]]:
+    flags = await get_menu_flags()
+    weekly_enabled = flags.get("show_weekly_materials", True)
+    schedule_enabled = flags.get("show_schedule", True)
+
+    if submenu is None:
+        keyboard = materials_menu_keyboard(
+            weekly_enabled=weekly_enabled,
+            schedule_enabled=schedule_enabled,
+        )
+        return keyboard, {}
+
+    parent_slug = None if submenu == "catalog" else submenu
+    categories = await list_material_categories(parent_slug)
+    submenu_items: list[dict] = []
+    options: dict[str, dict] = {}
+
+    for category in categories:
+        accessible = await user_has_material_access(
+            user_row,
+            category,
+            is_admin=is_admin,
+        )
+        submenu_items.append(
+            {
+                "title": category["title"],
+                "locked": not accessible,
+                "has_children": bool(category.get("has_children")),
+            }
+        )
+        options[_normalize_materials_choice(category["title"])] = {
+            "slug": category["slug"],
+            "locked": not accessible,
+            "has_children": bool(category.get("has_children")),
+        }
+
+    keyboard = materials_menu_keyboard(
+        weekly_enabled=weekly_enabled,
+        schedule_enabled=schedule_enabled,
+        submenu=submenu,
+        submenu_items=submenu_items,
+    )
+    return keyboard, options
+
+
+async def _category_stack_for(category: dict) -> list[str]:
+    stack: list[str] = []
+    current = category
+    visited: set[str] = set()
+
+    while current.get("parent_slug"):
+        parent_slug = current["parent_slug"]
+        if parent_slug in visited:
+            break
+        visited.add(parent_slug)
+        stack.append(parent_slug)
+        parent_row = await get_material_category_by_slug(
+            parent_slug,
+            include_inactive=True,
+        )
+        if not parent_row:
+            break
+        current = parent_row
+
+    stack.reverse()
+
+    if category.get("parent_id"):
+        stack.insert(0, "catalog")
+    elif not stack:
+        stack = ["catalog"]
+
+    return stack
+
+
+async def send_materials_root_section(
+    message: types.Message,
+    user: Optional[dict],
+    is_admin: bool,
+    *,
+    state: FSMContext | None = None,
+    from_callback: bool = False,
+) -> None:
+    user_row = user or await get_user_with_id(message.from_user.id)
+    keyboard, _ = await _build_materials_keyboard(
+        user_row,
+        submenu=None,
+        is_admin=is_admin,
+    )
+    await _materials_reset_state(state)
+
+    prompt_key, default_text = _MENU_SECTION_PROMPTS.get(
+        "materials",
+        _MENU_SECTION_PROMPTS["root"],
+    )
+    prompt_text = await get_content(prompt_key, default_text)
+
+    await answer_with_main_menu(
+        message,
+        user_row,
+        is_admin,
+        prompt_text,
+        section="materials",
+        from_callback=from_callback,
+        custom_keyboard=keyboard,
+    )
+
+
+async def send_weekly_materials_section(
+    message: types.Message,
+    user: Optional[dict],
+    is_admin: bool,
+    *,
+    state: FSMContext | None = None,
+    from_callback: bool = False,
+) -> None:
+    user_row = user or await get_user_with_id(message.from_user.id)
+    await _materials_reset_state(state)
 
     weekly_enabled = await get_bool_setting(
         "show_weekly_materials", _ADMIN_SETTINGS_DEFAULTS["show_weekly_materials"]
@@ -2993,6 +4015,190 @@ async def send_weekly_materials_section(
     )
 
 
+async def send_materials_catalog_section(
+    message: types.Message,
+    user: Optional[dict],
+    is_admin: bool,
+    *,
+    state: FSMContext | None = None,
+    from_callback: bool = False,
+) -> None:
+    user_row = user or await get_user_with_id(message.from_user.id)
+    keyboard, options = await _build_materials_keyboard(
+        user_row,
+        submenu="catalog",
+        is_admin=is_admin,
+    )
+    await _materials_update_state(state, stack=["catalog"], options=options)
+
+    catalog_text = await get_content(
+        "menu.materials.catalog",
+        (
+            "Каталог материалов клуба.\n\n"
+            "Здесь собраны подкасты, практики, челленджи и архив недель. Выбирай раздел ниже."
+        ),
+    )
+
+    await answer_with_main_menu(
+        message,
+        user_row,
+        is_admin,
+        catalog_text,
+        section="materials",
+        from_callback=from_callback,
+        custom_keyboard=keyboard,
+    )
+
+
+async def send_materials_practices_section(
+    message: types.Message,
+    user: Optional[dict],
+    is_admin: bool,
+    *,
+    state: FSMContext | None = None,
+    from_callback: bool = False,
+) -> None:
+    await send_materials_category_section(
+        message,
+        user,
+        is_admin,
+        state=state,
+        category_slug="practices",
+        from_callback=from_callback,
+    )
+
+
+async def send_materials_challenges_section(
+    message: types.Message,
+    user: Optional[dict],
+    is_admin: bool,
+    *,
+    state: FSMContext | None = None,
+    from_callback: bool = False,
+) -> None:
+    await send_materials_category_section(
+        message,
+        user,
+        is_admin,
+        state=state,
+        category_slug="challenges",
+        from_callback=from_callback,
+    )
+
+
+async def send_materials_category_section(
+    message: types.Message,
+    user: Optional[dict],
+    is_admin: bool,
+    *,
+    state: FSMContext | None = None,
+    category_slug: str,
+    from_callback: bool = False,
+) -> None:
+    user_row = user or await get_user_with_id(message.from_user.id)
+    category = await get_material_category_by_slug(category_slug)
+
+    if not category:
+        default_text = await get_content(
+            f"menu.materials.{category_slug}",
+            "Раздел в разработке. Мы скоро добавим материалы в этот блок.",
+        )
+        keyboard, options = await _build_materials_keyboard(
+            user_row,
+            submenu="catalog",
+            is_admin=is_admin,
+        )
+        await _materials_update_state(state, stack=["catalog"], options=options)
+        await answer_with_main_menu(
+            message,
+            user_row,
+            is_admin,
+            default_text,
+            section="materials",
+            from_callback=from_callback,
+            custom_keyboard=keyboard,
+        )
+        return
+
+    stack = await _category_stack_for(category)
+    submenu = stack[-1] if stack else None
+    has_access = await user_has_material_access(
+        user_row,
+        category,
+        is_admin=is_admin,
+    )
+
+    if not has_access:
+        keyboard, options = await _build_materials_keyboard(
+            user_row,
+            submenu=submenu,
+            is_admin=is_admin,
+        )
+        await _materials_update_state(state, stack=stack, options=options)
+        locked_key = f"{category['content_key']}.locked"
+        locked_default = (
+            f"Раздел «{category['title']}» доступен участницам клуба.\n\n"
+            f"Оформи доступ в разделе «{ADMIN_PAYMENTS_BUTTON}», и бот пришлёт ссылки автоматически."
+        )
+        locked_text = await get_content(locked_key, locked_default)
+        await answer_with_main_menu(
+            message,
+            user_row,
+            is_admin,
+            locked_text,
+            section="materials",
+            from_callback=from_callback,
+            custom_keyboard=keyboard,
+        )
+        return
+
+    if category.get("has_children"):
+        submenu_slug = category["slug"]
+        keyboard, options = await _build_materials_keyboard(
+            user_row,
+            submenu=submenu_slug,
+            is_admin=is_admin,
+        )
+        stack_with_current = stack + [submenu_slug]
+        await _materials_update_state(state, stack=stack_with_current, options=options)
+        section_text = await get_content(
+            category["content_key"],
+            f"Раздел «{category['title']}» обновляется. Возвращайся позже, чтобы увидеть новые материалы.",
+        )
+        await answer_with_main_menu(
+            message,
+            user_row,
+            is_admin,
+            section_text,
+            section="materials",
+            from_callback=from_callback,
+            custom_keyboard=keyboard,
+        )
+        return
+
+    keyboard, options = await _build_materials_keyboard(
+        user_row,
+        submenu=submenu,
+        is_admin=is_admin,
+    )
+    await _materials_update_state(state, stack=stack, options=options)
+
+    content_default = (
+        f"Раздел «{category['title']}» скоро пополнится. Загляни позже, материалы уже в подготовке."
+    )
+    content_text = await get_content(category["content_key"], content_default)
+
+    await answer_with_main_menu(
+        message,
+        user_row,
+        is_admin,
+        content_text,
+        section="materials",
+        from_callback=from_callback,
+        custom_keyboard=keyboard,
+    )
+
+
 async def send_schedule_section(
     message: types.Message,
     user: Optional[dict],
@@ -3038,15 +4244,93 @@ async def send_schedule_section(
         )
         return
 
-    schedule_text = await get_content(
+    intro_template = await get_content(
         "schedule",
         (
-            "🗓️ Расписание эфиров:\n"
-            "• Понедельник 20:00 — Вводный эфир\n"
-            "• Четверг 19:00 — Практика в группе\n"
-            "• Воскресенье 18:00 — Подведение итогов"
+            "🗓️ Расписание клуба.\n"
+            "Ниже — текущая неделя цикла и ближайшие события.\n"
+            "Чтобы получить напоминание за час до начала, отправь команду /remind_<ID>."
         ),
     )
+
+    now_utc = datetime.now(timezone.utc)
+    events = await list_schedule_events(
+        from_dt=now_utc - timedelta(hours=1),
+        include_archived=False,
+        limit=10,
+    )
+    current_week = await get_current_schedule_week()
+    weeks = await list_schedule_weeks()
+    today_local = datetime.now(BOT_ZONE).date()
+
+    upcoming_week: dict | None = None
+    if not current_week:
+        for week in weeks:
+            start_date = week.get("start_date")
+            if start_date and start_date >= today_local:
+                upcoming_week = week
+                break
+
+    lines: list[str] = []
+    intro_text = (intro_template or "").strip()
+    if intro_text:
+        lines.append(intro_text)
+
+    if current_week:
+        start_date = current_week.get("start_date")
+        end_date = current_week.get("end_date")
+        period = ""
+        if start_date and end_date:
+            period = f" ({start_date.strftime('%d.%m')}–{end_date.strftime('%d.%m')})"
+        lines.append("")
+        lines.append(
+            f"Текущая неделя цикла: #{current_week['week_number']} — {current_week['title']}{period}".strip()
+        )
+    elif upcoming_week:
+        start_date = upcoming_week.get("start_date")
+        end_date = upcoming_week.get("end_date")
+        period = ""
+        if start_date and end_date:
+            period = f" ({start_date.strftime('%d.%m')}–{end_date.strftime('%d.%m')})"
+        lines.append("")
+        lines.append(
+            f"Ближайшая неделя цикла: #{upcoming_week['week_number']} — {upcoming_week['title']}{period}".strip()
+        )
+    elif weeks:
+        first_week = weeks[0]
+        lines.append("")
+        lines.append(
+            f"Текущий цикл: #{first_week['week_number']} — {first_week['title']}"
+        )
+
+    if events:
+        lines.append("")
+        lines.append("Ближайшие события:")
+        for event in events:
+            dt_label, tz_label = _format_schedule_datetime_plain(event["scheduled_at"])
+            week_number = event.get("week_number")
+            week_title = event.get("week_title")
+            week_info = ""
+            if week_number and week_title:
+                week_info = f" (неделя {week_number}: {week_title})"
+            elif week_number:
+                week_info = f" (неделя {week_number})"
+            header = (
+                f"{event['id']}. {dt_label} {tz_label} — {event['event_type']}{week_info}"
+            )
+            lines.append(header)
+            description = (event.get("description") or "").strip()
+            if description:
+                lines.append(f"   {description}")
+            link = (event.get("link") or "").strip()
+            if link:
+                lines.append(f"   Ссылка: {link}")
+            lines.append(f"   Напоминание: /remind_{event['id']}")
+    else:
+        lines.append("")
+        lines.append("Пока нет активных событий. Загляни позже — мы обновим расписание.")
+
+    schedule_text = "\n".join(lines).strip()
 
     await answer_with_main_menu(
         message,
@@ -3055,6 +4339,7 @@ async def send_schedule_section(
         schedule_text,
         section="materials",
         from_callback=from_callback,
+        disable_web_page_preview=True,
     )
 
 
@@ -3099,6 +4384,13 @@ async def send_magnetism_window_section(
         await mark_form_started(user.get("id"), slug)
 
 
+def _resolve_checkout_url() -> str:
+    checkout_url = (YOOMONEY_CHECKOUT_URL or "").strip()
+    if not checkout_url and AT_PRODUCT_ID_CLUB:
+        checkout_url = f"https://antitraining.example/checkout/{AT_PRODUCT_ID_CLUB}"
+    return checkout_url
+
+
 async def send_pay_section(
     message: types.Message,
     user: Optional[dict],
@@ -3106,9 +4398,7 @@ async def send_pay_section(
     *,
     from_callback: bool = False,
 ) -> None:
-    checkout_url = (YOOMONEY_CHECKOUT_URL or "").strip()
-    if not checkout_url and AT_PRODUCT_ID_CLUB:
-        checkout_url = f"https://antitraining.example/checkout/{AT_PRODUCT_ID_CLUB}"
+    checkout_url = _resolve_checkout_url()
 
     if not checkout_url:
         await answer_with_main_menu(
@@ -3174,6 +4464,53 @@ async def send_pay_section(
     )
 
 
+_LESSON_PROGRESS_TOTAL = 4
+
+
+def _build_lesson_progress_bar(status_map: dict[int, str]) -> tuple[str, int]:
+    completed = 0
+    for lesson, status in status_map.items():
+        if 1 <= int(lesson) <= _LESSON_PROGRESS_TOTAL and status == "submitted":
+            completed += 1
+    completed = min(completed, _LESSON_PROGRESS_TOTAL)
+    filled = "▰" * completed
+    empty = "▱" * (_LESSON_PROGRESS_TOTAL - completed)
+    return filled + empty, completed
+
+
+def _build_lesson_cta(next_lesson: int) -> str:
+    if next_lesson >= _LESSON_PROGRESS_TOTAL + 1:
+        return "Все уроки пройдены — переходи к материалам клуба или окну в Магнетизм."
+    return f"Следующий шаг: открой урок {next_lesson} через меню ниже."
+
+
+async def _send_offer_after_lesson_four(message: types.Message) -> None:
+    checkout_url = _resolve_checkout_url()
+    if not checkout_url:
+        return
+
+    default_text = (
+        "Ты прошла 4 шага 🙌\n"
+        "Готова зайти глубже? В клубе ждут система и поддержка изнутри.\n"
+        "Оформить доступ: {checkout_url}"
+    )
+    template = await get_content("offer_after_lesson_4", default_text)
+    offer_text = render_content(
+        template,
+        checkout_url=checkout_url,
+        CHECKOUT_URL=checkout_url,
+    ).strip()
+    if not offer_text:
+        return
+
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="Оплатить доступ", url=checkout_url)]
+        ]
+    )
+    await message.answer(offer_text, reply_markup=keyboard, disable_web_page_preview=False)
+
+
 async def send_funnel_section(
     message: types.Message,
     user: dict,
@@ -3200,6 +4537,12 @@ async def send_funnel_section(
         )
         return
 
+    rows = await fetch(
+        "SELECT lesson_num, hw_status FROM funnel_progress WHERE user_id=$1 ORDER BY lesson_num",
+        user["id"],
+    )
+    status_map = {int(row["lesson_num"]): row["hw_status"] for row in rows or []}
+
     lesson_titles = {
         1: "Внимание",
         2: "Мысли",
@@ -3207,13 +4550,26 @@ async def send_funnel_section(
         4: "Эмоции",
     }
 
+    progress_bar, completed_count = _build_lesson_progress_bar(status_map)
+    cta_text = _build_lesson_cta(n)
+
     lines = [
         "Бесплатные уроки\n",
+        f"Прогресс: {progress_bar} {completed_count}/{_LESSON_PROGRESS_TOTAL}\n",
+        f"{cta_text}\n\n",
         "Доступные уроки отмечены галочкой. Урок откроется после завершения предыдущего.\n",
     ]
 
-    for i in range(1, 5):
-        status = "✅" if i < n else ("⏳" if i == n else "🔒")
+    for i in range(1, _LESSON_PROGRESS_TOTAL + 1):
+        lesson_status = status_map.get(i)
+        if lesson_status == "submitted":
+            status = "✅"
+        elif lesson_status == "skipped":
+            status = "⏭️"
+        elif lesson_status == "pending" and i < n:
+            status = "⏳"
+        else:
+            status = "⏳" if i == n else ("✅" if i < n else "🔒")
         lines.append(f"{status} Урок {i}: {lesson_titles.get(i, f'Урок {i}')}\n")
 
     keyboard = lessons_overview_keyboard(n)
@@ -3245,25 +4601,58 @@ async def send_admin_menu(
     )
 
 
-async def send_admin_settings(
+def _format_admin_schedule_event(event: dict) -> str:
+    dt_label, tz_label = _format_schedule_datetime_plain(event["scheduled_at"])
+    week_number = event.get("week_number")
+    week_title = event.get("week_title")
+    week_info = ""
+    if week_number and week_title:
+        week_info = f" (неделя {week_number}: {week_title})"
+    elif week_number:
+        week_info = f" (неделя {week_number})"
+    header = f"#{event['id']}. {dt_label} {tz_label} — {event['event_type']}{week_info}"
+    lines = [header]
+    description = (event.get("description") or "").strip()
+    if description:
+        lines.append(f"   {description}")
+    link = (event.get("link") or "").strip()
+    if link:
+        lines.append(f"   {link}")
+    return "\n".join(lines)
+
+
+def _format_admin_schedule_weeks_list(weeks: list[dict]) -> str:
+    if not weeks:
+        return "— пока не добавлены."
+    lines: list[str] = []
+    for week in weeks:
+        start_date = week.get("start_date")
+        end_date = week.get("end_date")
+        period = ""
+        if start_date and end_date:
+            period = f" ({start_date.strftime('%d.%m')}–{end_date.strftime('%d.%m')})"
+        lines.append(f"#{week['week_number']} — {week['title']}{period}")
+    return "\n".join(lines)
+
+
+async def send_admin_schedule_menu(
     message: types.Message,
     *,
-    from_callback: bool = False,
+    archived: bool = False,
 ) -> None:
-    flags = await get_menu_flags()
-    text = (
-        "Тонкие настройки бота\n\n"
-        f"Окно оплаты: {'открыто' if flags.get('payments_open', True) else 'закрыто'}\n"
-        f"Ручная проверка оплат: {'включена' if flags.get('payments_manual_review', False) else 'выключена'}\n"
-        f"Материалы недели: {'доступны' if flags.get('show_weekly_materials', True) else 'скрыты'}\n"
-        f"Расписание: {'показывается' if flags.get('show_schedule', True) else 'скрыто'}\n\n"
-        "Используй кнопки ниже, чтобы включать и выключать опции.\n\n"
-        "Готово? Вернись через «⬅️ В админку» или открой главное меню."
-    )
-    keyboard = admin_settings_keyboard(flags, _ADMIN_SETTINGS_LABELS)
+    rows = await list_schedule_events(include_archived=True, from_dt=None)
+    events = [row for row in rows if bool(row.get("is_archived")) is archived]
+    events.sort(key=lambda item: item.get("scheduled_at"), reverse=archived)
 
-    await message.answer(text, reply_markup=keyboard)
+    mode_label = "Архив событий" if archived else "Активные события"
+    lines = [mode_label]
 
+    if events:
+        for event in events:
+            lines.append("")
+            lines.append(_format_admin_schedule_event(event))
+    else:
+        lines.extend(["", "Список пуст. Добавьте событие через кнопку ниже."])
 
 async def send_admin_materials_menu(message: types.Message) -> None:
     default_text = (
@@ -3291,6 +4680,156 @@ async def send_admin_behavior_menu(message: types.Message) -> None:
         f"Выбирай нужный блок и возвращайся через «{BACK_TO_ADMIN}», когда всё готово."
     )
     text = await get_content("admin.prompts.gamification", default_text)
+    await message.answer(
+        text,
+        reply_markup=admin_schedule_keyboard(archive_mode=archived),
+        disable_web_page_preview=True,
+    )
+
+
+async def _finalize_schedule_create(message: types.Message, state: FSMContext) -> None:
+    data = await state.get_data() or {}
+    scheduled_iso = data.get("schedule_datetime_iso")
+    event_type = (data.get("schedule_event_type") or "").strip()
+    if not scheduled_iso or not event_type:
+        await message.answer(
+            "Не хватает данных для создания события. Начни заново через «➕ Добавить событие»."
+        )
+        await state.clear()
+        await send_admin_schedule_menu(message)
+        return
+
+    try:
+        scheduled_at = datetime.fromisoformat(scheduled_iso)
+    except Exception:
+        await message.answer(
+            "Не удалось распознать дату события. Запусти создание заново и укажи дату ещё раз."
+        )
+        await state.clear()
+        await send_admin_schedule_menu(message)
+        return
+
+    week_id = data.get("schedule_week_id")
+    description = (data.get("schedule_description") or "").strip()
+    link = (data.get("schedule_link") or "").strip()
+
+    row = await create_schedule_event(
+        week_id=week_id,
+        scheduled_at=scheduled_at,
+        event_type=event_type,
+        description=description if description else None,
+        link=link if link else None,
+    )
+
+    event_row = await get_schedule_event(row["id"]) if row else None
+    summary = _format_admin_schedule_event(event_row) if event_row else f"#{row['id']}"
+
+    await log_admin_action(
+        message.from_user.id,
+        "schedule_event_create",
+        {
+            "event_id": row["id"] if row else None,
+            "week_id": week_id,
+            "scheduled_at": scheduled_at.isoformat(),
+        },
+    )
+
+    await message.answer(
+        f"Событие создано ✅\n\n{summary}",
+        disable_web_page_preview=True,
+    )
+    await state.clear()
+    await send_admin_schedule_menu(message)
+
+
+async def _finalize_schedule_edit(message: types.Message, state: FSMContext) -> None:
+    data = await state.get_data() or {}
+    event_id = data.get("schedule_event_id")
+    scheduled_iso = data.get("schedule_datetime_iso")
+    event_type = (data.get("schedule_event_type") or "").strip()
+    if not event_id or not scheduled_iso or not event_type:
+        await message.answer("Не удалось сохранить изменения. Попробуй выбрать событие снова.")
+        await state.clear()
+        await send_admin_schedule_menu(message)
+        return
+
+    try:
+        scheduled_at = datetime.fromisoformat(scheduled_iso)
+    except Exception:
+        await message.answer("Дата события выглядит некорректно. Запусти редактирование заново.")
+        await state.clear()
+        await send_admin_schedule_menu(message)
+        return
+
+    week_id = data.get("schedule_week_id")
+    description = (data.get("schedule_description") or "").strip()
+    link = (data.get("schedule_link") or "").strip()
+
+    row = await update_schedule_event(
+        int(event_id),
+        week_id=week_id,
+        scheduled_at=scheduled_at,
+        event_type=event_type,
+        description=description if description else None,
+        link=link if link else None,
+    )
+    if not row:
+        await message.answer("Событие не найдено или уже удалено. Обнови список.")
+        await state.clear()
+        await send_admin_schedule_menu(message)
+        return
+
+    event_row = await get_schedule_event(int(event_id))
+    summary = _format_admin_schedule_event(event_row) if event_row else f"#{event_id}"
+
+    await log_admin_action(
+        message.from_user.id,
+        "schedule_event_update",
+        {
+            "event_id": int(event_id),
+            "week_id": week_id,
+            "scheduled_at": scheduled_at.isoformat(),
+        },
+    )
+
+    await message.answer(
+        f"Событие обновлено ✅\n\n{summary}",
+        disable_web_page_preview=True,
+    )
+    await state.clear()
+    await send_admin_schedule_menu(message)
+
+
+async def send_admin_settings(
+    message: types.Message,
+    *,
+    from_callback: bool = False,
+) -> None:
+    flags = await get_menu_flags()
+    text = (
+        "Тонкие настройки бота\n\n"
+        f"Окно оплаты: {'открыто' if flags.get('payments_open', True) else 'закрыто'}\n"
+        f"Ручная проверка оплат: {'включена' if flags.get('payments_manual_review', False) else 'выключена'}\n"
+        f"Материалы недели: {'доступны' if flags.get('show_weekly_materials', True) else 'скрыты'}\n"
+        f"Расписание: {'показывается' if flags.get('show_schedule', True) else 'скрыто'}\n\n"
+        "Используй кнопки ниже, чтобы включать и выключать опции.\n\n"
+        "Готово? Вернись через «⬅️ В админку» или открой главное меню."
+    )
+    keyboard = admin_settings_keyboard(flags, _ADMIN_SETTINGS_LABELS)
+
+    await message.answer(text, reply_markup=keyboard)
+
+
+async def send_admin_behavior_menu(message: types.Message) -> None:
+    text = (
+        "<b>Логика бота</b>\n\n"
+        "Здесь можно быстро настроить ключевые сценарии и управление доступами:\n"
+        "• Изменить приветствие при /start.\n"
+        "• Обновить сообщение после регистрации.\n"
+        "• Управлять шагами онбординга для новых участниц.\n"
+        "• Открыть раздел «💳 Оплаты» для ручных операций с платежами.\n\n"
+        "Выбирай нужный раздел — бот попросит только текст, остальное он сделает сам."
+    )
     await message.answer(
         text,
         reply_markup=admin_behavior_keyboard(),
@@ -3648,6 +5187,20 @@ async def upsert_funnel_delivery(user_id: int, lesson_num: int) -> None:
         user_id, lesson_num
     )
     logger.info("funnel: delivered user_id=%s lesson=%s", user_id, lesson_num)
+
+
+async def mark_lesson_in_progress(user_id: int, lesson_num: int) -> None:
+    await execute(
+        """UPDATE funnel_progress
+           SET opened_at=COALESCE(opened_at, NOW()),
+               hw_status='pending'
+           WHERE user_id=$1 AND lesson_num=$2""",
+        user_id,
+        lesson_num,
+    )
+    logger.info("funnel: in-progress user_id=%s lesson=%s", user_id, lesson_num)
+
+
 async def mark_lesson_done(user_id: int, lesson_num: int, hw_answer: Optional[str] = None) -> None:
     await execute(
         """UPDATE funnel_progress
@@ -3748,13 +5301,15 @@ async def mark_form_completed(user_id: int, form_slug: str) -> tuple[Optional[di
 async def get_user_with_id(tg_user_id: int) -> Optional[dict]:
     return await fetchrow("SELECT * FROM users WHERE tg_user_id=$1", tg_user_id)
 async def next_lesson_to_deliver(user_id: int) -> int:
-    rows = await fetch(
-        "SELECT lesson_num FROM funnel_progress WHERE user_id=$1 ORDER BY lesson_num", user_id
-    )
-    delivered = {r["lesson_num"] for r in rows} if rows else set()
-    for i in range(1, 5):
-        if i not in delivered:
-            return i
+    progress = await get_user_progress(user_id)
+    delivered = {
+        lesson
+        for lesson, info in progress.items()
+        if info.get("delivered") or info.get("hw_status")
+    }
+    for lesson_num in range(1, 5):
+        if lesson_num not in delivered:
+            return lesson_num
     return 5
 
 
@@ -3782,7 +5337,21 @@ async def deliver_lesson(
     try:
         await upsert_funnel_delivery(user["id"], lesson_num)
     except Exception as e:
-        logger.warning("deliver_lesson: upsert failed for user=%s lesson=%s: %s", user.get("id"), lesson_num, e)
+        logger.warning(
+            "deliver_lesson: upsert failed for user=%s lesson=%s: %s",
+            user.get("id"),
+            lesson_num,
+            e,
+        )
+    try:
+        await mark_lesson_in_progress(user["id"], lesson_num)
+    except Exception as e:
+        logger.warning(
+            "deliver_lesson: mark pending failed for user=%s lesson=%s: %s",
+            user.get("id"),
+            lesson_num,
+            e,
+        )
 
     funnel_cfg = (_load_yaml_content() or {}).get("funnel") or {}
     lesson_urls = funnel_cfg.get("lesson_urls") or {}
@@ -4111,6 +5680,8 @@ async def feedback_receive_text(message: types.Message, state: FSMContext):
         f"Твой отзыв по уроку «{lesson_titles.get(lesson_num, f'Урок {lesson_num}')}» сохранен.",
         reply_markup=after_lesson_keyboard()
     )
+    if lesson_num == 4:
+        await _send_offer_after_lesson_four(message)
 
 
 @router.message(
@@ -4195,6 +5766,91 @@ async def profile_receive_phone(message: types.Message, state: FSMContext):
 
 
 
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Напоминания о событиях
+# ──────────────────────────────────────────────────────────────────────────────
+async def _handle_schedule_reminder_request(message: types.Message, event_id: int) -> None:
+    if event_id <= 0:
+        await message.answer(
+            "Используй положительный идентификатор события. Номер можно посмотреть в разделе «Расписание»."
+        )
+        return
+
+    user_row = await get_user_with_id(message.from_user.id)
+    if not user_row:
+        user_row = await ensure_user(message.from_user)
+
+    if not await is_member(user_row):
+        await message.answer(
+            "Напоминания доступны участницам клуба. Активируй доступ, чтобы получать уведомления о событиях."
+        )
+        return
+
+    event_row = await get_schedule_event(event_id)
+    if not event_row or event_row.get("is_archived"):
+        await message.answer("Не нашла событие с таким номером. Проверь список в разделе «Расписание».")
+        return
+
+    scheduled_at: datetime = event_row["scheduled_at"]
+    if scheduled_at <= datetime.now(timezone.utc):
+        await message.answer("Это событие уже началось или завершилось. Выбери другое из расписания.")
+        return
+
+    reminder_row = await upsert_schedule_event_reminder(user_row["id"], event_id)
+    if not reminder_row:
+        await message.answer("Не удалось сохранить напоминание. Попробуй позже или напиши в поддержку.")
+        return
+
+    event_dt_label, event_tz = _format_schedule_datetime_plain(scheduled_at)
+    remind_dt_label, remind_tz = _format_schedule_datetime_plain(reminder_row["remind_at"])
+
+    lines = [
+        "Напоминание сохранено ✅",
+        f"Событие: {event_row['event_type']} — {event_dt_label} {event_tz}.",
+        f"Сообщение придёт {remind_dt_label} {remind_tz} (за час до начала).",
+    ]
+    link = (event_row.get("link") or "").strip()
+    if link:
+        lines.append(f"Ссылка: {link}")
+
+    await message.answer("\n".join(lines))
+    logger.info(
+        "schedule_reminder_saved user_id=%s event_id=%s remind_at=%s",
+        user_row["id"],
+        event_id,
+        reminder_row["remind_at"],
+    )
+
+
+@router.message(Command("remind"))
+async def cmd_schedule_remind(message: types.Message, command: CommandObject, state: FSMContext):
+    await _reset_state_if_needed(state)
+
+    raw_arg = (command.args or "").strip() if command else ""
+    if not raw_arg:
+        await message.answer(
+            "Использование: /remind <ID события>. Номер ищи в разделе «Расписание» — он указан в начале строки."
+        )
+        return
+
+    if not raw_arg.isdigit():
+        await message.answer(
+            "Идентификатор события должен быть числом. Посмотри номер в разделе «Расписание» и отправь его через /remind."
+        )
+        return
+
+    await _handle_schedule_reminder_request(message, int(raw_arg))
+
+
+@router.message(F.text.regexp(r"^/remind_(\d+)$"))
+async def cmd_schedule_remind_short(message: types.Message, state: FSMContext):
+    await _reset_state_if_needed(state)
+    match = re.match(r"^/remind_(\d+)$", message.text or "")
+    if not match:
+        return
+    await _handle_schedule_reminder_request(message, int(match.group(1)))
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -4497,7 +6153,7 @@ async def menu_open_learning(message: types.Message, state: FSMContext):
 async def menu_open_materials(message: types.Message, state: FSMContext):
     await _reset_state_if_needed(state)
     user, is_admin = await _get_user_and_admin(message)
-    await send_menu_section(message, user, is_admin, "materials")
+    await send_materials_root_section(message, user, is_admin, state=state)
 
 
 @router.message(F.text == "👤 Профиль")
@@ -4615,6 +6271,15 @@ async def menu_test(message: types.Message, state: FSMContext):
     parts = [intro_message.strip(), birth_prompt.strip()]
     message_text = "\n\n".join([part for part in parts if part])
     await message.answer(message_text, reply_markup=cancel_keyboard())
+
+
+@router.message(F.text == LEARNING_PROGRESS_BUTTON)
+async def menu_learning_progress(message: types.Message, state: FSMContext):
+    await _reset_state_if_needed(state)
+    user, is_admin = await _get_user_and_admin(message)
+    if not user:
+        user = await ensure_user(message.from_user)
+    await send_learning_progress_section(message, user, is_admin)
 
 
 @router.message(TestStates.waiting_birthdate, F.text.casefold() == CANCEL_TEXT.lower())
@@ -4792,7 +6457,84 @@ async def menu_admin_entry(message: types.Message, state: FSMContext):
 async def menu_weekly_materials(message: types.Message, state: FSMContext):
     await _reset_state_if_needed(state)
     user, is_admin = await _get_user_and_admin(message)
-    await send_weekly_materials_section(message, user, is_admin)
+    await send_weekly_materials_section(message, user, is_admin, state=state)
+
+
+@router.message(F.text == MATERIALS_CATALOG_BUTTON)
+async def menu_materials_catalog(message: types.Message, state: FSMContext):
+    await _reset_state_if_needed(state)
+    user, is_admin = await _get_user_and_admin(message)
+    await send_materials_catalog_section(message, user, is_admin, state=state)
+
+
+@router.message(F.text == BACK_TO_MATERIALS)
+async def menu_back_to_materials(message: types.Message, state: FSMContext):
+    await _reset_state_if_needed(state)
+    user, is_admin = await _get_user_and_admin(message)
+    menu_state = await _materials_get_state(state)
+    stack = list(menu_state.get("stack", []))
+
+    if not stack:
+        await send_materials_root_section(message, user, is_admin, state=state)
+        return
+
+    stack.pop()
+
+    if not stack:
+        await send_materials_root_section(message, user, is_admin, state=state)
+        return
+
+    submenu = stack[-1]
+    if submenu == "catalog":
+        await send_materials_catalog_section(message, user, is_admin, state=state)
+        return
+
+    await send_materials_category_section(
+        message,
+        user,
+        is_admin,
+        state=state,
+        category_slug=submenu,
+    )
+
+
+@router.message(F.text == MATERIALS_PRACTICES_BUTTON)
+async def menu_materials_practices(message: types.Message, state: FSMContext):
+    await _reset_state_if_needed(state)
+    user, is_admin = await _get_user_and_admin(message)
+    await send_materials_practices_section(message, user, is_admin, state=state)
+
+
+@router.message(F.text == MATERIALS_CHALLENGES_BUTTON)
+async def menu_materials_challenges(message: types.Message, state: FSMContext):
+    await _reset_state_if_needed(state)
+    user, is_admin = await _get_user_and_admin(message)
+    await send_materials_challenges_section(message, user, is_admin, state=state)
+
+
+@router.message(
+    F.text.func(lambda text: bool(text and text.strip())),
+    F.text.func(lambda text: _normalize_materials_choice(text) != ""),
+)
+async def menu_materials_dynamic_choice(message: types.Message, state: FSMContext):
+    menu_state = await _materials_get_state(state)
+    options: dict[str, dict] = menu_state.get("options", {})
+    if not options:
+        return
+
+    normalized = _normalize_materials_choice(message.text)
+    option = options.get(normalized)
+    if not option:
+        return
+
+    user, is_admin = await _get_user_and_admin(message)
+    await send_materials_category_section(
+        message,
+        user,
+        is_admin,
+        state=state,
+        category_slug=option["slug"],
+    )
 
 
 @router.message(F.text.in_({"Расписание", "Расписание 🔒"}))
@@ -4872,6 +6614,11 @@ async def lesson_mark_done(message: types.Message, state: FSMContext):
     if lesson_num not in (1, 2, 3, 4):
         await message.answer("Сначала выбери урок в разделе «Бесплатные уроки»." )
         return
+    user = await get_user_with_id(message.from_user.id)
+    if not user:
+        await message.answer("Перезапусти /start, чтобы загрузить профиль.")
+        return
+    await mark_lesson_in_progress(user["id"], lesson_num)
     await state.set_state(HWStates.waiting_answer)
     await state.update_data(lesson_num=lesson_num)
     await message.answer(
@@ -4917,12 +6664,67 @@ async def lesson_question(message: types.Message, state: FSMContext):
     if lesson_num not in (1, 2, 3, 4):
         await message.answer("Сначала открой урок из раздела «Бесплатные уроки»." )
         return
+    user = await get_user_with_id(message.from_user.id)
+    if not user:
+        await message.answer("Перезапусти /start, чтобы загрузить профиль.")
+        return
+    await mark_lesson_in_progress(user["id"], lesson_num)
+    await state.set_state(HWStates.waiting_question)
+    await state.update_data(lesson_num=lesson_num)
     await message.answer(
         f"Задай вопрос по уроку {lesson_num}\n\n"
         f"Напиши одним сообщением или обратись в поддержку: {SUPPORT_CONTACT}",
         reply_markup=cancel_keyboard(),
     )
 
+
+@router.message(HWStates.waiting_question, F.text.len() > 0)
+async def lesson_receive_question(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    lesson_num = int(data.get("lesson_num", 0) or 0)
+    if lesson_num not in (1, 2, 3, 4):
+        await state.clear()
+        await message.answer("Сначала выбери урок в разделе «Бесплатные уроки»." )
+        return
+
+    user = await get_user_with_id(message.from_user.id)
+    if not user:
+        await state.clear()
+        await message.answer("Перезапусти /start, чтобы загрузить профиль.")
+        return
+
+    question_text = message.text.strip()
+    notify_admins = _get_notify_admins()
+    card_lines = [
+        f"❓ Вопрос по уроку {lesson_num}",
+        f"tg-id: <code>{message.from_user.id}</code>",
+        f"user-id: <code>{user['id']}</code>",
+    ]
+    if user.get("full_name"):
+        card_lines.append(f"Имя: {html.escape(user['full_name'])}")
+    if message.from_user.username:
+        card_lines.append(f"Username: @{message.from_user.username}")
+    card_lines.append(f"Вопрос: {html.escape(question_text)}")
+
+    if notify_admins:
+        try:
+            await notify_admins("\n".join(card_lines))
+        except Exception as exc:
+            logger.warning(
+                "lesson_question: notify_admins failed tg_user_id=%s err=%s",
+                message.from_user.id,
+                exc,
+            )
+
+    await state.set_state(None)
+    await state.update_data(last_lesson=lesson_num)
+
+    reply = lesson_actions_keyboard()
+    confirm_text = (
+        "Передала вопрос кураторам. "
+        f"Ответ придёт в поддержку: {SUPPORT_CONTACT}."
+    )
+    await message.answer(confirm_text, reply_markup=reply)
 
 @router.message(F.text == NEXT_LESSON)
 async def lesson_next(message: types.Message, state: FSMContext):
@@ -4966,6 +6768,8 @@ async def feedback_skip(message: types.Message, state: FSMContext):
         reply_markup=after_lesson_keyboard(),
     )
     await state.update_data(last_lesson=lesson_num)
+    if lesson_num == 4:
+        await _send_offer_after_lesson_four(message)
 
 
 @router.message(HWStates.waiting_feedback, F.text.in_(list(FEEDBACK_OPTIONS.keys())))
@@ -4995,6 +6799,8 @@ async def feedback_quick_choice(message: types.Message, state: FSMContext):
         reply_markup=after_lesson_keyboard(),
     )
     await state.update_data(last_lesson=lesson_num)
+    if lesson_num == 4:
+        await _send_offer_after_lesson_four(message)
 # ──────────────────────────────────────────────────────────────────────────────
 # Обработка отмены для всех состояний
 # ──────────────────────────────────────────────────────────────────────────────
@@ -5006,6 +6812,15 @@ async def cancel_handler(message: types.Message, state: FSMContext):
     data = await state.get_data()
     await state.clear()
     user, is_admin = await _get_user_and_admin(message)
+
+    if current_state == HWStates.waiting_question.state:
+        lesson_num = int((data or {}).get("lesson_num", 0) or 0)
+        await state.update_data(active_lesson=lesson_num)
+        await message.answer(
+            "Вопрос не отправлен. Можно вернуться к уроку или задать его позже.",
+            reply_markup=lesson_actions_keyboard(),
+        )
+        return
 
     if current_state in {
         TestStates.waiting_birthdate.state,
@@ -5080,6 +6895,37 @@ async def cancel_handler(message: types.Message, state: FSMContext):
         )
         return
 
+    if current_state in {
+        AdminMaterialsStates.waiting_create_payload.state,
+        AdminMaterialsStates.waiting_update_payload.state,
+        AdminMaterialsStates.waiting_delete_slug.state,
+        AdminMaterialsStates.waiting_delete_confirm.state,
+        AdminMaterialsStates.waiting_grant_payload.state,
+        AdminMaterialsStates.waiting_revoke_payload.state,
+    } and is_admin:
+        await message.answer(
+            "Действие отменено. Возвращаю в раздел «Материалы».",
+            reply_markup=admin_materials_keyboard(),
+        )
+        return
+
+    if (
+        current_state
+        in {
+            AdminScheduleStates.waiting_week.state,
+            AdminScheduleStates.waiting_datetime.state,
+            AdminScheduleStates.waiting_type.state,
+            AdminScheduleStates.waiting_description.state,
+            AdminScheduleStates.waiting_link.state,
+            AdminScheduleStates.waiting_event_id_edit.state,
+            AdminScheduleStates.waiting_event_id_archive.state,
+            AdminScheduleStates.waiting_event_id_restore.state,
+        }
+        and is_admin
+    ):
+        await send_admin_schedule_menu(message)
+        return
+
     if (
         current_state
         in {
@@ -5130,6 +6976,14 @@ async def cancel_handler(message: types.Message, state: FSMContext):
         and is_admin
     ):
         await send_admin_payments_overview(message)
+        return
+
+    if current_state == AdminUserStates.waiting_progress.state and is_admin:
+        selected_user_id = (data or {}).get("selected_user_id") if data else None
+        if selected_user_id:
+            await _show_admin_user_card(message, state, user_id=selected_user_id)
+        else:
+            await admin_users_menu_entry(message, state)
         return
 
     kb = await build_menu_keyboard(user=user, is_admin=is_admin, section="root")
@@ -5460,6 +7314,383 @@ async def admin_onboarding_delete_step(message: types.Message, state: FSMContext
     await send_admin_onboarding_menu(message)
 
 
+@router.message(F.text == ADMIN_SCHEDULE_BUTTON)
+async def admin_schedule_entry(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+    await _reset_state_if_needed(state)
+    await send_admin_schedule_menu(message)
+
+
+@router.message(F.text == ADMIN_SCHEDULE_SHOW_ARCHIVE)
+async def admin_schedule_show_archive(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+    await _reset_state_if_needed(state)
+    await send_admin_schedule_menu(message, archived=True)
+
+
+@router.message(F.text == ADMIN_SCHEDULE_SHOW_ACTIVE)
+async def admin_schedule_show_active(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+    await _reset_state_if_needed(state)
+    await send_admin_schedule_menu(message, archived=False)
+
+
+@router.message(F.text == ADMIN_SCHEDULE_ADD_EVENT)
+async def admin_schedule_add_event(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+    await _reset_state_if_needed(state)
+    weeks = await list_schedule_weeks(include_archived=False)
+    weeks_text = _format_admin_schedule_weeks_list(weeks)
+    await state.set_state(AdminScheduleStates.waiting_week)
+    await state.update_data(schedule_mode="create")
+    lines = [
+        "➕ Добавление события",
+        "",
+        "Недели цикла:",
+        weeks_text,
+        "",
+        f"Укажи номер недели (например, 2). Отправь 0, если событие вне цикла. Время указывается по {BOT_TIMEZONE}.",
+    ]
+    await message.answer(
+        "\n".join(lines),
+        reply_markup=cancel_keyboard(),
+        disable_web_page_preview=True,
+    )
+
+
+@router.message(F.text == ADMIN_SCHEDULE_EDIT_EVENT)
+async def admin_schedule_edit_prompt(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+    await _reset_state_if_needed(state)
+    await state.set_state(AdminScheduleStates.waiting_event_id_edit)
+    await message.answer(
+        "Введи ID события, которое нужно изменить. Номер смотри в списке выше.",
+        reply_markup=cancel_keyboard(),
+    )
+
+
+@router.message(F.text == ADMIN_SCHEDULE_ARCHIVE_EVENT)
+async def admin_schedule_archive_prompt(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+    await _reset_state_if_needed(state)
+    await state.set_state(AdminScheduleStates.waiting_event_id_archive)
+    await message.answer(
+        "Укажи ID события, которое нужно переместить в архив.",
+        reply_markup=cancel_keyboard(),
+    )
+
+
+@router.message(F.text == ADMIN_SCHEDULE_RESTORE_EVENT)
+async def admin_schedule_restore_prompt(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+    await _reset_state_if_needed(state)
+    await state.set_state(AdminScheduleStates.waiting_event_id_restore)
+    await message.answer(
+        "Введи ID события, которое нужно вернуть из архива.",
+        reply_markup=cancel_keyboard(),
+    )
+
+
+@router.message(AdminScheduleStates.waiting_event_id_edit, F.text.len() > 0)
+async def admin_schedule_receive_event_id_edit(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        await state.clear()
+        return
+    text = (message.text or "").strip()
+    if not text.isdigit():
+        await message.answer("Номер события должен быть числом. Попробуй снова.")
+        return
+    event_id = int(text)
+    event_row = await get_schedule_event(event_id)
+    if not event_row:
+        await message.answer("Не нашла событие с таким номером. Обнови список и попробуй снова.")
+        return
+    if event_row.get("is_archived"):
+        await message.answer("Событие находится в архиве. Восстанови его, чтобы редактировать.")
+        await state.clear()
+        await send_admin_schedule_menu(message, archived=True)
+        return
+
+    await state.update_data(
+        schedule_mode="edit",
+        schedule_event_id=event_id,
+        schedule_week_id=event_row.get("week_id"),
+        schedule_week_number=event_row.get("week_number"),
+        schedule_week_title=event_row.get("week_title"),
+        schedule_datetime_iso=event_row["scheduled_at"].isoformat(),
+        schedule_event_type=event_row["event_type"],
+        schedule_description=event_row.get("description") or "",
+        schedule_link=event_row.get("link") or "",
+    )
+
+    weeks = await list_schedule_weeks(include_archived=False)
+    weeks_text = _format_admin_schedule_weeks_list(weeks)
+    current_week = event_row.get("week_number")
+    current_week_title = event_row.get("week_title")
+    if current_week:
+        current_week_label = f"#{current_week} — {current_week_title}" if current_week_title else f"#{current_week}"
+    else:
+        current_week_label = "вне цикла"
+
+    await state.set_state(AdminScheduleStates.waiting_week)
+    lines = [
+        f"✏️ Редактирование события #{event_id}",
+        "",
+        "Недели цикла:",
+        weeks_text,
+        "",
+        f"Текущая неделя: {current_week_label}.",
+        "Отправь номер новой недели. '-' — оставить без изменений, 0 — событие вне цикла.",
+    ]
+    await message.answer(
+        "\n".join(lines),
+        reply_markup=cancel_keyboard(),
+        disable_web_page_preview=True,
+    )
+
+
+@router.message(AdminScheduleStates.waiting_event_id_archive, F.text.len() > 0)
+async def admin_schedule_archive_event(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        await state.clear()
+        return
+    text = (message.text or "").strip()
+    if not text.isdigit():
+        await message.answer("Номер события должен быть числом. Попробуй снова.")
+        return
+    event_id = int(text)
+    row = await set_schedule_event_archived(event_id, archived=True)
+    if not row:
+        await message.answer("Не удалось найти событие с таким номером.")
+        return
+    event_row = await get_schedule_event(event_id)
+    summary = _format_admin_schedule_event(event_row) if event_row else f"#{event_id}"
+    await log_admin_action(message.from_user.id, "schedule_event_archive", {"event_id": event_id})
+    await state.clear()
+    await message.answer(
+        f"Событие #{event_id} перемещено в архив.\n\n{summary}",
+        disable_web_page_preview=True,
+    )
+    await send_admin_schedule_menu(message, archived=False)
+
+
+@router.message(AdminScheduleStates.waiting_event_id_restore, F.text.len() > 0)
+async def admin_schedule_restore_event(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        await state.clear()
+        return
+    text = (message.text or "").strip()
+    if not text.isdigit():
+        await message.answer("Номер события должен быть числом. Попробуй снова.")
+        return
+    event_id = int(text)
+    row = await set_schedule_event_archived(event_id, archived=False)
+    if not row:
+        await message.answer("Не удалось найти событие с таким номером.")
+        return
+    event_row = await get_schedule_event(event_id)
+    summary = _format_admin_schedule_event(event_row) if event_row else f"#{event_id}"
+    await log_admin_action(message.from_user.id, "schedule_event_restore", {"event_id": event_id})
+    await state.clear()
+    await message.answer(
+        f"Событие #{event_id} восстановлено из архива.\n\n{summary}",
+        disable_web_page_preview=True,
+    )
+    await send_admin_schedule_menu(message, archived=True)
+
+
+@router.message(AdminScheduleStates.waiting_week, F.text.len() > 0)
+async def admin_schedule_receive_week(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        await state.clear()
+        return
+    text = (message.text or "").strip()
+    data = await state.get_data() or {}
+    mode = data.get("schedule_mode", "create")
+    text_lower = text.lower()
+
+    week_id = data.get("schedule_week_id")
+    week_number = data.get("schedule_week_number")
+    week_title = data.get("schedule_week_title")
+
+    if mode == "edit" and text == "-":
+        pass
+    else:
+        if text_lower in {"0", "нет", "none"}:
+            week_id = None
+            week_number = None
+            week_title = None
+        else:
+            if not text.isdigit():
+                await message.answer("Номер недели укажи числом. Например: 1, 2 или 0, если событие вне цикла.")
+                return
+            week_number_input = int(text)
+            week_row = await get_schedule_week_by_number(week_number_input)
+            if not week_row:
+                await message.answer("Такой недели нет. Проверь список или укажи 0, если событие вне цикла.")
+                return
+            week_id = week_row["id"]
+            week_number = week_row["week_number"]
+            week_title = week_row.get("title")
+
+    await state.update_data(
+        schedule_week_id=week_id,
+        schedule_week_number=week_number,
+        schedule_week_title=week_title,
+    )
+
+    existing_iso = data.get("schedule_datetime_iso") if mode == "edit" else None
+    current_label = ""
+    if existing_iso:
+        try:
+            existing_dt = datetime.fromisoformat(existing_iso)
+            current_label = existing_dt.astimezone(BOT_ZONE).strftime("%d.%m.%Y %H:%M")
+        except Exception:
+            current_label = ""
+
+    await state.set_state(AdminScheduleStates.waiting_datetime)
+    if mode == "edit":
+        prompt = (
+            f"Текущая дата и время: {current_label or 'не указаны'}.\n"
+            f"Отправь новую дату в формате ДД.ММ.ГГГГ ЧЧ:ММ ({BOT_TIMEZONE}) или '-' чтобы оставить без изменений."
+        )
+    else:
+        prompt = f"Укажи дату и время события в формате ДД.ММ.ГГГГ ЧЧ:ММ ({BOT_TIMEZONE})."
+    await message.answer(prompt, reply_markup=cancel_keyboard())
+
+
+@router.message(AdminScheduleStates.waiting_datetime, F.text.len() > 0)
+async def admin_schedule_receive_datetime(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        await state.clear()
+        return
+    text = (message.text or "").strip()
+    data = await state.get_data() or {}
+    mode = data.get("schedule_mode", "create")
+
+    if mode == "edit" and text == "-":
+        iso_value = data.get("schedule_datetime_iso")
+        if not iso_value:
+            await message.answer("Дата события ещё не задана. Укажи новое значение в формате ДД.ММ.ГГГГ ЧЧ:ММ.")
+            return
+    else:
+        dt = _parse_local_datetime(text)
+        if not dt:
+            await message.answer(
+                f"Не получилось распознать дату. Используй формат ДД.ММ.ГГГГ ЧЧ:ММ, например 24.09.2024 19:00 ({BOT_TIMEZONE})."
+            )
+            return
+        iso_value = dt.isoformat()
+
+    await state.update_data(schedule_datetime_iso=iso_value)
+    await state.set_state(AdminScheduleStates.waiting_type)
+    current_type = (data.get("schedule_event_type") or "").strip()
+    if mode == "edit":
+        prompt = (
+            f"Текущий тип: {current_type or '—'}.\n"
+            "Пришли новый тип события или '-' чтобы оставить без изменений."
+        )
+    else:
+        prompt = "Как назвать событие? Например: Вебинар, Практика, Созвон."
+    await message.answer(prompt, reply_markup=cancel_keyboard())
+
+
+@router.message(AdminScheduleStates.waiting_type, F.text.len() > 0)
+async def admin_schedule_receive_type(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        await state.clear()
+        return
+    text = (message.text or "").strip()
+    data = await state.get_data() or {}
+    mode = data.get("schedule_mode", "create")
+
+    if mode == "edit" and text == "-":
+        event_type = (data.get("schedule_event_type") or "").strip()
+        if not event_type:
+            await message.answer("Тип события пока пустой. Укажи новое значение.")
+            return
+    else:
+        if not text:
+            await message.answer("Название события не может быть пустым. Пример: Встреча, Практика.")
+            return
+        event_type = text
+
+    await state.update_data(schedule_event_type=event_type)
+    await state.set_state(AdminScheduleStates.waiting_description)
+    current_desc = (data.get("schedule_description") or "").strip()
+    if mode == "edit":
+        current_label = current_desc if current_desc else "—"
+        prompt = (
+            f"Текущее описание: {current_label}.\n"
+            "Пришли новое описание. '-' — оставить без изменений, '0' — очистить текст."
+        )
+    else:
+        prompt = "Добавь описание события. Отправь '-' или '0', если описание не нужно."
+    await message.answer(prompt, reply_markup=cancel_keyboard())
+
+
+@router.message(AdminScheduleStates.waiting_description, F.text.len() > 0)
+async def admin_schedule_receive_description(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        await state.clear()
+        return
+    text = (message.text or "").strip()
+    text_lower = text.lower()
+    data = await state.get_data() or {}
+    mode = data.get("schedule_mode", "create")
+
+    if mode == "edit" and text == "-":
+        description = data.get("schedule_description") or ""
+    elif text_lower in {"0", "нет", "none"} or (mode == "create" and text == "-"):
+        description = ""
+    else:
+        description = text
+
+    await state.update_data(schedule_description=description)
+    await state.set_state(AdminScheduleStates.waiting_link)
+    current_link = (data.get("schedule_link") or "").strip()
+    if mode == "edit":
+        current_label = current_link if current_link else "—"
+        prompt = (
+            f"Текущая ссылка: {current_label}.\n"
+            "Пришли новую ссылку. '-' — оставить без изменений, '0' — удалить ссылку."
+        )
+    else:
+        prompt = "Пришли ссылку на событие (если есть). Отправь '-' или '0', если ссылки нет."
+    await message.answer(prompt, reply_markup=cancel_keyboard())
+
+
+@router.message(AdminScheduleStates.waiting_link, F.text.len() > 0)
+async def admin_schedule_receive_link(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        await state.clear()
+        return
+    text = (message.text or "").strip()
+    text_lower = text.lower()
+    data = await state.get_data() or {}
+    mode = data.get("schedule_mode", "create")
+
+    if mode == "edit" and text == "-":
+        link = (data.get("schedule_link") or "").strip()
+    elif text_lower in {"0", "нет", "none"} or (mode == "create" and text == "-"):
+        link = ""
+    else:
+        link = text
+
+    await state.update_data(schedule_link=link)
+    if mode == "edit":
+        await _finalize_schedule_edit(message, state)
+    else:
+        await _finalize_schedule_create(message, state)
+
+
 @router.message(F.text == ADMIN_USERS_BUTTON)
 async def admin_users_menu_entry(message: types.Message, state: FSMContext):
     if not is_admin_id(message.from_user.id):
@@ -5682,20 +7913,89 @@ async def admin_users_update_contacts(message: types.Message, state: FSMContext)
     await _show_admin_user_card(message, state, user_id=user_id, notice="Контакты обновлены")
 
 
+@router.message(AdminUserStates.viewing_user, F.text == ADMIN_USERS_EDIT_PROGRESS)
+async def admin_users_progress_prompt(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+
+    data = await state.get_data()
+    user_id = (data or {}).get("selected_user_id")
+    if not user_id:
+        await message.answer("Сначала выбери участницу в списке пользователей.")
+        return
+
+    instructions = (
+        "<b>Корректировка прогресса</b>\n\n"
+        "Пришли одну или несколько строк в формате "
+        "<code>lesson=1 status=submitted feedback=excellent,good</code>.\n\n"
+        "Поля:\n"
+        "• <code>lesson</code> — номер урока (1-4).\n"
+        "• <code>status</code> — submitted/pending/skipped (опционально).\n"
+        "• <code>feedback</code> — коды отзывов через запятую, пусто — очистить.\n"
+        "• <code>delivered</code>/<code>opened</code> — даты ISO (опционально).\n"
+        "• <code>answer</code> — текст ответа на ДЗ.\n"
+        "• <code>reset=1</code> — удалить запись урока и отзывы.\n\n"
+        "Для отмены нажми «Отмена»."
+    )
+
+    await state.set_state(AdminUserStates.waiting_progress)
+    await message.answer(
+        instructions,
+        reply_markup=cancel_keyboard(
+            extra_buttons=[ADMIN_USERS_BACK_TO_LIST, ADMIN_USERS_BACK_TO_SEGMENTS]
+        ),
+        parse_mode=ParseMode.HTML,
+        disable_web_page_preview=True,
+    )
+
+
+@router.message(AdminUserStates.waiting_progress, F.text.len() > 0)
+async def admin_users_progress_receive(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        await state.clear()
+        return
+
+    data = await state.get_data()
+    user_id = (data or {}).get("selected_user_id")
+    if not user_id:
+        await state.clear()
+        await admin_users_menu_entry(message, state)
+        return
+
+    try:
+        updates = _parse_progress_updates_payload(message.text)
+    except ValueError as exc:
+        await message.answer(
+            f"Не удалось разобрать строку: {exc}\nПопробуй снова или нажми «Отмена»."
+        )
+        return
+
+    if not updates:
+        await message.answer(
+            "Не нашла данных для изменения. Укажи хотя бы lesson=... и status=...."
+        )
+        return
+
+    try:
+        await sync_user_progress(user_id, updates, actor_id=message.from_user.id)
+    except ValueError as exc:
+        await message.answer(f"Не удалось применить изменения: {exc}")
+        return
+
+    await _show_admin_user_card(
+        message,
+        state,
+        user_id=user_id,
+        notice="Прогресс обновлён",
+    )
+
+
 @router.message(F.text == ADMIN_BROADCAST_BUTTON)
 async def admin_broadcast_menu_entry(message: types.Message, state: FSMContext):
     if not is_admin_id(message.from_user.id):
         return
     await _reset_state_if_needed(state)
     await send_admin_broadcast_menu(message)
-
-
-@router.message(F.text == ADMIN_BROADCAST_NEW_BUTTON)
-async def admin_broadcast_start_new(message: types.Message, state: FSMContext):
-    if not is_admin_id(message.from_user.id):
-        return
-    await _reset_state_if_needed(state)
-    await send_admin_broadcast_segment_prompt(message)
 
 
 @router.message(F.text == BACK_TO_BROADCAST)
@@ -5749,14 +8049,6 @@ async def admin_broadcast_edit_reminder(message: types.Message, state: FSMContex
         group_title="📝 Анкеты",
         return_to_broadcast=True,
     )
-
-
-@router.message(F.text == ADMIN_MATERIALS_BUTTON)
-async def admin_materials_menu(message: types.Message, state: FSMContext):
-    if not is_admin_id(message.from_user.id):
-        return
-    await _reset_state_if_needed(state)
-    await send_admin_materials_menu(message)
 
 
 @router.message(F.text.func(lambda text: _admin_broadcast_toggle_key_from_text(text) is not None))
@@ -5886,6 +8178,778 @@ async def admin_broadcast_use_template(message: types.Message, state: FSMContext
         body=body,
         template_title=template.get("title"),
     )
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Админка: материалы
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def _parse_materials_payload(text: str | None) -> dict[str, str]:
+    data: dict[str, str] = {}
+    if not text:
+        return data
+    for chunk in text.split(";"):
+        if "=" not in chunk:
+            continue
+        key, value = chunk.split("=", 1)
+        data[key.strip().lower()] = value.strip()
+    return data
+
+
+def _parse_progress_updates_payload(text: str | None) -> list[dict[str, Any]]:
+    entries: list[dict[str, Any]] = []
+    if not text:
+        return entries
+
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+
+        tokens: dict[str, str] = {}
+        for chunk in shlex.split(line):
+            if "=" not in chunk:
+                continue
+            key, value = chunk.split("=", 1)
+            tokens[key.strip().lower()] = value.strip()
+
+        if not tokens:
+            continue
+
+        lesson_value = tokens.get("lesson") or tokens.get("l")
+        if not lesson_value:
+            raise ValueError(f"Не нашла lesson=... в строке: {line}")
+
+        try:
+            lesson_num = int(lesson_value)
+        except ValueError as exc:
+            raise ValueError(f"lesson должен быть числом: {lesson_value}") from exc
+
+        entry: dict[str, Any] = {"lesson": lesson_num}
+
+        status_value = tokens.get("status") or tokens.get("hw_status")
+        if status_value is not None:
+            entry["status"] = status_value.strip().lower()
+
+        feedback_value = tokens.get("feedback")
+        if feedback_value is not None:
+            if feedback_value == "" or feedback_value.lower() in {"clear", "none"}:
+                entry["feedback"] = []
+            else:
+                entry["feedback"] = [
+                    part.strip()
+                    for part in feedback_value.split(",")
+                    if part.strip()
+                ]
+
+        delivered_value = tokens.get("delivered") or tokens.get("delivered_at")
+        if delivered_value:
+            entry["delivered_at"] = delivered_value
+
+        opened_value = tokens.get("opened") or tokens.get("opened_at")
+        if opened_value:
+            entry["opened_at"] = opened_value
+
+        answer_value = tokens.get("answer") or tokens.get("hw_answer")
+        if answer_value is not None:
+            entry["hw_answer"] = answer_value
+
+        reset_flag = tokens.get("reset") or tokens.get("clear")
+        if reset_flag:
+            entry["reset"] = reset_flag.strip().lower() in {"1", "true", "yes", "y"}
+
+        entries.append(entry)
+
+    return entries
+
+
+def _parse_optional_bool(value: str | None) -> Optional[bool]:
+    if value is None or value == "":
+        return None
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "y", "да", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "n", "нет", "off"}:
+        return False
+    raise ValueError("invalid_boolean")
+
+
+def _parse_optional_int(value: str | None) -> Optional[int]:
+    if value is None or value == "":
+        return None
+    return int(value)
+
+
+async def _material_access_counts() -> dict[int, int]:
+    rows = await fetch(
+        "SELECT category_id, COUNT(*) AS cnt FROM material_category_access GROUP BY category_id"
+    )
+    return {row["category_id"]: row["cnt"] for row in rows}
+
+
+async def _collect_all_material_slugs() -> list[str]:
+    slugs: list[str] = []
+
+    async def walk(category: dict) -> None:
+        slugs.append(category["slug"])
+        children = await list_material_categories(
+            category["slug"],
+            include_inactive=True,
+        )
+        for child in children:
+            await walk(child)
+
+    roots = await list_material_categories(include_inactive=True)
+    for root in roots:
+        await walk(root)
+    return slugs
+
+
+async def _render_materials_tree() -> str:
+    counts = await _material_access_counts()
+    roots = await list_material_categories(include_inactive=True)
+
+    lines = ["<b>Категории материалов</b>"]
+
+    if not roots:
+        lines.append("Категории ещё не созданы. Используй «➕ Добавить категорию». ")
+        return "\n".join(lines)
+
+    async def walk(category: dict, indent: str = "") -> None:
+        badge = "🔓" if not category.get("requires_access", True) else "🔒"
+        active_suffix = "" if category.get("is_active", True) else " (выключена)"
+        count = counts.get(category["id"], 0)
+        count_suffix = f" — доп. доступов: {count}" if count else ""
+        lines.append(
+            f"{indent}• <code>{category['slug']}</code> — {category['title']} {badge}{active_suffix}{count_suffix}"
+        )
+        children = await list_material_categories(
+            category["slug"],
+            include_inactive=True,
+        )
+        for child in children:
+            await walk(child, indent + "    ")
+
+    for root in roots:
+        await walk(root)
+
+    lines.append("\n🔓 — раздел открыт для всех, 🔒 — требуется членство или вручную выданный доступ.")
+    return "\n".join(lines)
+
+
+async def send_admin_materials_menu(message: types.Message) -> None:
+    intro = (
+        "<b>Управление материалами</b>\n\n"
+        "Добавляй категории каталога, меняй настройки доступа и выдавай персональные разрешения."
+    )
+    await message.answer(
+        intro,
+        reply_markup=admin_materials_keyboard(),
+        parse_mode=ParseMode.HTML,
+    )
+
+
+@router.message(F.text == ADMIN_MATERIALS_BUTTON)
+async def admin_materials_menu(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+    await _reset_state_if_needed(state)
+    await send_admin_materials_menu(message)
+
+
+@router.message(F.text == ADMIN_MATERIALS_LIST)
+async def admin_materials_list(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+    await _reset_state_if_needed(state)
+    tree = await _render_materials_tree()
+    await message.answer(
+        tree,
+        reply_markup=admin_materials_keyboard(),
+        parse_mode=ParseMode.HTML,
+    )
+
+
+@router.message(F.text == ADMIN_MATERIALS_CREATE)
+async def admin_materials_create_prompt(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+    await _reset_state_if_needed(state)
+    await state.set_state(AdminMaterialsStates.waiting_create_payload)
+    instructions = (
+        "<b>Добавление категории</b>\n\n"
+        "Формат: <code>slug=podcasts;title=Подкасты;content_key=menu.materials.podcasts;parent=archive;requires_access=true;sort=10</code>.\n\n"
+        "• <code>slug</code> — уникальный идентификатор.\n"
+        "• <code>title</code> — название кнопки.\n"
+        "• <code>content_key</code> — ключ в content.yaml.\n"
+        "• <code>parent</code> — slug родителя (оставь пустым для верхнего уровня).\n"
+        "• <code>requires_access</code> — true/false (по умолчанию true).\n"
+        "• <code>sort</code> — порядок сортировки (опционально).\n\n"
+        "Отправь параметры одним сообщением или нажми «Отмена»."
+    )
+    await message.answer(
+        instructions,
+        reply_markup=cancel_keyboard(),
+        parse_mode=ParseMode.HTML,
+    )
+
+
+@router.message(AdminMaterialsStates.waiting_create_payload, F.text.len() > 0)
+async def admin_materials_receive_create(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        await state.clear()
+        return
+
+    payload = _parse_materials_payload(message.text)
+    slug = payload.get("slug")
+    title = payload.get("title")
+    content_key = payload.get("content_key")
+
+    if not slug or not title or not content_key:
+        await message.answer(
+            "Укажи <code>slug</code>, <code>title</code> и <code>content_key</code> в формате <code>ключ=значение</code>.",
+            reply_markup=cancel_keyboard(),
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    existing = await get_material_category_by_slug(slug, include_inactive=True)
+    if existing:
+        await message.answer(
+            "Категория с таким slug уже существует. Укажи другой идентификатор.",
+            reply_markup=cancel_keyboard(),
+        )
+        return
+
+    parent_slug = payload.get("parent") or None
+    parent_id = None
+    if parent_slug:
+        parent_row = await get_material_category_by_slug(parent_slug, include_inactive=True)
+        if not parent_row:
+            await message.answer(
+                f"Родительская категория <code>{html.escape(parent_slug)}</code> не найдена.",
+                reply_markup=cancel_keyboard(),
+                parse_mode=ParseMode.HTML,
+            )
+            return
+        parent_id = parent_row["id"]
+
+    try:
+        requires_access = _parse_optional_bool(payload.get("requires_access"))
+        sort_order = _parse_optional_int(payload.get("sort"))
+    except ValueError:
+        await message.answer(
+            "Поля <code>requires_access</code> и <code>sort</code> должны быть булевым и числом соответственно.",
+            reply_markup=cancel_keyboard(),
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    await execute(
+        """
+        INSERT INTO material_categories (slug, title, content_key, parent_id, requires_access, sort_order, is_active, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, COALESCE($6, 100), TRUE, NOW(), NOW())
+        """,
+        slug,
+        title,
+        content_key,
+        parent_id,
+        True if requires_access is None else requires_access,
+        sort_order,
+    )
+
+    await log_admin_action(
+        message.from_user.id,
+        "materials_category_create",
+        {
+            "slug": slug,
+            "title": title,
+            "content_key": content_key,
+            "parent": parent_slug,
+        },
+    )
+
+    await state.clear()
+    await message.answer(
+        f"Категория «{title}» добавлена ✅",
+        reply_markup=admin_materials_keyboard(),
+    )
+
+
+@router.message(F.text == ADMIN_MATERIALS_UPDATE)
+async def admin_materials_update_prompt(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+    await _reset_state_if_needed(state)
+    await state.set_state(AdminMaterialsStates.waiting_update_payload)
+    instructions = (
+        "<b>Обновление категории</b>\n\n"
+        "Формат: <code>slug=podcasts;title=Новый заголовок;requires_access=false;sort=20;parent=archive;active=true</code>.\n\n"
+        "Укажи только те поля, которые нужно изменить. Допустимые ключи: <code>title</code>, <code>content_key</code>, <code>parent</code>,"
+        " <code>requires_access</code>, <code>sort</code>, <code>active</code>."
+    )
+    await message.answer(
+        instructions,
+        reply_markup=cancel_keyboard(),
+        parse_mode=ParseMode.HTML,
+    )
+
+
+@router.message(AdminMaterialsStates.waiting_update_payload, F.text.len() > 0)
+async def admin_materials_receive_update(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        await state.clear()
+        return
+
+    payload = _parse_materials_payload(message.text)
+    slug = payload.get("slug")
+    if not slug:
+        await message.answer(
+            "Укажи <code>slug</code> категории, которую нужно обновить.",
+            reply_markup=cancel_keyboard(),
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    category = await get_material_category_by_slug(slug, include_inactive=True)
+    if not category:
+        await message.answer(
+            f"Категория <code>{html.escape(slug)}</code> не найдена.",
+            reply_markup=cancel_keyboard(),
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    updates: list[str] = []
+    params: list[Any] = [slug]
+    idx = 2
+
+    title = payload.get("title")
+    if title:
+        updates.append(f"title=${idx}")
+        params.append(title)
+        idx += 1
+
+    content_key = payload.get("content_key")
+    if content_key:
+        updates.append(f"content_key=${idx}")
+        params.append(content_key)
+        idx += 1
+
+    if "parent" in payload:
+        parent_slug = payload.get("parent") or None
+        parent_id = None
+        if parent_slug:
+            if parent_slug == slug:
+                await message.answer(
+                    "Категория не может ссылаться на саму себя как на родителя.",
+                    reply_markup=cancel_keyboard(),
+                )
+                return
+            parent_row = await get_material_category_by_slug(parent_slug, include_inactive=True)
+            if not parent_row:
+                await message.answer(
+                    f"Родительская категория <code>{html.escape(parent_slug)}</code> не найдена.",
+                    reply_markup=cancel_keyboard(),
+                    parse_mode=ParseMode.HTML,
+                )
+                return
+            parent_id = parent_row["id"]
+        updates.append(f"parent_id=${idx}")
+        params.append(parent_id)
+        idx += 1
+
+    try:
+        if "requires_access" in payload:
+            requires_access = _parse_optional_bool(payload.get("requires_access"))
+            if requires_access is None:
+                requires_access = True
+            updates.append(f"requires_access=${idx}")
+            params.append(requires_access)
+            idx += 1
+
+        if "sort" in payload:
+            sort_order = _parse_optional_int(payload.get("sort"))
+            updates.append(f"sort_order=${idx}")
+            params.append(sort_order if sort_order is not None else category.get("sort_order", 100))
+            idx += 1
+
+        if "active" in payload:
+            active_value = _parse_optional_bool(payload.get("active"))
+            if active_value is None:
+                active_value = True
+            updates.append(f"is_active=${idx}")
+            params.append(active_value)
+            idx += 1
+    except ValueError:
+        await message.answer(
+            "Не удалось разобрать булевые или числовые параметры. Проверь значения и попробуй снова.",
+            reply_markup=cancel_keyboard(),
+        )
+        return
+
+    if not updates:
+        await message.answer(
+            "Укажи хотя бы одно поле для обновления.",
+            reply_markup=cancel_keyboard(),
+        )
+        return
+
+    updates.append("updated_at=NOW()")
+    query = f"UPDATE material_categories SET {', '.join(updates)} WHERE slug=$1"
+    await execute(query, *params)
+
+    await log_admin_action(
+        message.from_user.id,
+        "materials_category_update",
+        {"slug": slug, **{k: v for k, v in payload.items() if k != "slug"}},
+    )
+
+    await state.clear()
+    await message.answer(
+        f"Категория <code>{html.escape(slug)}</code> обновлена ✅",
+        reply_markup=admin_materials_keyboard(),
+        parse_mode=ParseMode.HTML,
+    )
+
+
+@router.message(F.text == ADMIN_MATERIALS_DELETE)
+async def admin_materials_delete_prompt(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+    await _reset_state_if_needed(state)
+    await state.set_state(AdminMaterialsStates.waiting_delete_slug)
+    slugs = await _collect_all_material_slugs()
+    keyboard = (
+        admin_materials_categories_keyboard(slugs)
+        if slugs
+        else admin_materials_keyboard()
+    )
+    await message.answer(
+        "<b>Удаление категории</b>\n\nУкажи slug категории, которую нужно удалить.",
+        reply_markup=keyboard,
+        parse_mode=ParseMode.HTML,
+    )
+
+
+@router.message(AdminMaterialsStates.waiting_delete_slug, F.text.len() > 0)
+async def admin_materials_receive_delete_slug(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        await state.clear()
+        return
+
+    slug = (message.text or "").strip()
+    category = await get_material_category_by_slug(slug, include_inactive=True)
+    if not category:
+        await message.answer(
+            f"Категория <code>{html.escape(slug)}</code> не найдена. Проверь slug и попробуй снова.",
+            reply_markup=cancel_keyboard(),
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    await state.update_data(materials_delete_slug=slug, materials_delete_title=category["title"])
+    await state.set_state(AdminMaterialsStates.waiting_delete_confirm)
+    await message.answer(
+        (
+            f"Удалить категорию «{category['title']}» (<code>{html.escape(slug)}</code>)?\n"
+            "Ответь «Да», чтобы подтвердить, или нажми «Отмена»."
+        ),
+        reply_markup=cancel_keyboard(),
+        parse_mode=ParseMode.HTML,
+    )
+
+
+@router.message(AdminMaterialsStates.waiting_delete_confirm, F.text.len() > 0)
+async def admin_materials_delete_confirm(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        await state.clear()
+        return
+
+    answer = (message.text or "").strip().lower()
+    data = await state.get_data()
+    slug = (data or {}).get("materials_delete_slug")
+    title = (data or {}).get("materials_delete_title", slug)
+
+@router.message(F.text == ADMIN_BROADCAST_NEW_BUTTON)
+async def admin_broadcast_start_new(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+    await _reset_state_if_needed(state)
+    await send_admin_broadcast_segment_prompt(message)
+
+
+@router.message(F.text == BACK_TO_BROADCAST)
+async def admin_broadcast_back_to_menu(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+
+    deleted = await fetchrow(
+        "DELETE FROM material_categories WHERE slug=$1 RETURNING id",
+        slug,
+    )
+    await state.clear()
+
+    if not deleted:
+        await message.answer(
+            "Категория уже удалена или не найдена.",
+            reply_markup=admin_materials_keyboard(),
+        )
+        return
+
+    await log_admin_action(
+        message.from_user.id,
+        "materials_category_delete",
+        {"slug": slug},
+    )
+
+    await message.answer(
+        f"Категория «{title}» удалена ✅",
+        reply_markup=admin_materials_keyboard(),
+    )
+
+
+@router.message(F.text == ADMIN_MATERIALS_GRANT)
+async def admin_materials_grant_prompt(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+    await _reset_state_if_needed(state)
+    await state.set_state(AdminMaterialsStates.waiting_grant_payload)
+    instructions = (
+        "<b>Выдача персонального доступа</b>\n\n"
+        "Формат: <code>slug=podcasts;tg=123456789;days=30</code>.\n\n"
+        "• <code>slug</code> — идентификатор категории.\n"
+        "• <code>tg</code> или <code>user</code> — Telegram ID или внутренний id участницы.\n"
+        "• <code>days</code> или <code>expires</code> — срок действия (опционально)."
+    )
+    await message.answer(
+        instructions,
+        reply_markup=cancel_keyboard(),
+        parse_mode=ParseMode.HTML,
+    )
+
+
+@router.message(AdminMaterialsStates.waiting_grant_payload, F.text.len() > 0)
+async def admin_materials_receive_grant(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        await state.clear()
+        return
+
+    payload = _parse_materials_payload(message.text)
+    slug = payload.get("slug")
+    if not slug:
+        await message.answer(
+            "Укажи <code>slug</code> категории для выдачи доступа.",
+            reply_markup=cancel_keyboard(),
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    category = await get_material_category_by_slug(slug, include_inactive=True)
+    if not category:
+        await message.answer(
+            f"Категория <code>{html.escape(slug)}</code> не найдена.",
+            reply_markup=cancel_keyboard(),
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    user_row: Optional[dict] = None
+    user_error = ""
+
+    tg_raw = payload.get("tg")
+    user_id_raw = payload.get("user") or payload.get("user_id")
+
+@router.message(F.text == ADMIN_MATERIALS_BUTTON)
+async def admin_materials_menu(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+    await _reset_state_if_needed(state)
+    await send_admin_materials_menu(message)
+
+
+@router.message(F.text.func(lambda text: _admin_broadcast_toggle_key_from_text(text) is not None))
+async def admin_broadcast_toggle_setting(message: types.Message):
+    if not is_admin_id(message.from_user.id):
+        return
+    if user_error:
+        await message.answer(
+            user_error,
+            reply_markup=cancel_keyboard(),
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    expires_at = None
+    if payload.get("days"):
+        try:
+            days = int(payload.get("days"))
+            expires_at = now_utc() + timedelta(days=days)
+        except ValueError:
+            await message.answer(
+                "Параметр <code>days</code> должен быть числом.",
+                reply_markup=cancel_keyboard(),
+                parse_mode=ParseMode.HTML,
+            )
+            return
+    elif payload.get("expires"):
+        raw = payload.get("expires")
+        try:
+            expires_at = datetime.fromisoformat(raw)
+        except ValueError:
+            await message.answer(
+                "Не удалось разобрать дату <code>expires</code>. Используй ISO-формат, например 2024-12-31T23:59:00.",
+                reply_markup=cancel_keyboard(),
+                parse_mode=ParseMode.HTML,
+            )
+            return
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        else:
+            expires_at = expires_at.astimezone(timezone.utc)
+
+    await execute(
+        """
+        INSERT INTO material_category_access (category_id, user_id, granted_by, granted_at, expires_at)
+        VALUES ($1, $2, $3, NOW(), $4)
+        ON CONFLICT (category_id, user_id)
+        DO UPDATE SET granted_by=EXCLUDED.granted_by, granted_at=EXCLUDED.granted_at, expires_at=EXCLUDED.expires_at
+        """,
+        category["id"],
+        user_row["id"],
+        message.from_user.id,
+        expires_at,
+    )
+
+    await log_admin_action(
+        message.from_user.id,
+        "materials_grant_access",
+        {
+            "slug": slug,
+            "user_id": user_row["id"],
+            "expires_at": expires_at.isoformat() if expires_at else None,
+        },
+    )
+
+    await state.clear()
+    expires_hint = (
+        f" до {expires_at.strftime('%Y-%m-%d %H:%M')} UTC" if expires_at else ""
+    )
+    await message.answer(
+        f"Доступ к «{category['title']}» выдан{expires_hint} ✅",
+        reply_markup=admin_materials_keyboard(),
+    )
+
+
+@router.message(F.text == ADMIN_MATERIALS_REVOKE)
+async def admin_materials_revoke_prompt(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+    await _reset_state_if_needed(state)
+    await state.set_state(AdminMaterialsStates.waiting_revoke_payload)
+    instructions = (
+        "<b>Отзыв персонального доступа</b>\n\n"
+        "Формат: <code>slug=podcasts;tg=123456789</code> или <code>slug=archive;user=42</code>."
+    )
+    await message.answer(
+        instructions,
+        reply_markup=cancel_keyboard(),
+        parse_mode=ParseMode.HTML,
+    )
+
+
+@router.message(AdminMaterialsStates.waiting_revoke_payload, F.text.len() > 0)
+async def admin_materials_receive_revoke(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        await state.clear()
+        return
+
+    payload = _parse_materials_payload(message.text)
+    slug = payload.get("slug")
+    if not slug:
+        await message.answer(
+            "Укажи <code>slug</code> категории.",
+            reply_markup=cancel_keyboard(),
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    category = await get_material_category_by_slug(slug, include_inactive=True)
+    if not category:
+        await message.answer(
+            f"Категория <code>{html.escape(slug)}</code> не найдена.",
+            reply_markup=cancel_keyboard(),
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    user_row: Optional[dict] = None
+    user_error = ""
+    tg_raw = payload.get("tg")
+    user_id_raw = payload.get("user") or payload.get("user_id")
+
+    if tg_raw:
+        try:
+            tg_id = int(tg_raw)
+        except ValueError:
+            user_error = "Telegram ID должен быть числом."
+        else:
+            user_row = await fetchrow(
+                "SELECT * FROM users WHERE tg_user_id=$1",
+                tg_id,
+            )
+            if not user_row:
+                user_error = f"Пользователь с tg-id {tg_id} не найден."
+    elif user_id_raw:
+        try:
+            internal_id = int(user_id_raw)
+        except ValueError:
+            user_error = "Поле user должно быть числом."
+        else:
+            user_row = await fetchrow(
+                "SELECT * FROM users WHERE id=$1",
+                internal_id,
+            )
+            if not user_row:
+                user_error = f"Пользователь с id {internal_id} не найден."
+    else:
+        user_error = "Укажи <code>tg</code> или <code>user</code> для отзыва доступа."
+
+    if user_error:
+        await message.answer(
+            user_error,
+            reply_markup=cancel_keyboard(),
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    removed = await fetchrow(
+        "DELETE FROM material_category_access WHERE category_id=$1 AND user_id=$2 RETURNING id",
+        category["id"],
+        user_row["id"],
+    )
+
+    await state.clear()
+
+    if not removed:
+        await message.answer(
+            "Для этой участницы не было активных доступов.",
+            reply_markup=admin_materials_keyboard(),
+        )
+        return
+
+    await log_admin_action(
+        message.from_user.id,
+        "materials_revoke_access",
+        {"slug": slug, "user_id": user_row["id"]},
+    )
+
+    await message.answer(
+        "Доступ отозван ✅",
+        reply_markup=admin_materials_keyboard(),
+    )
+
 
 @router.message(F.text == ADMIN_CONTENT_MENU)
 async def admin_content_menu(message: types.Message, state: FSMContext):
@@ -7034,7 +10098,14 @@ async def admin_content_quick_reply_update(message: types.Message, state: FSMCon
     if not is_admin_id(message.from_user.id):
         return
 
-    if await state.get_state():
+    current_state = await state.get_state()
+    allowed_states = {
+        AdminContentStates.waiting_view_key.state,
+        AdminContentStates.waiting_history_key.state,
+        AdminContentStates.waiting_history_choice.state,
+    }
+
+    if current_state and current_state not in allowed_states:
         return
 
     if (message.text or "").strip() == ADMIN_CONTENT_HISTORY:
@@ -7071,6 +10142,14 @@ async def admin_content_quick_reply_update(message: types.Message, state: FSMCon
         reply_markup=admin_content_keyboard(),
         disable_web_page_preview=True,
     )
+
+    if current_state == AdminContentStates.waiting_view_key.state:
+        await state.set_state(AdminContentStates.waiting_view_key)
+    elif current_state in (
+        AdminContentStates.waiting_history_key.state,
+        AdminContentStates.waiting_history_choice.state,
+    ):
+        await state.clear()
 
 
 @router.message(
@@ -8480,6 +11559,7 @@ async def fallback(message: types.Message, state: FSMContext):
     if cur in (
         HWStates.waiting_answer,
         HWStates.waiting_feedback,
+        HWStates.waiting_question,
         RegistrationStates.waiting_name,
         RegistrationStates.waiting_email,
         RegistrationStates.waiting_phone,
@@ -8492,6 +11572,12 @@ async def fallback(message: types.Message, state: FSMContext):
         AdminContentStates.waiting_history_key,
         AdminContentStates.waiting_history_choice,
         AdminContentStates.waiting_import_file,
+        AdminMaterialsStates.waiting_create_payload,
+        AdminMaterialsStates.waiting_update_payload,
+        AdminMaterialsStates.waiting_delete_slug,
+        AdminMaterialsStates.waiting_delete_confirm,
+        AdminMaterialsStates.waiting_grant_payload,
+        AdminMaterialsStates.waiting_revoke_payload,
     ):
         return
 
