@@ -41,6 +41,8 @@ from keyboards import (
     BROADCAST_EXPIRED_BUTTON,
     BROADCAST_LEADS_BUTTON,
     BROADCAST_MEMBERS_BUTTON,
+    BROADCAST_KEYS_BUTTON,
+    BROADCAST_PRACTICE_BUTTON,
     BROADCAST_TEMPLATES_BUTTON,
     LEARNING_PROGRESS_BUTTON,
     MATERIALS_CATALOG_BUTTON,
@@ -52,6 +54,7 @@ from keyboards import (
     admin_broadcast_segments_keyboard,
     admin_main_keyboard,
     admin_materials_keyboard,
+    admin_materials_categories_keyboard,
     admin_payments_keyboard,
     admin_settings_keyboard,
     admin_user_card_keyboard,
@@ -163,6 +166,7 @@ def test_admin_broadcast_segments_keyboard_layout():
     assert rows == [
         [BROADCAST_ALL_BUTTON, BROADCAST_LEADS_BUTTON],
         [BROADCAST_MEMBERS_BUTTON, BROADCAST_EXPIRED_BUTTON],
+        [BROADCAST_KEYS_BUTTON, BROADCAST_PRACTICE_BUTTON],
         [BACK_TO_BROADCAST, BACK_TO_ADMIN],
         [BACK_TO_MAIN],
     ]
