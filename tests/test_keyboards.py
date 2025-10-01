@@ -9,6 +9,13 @@ from keyboards import (
     ADMIN_CONTENT_MENU,
     ADMIN_TEXTS_ENTRY,
     ADMIN_DEBUG_BUTTON,
+    ADMIN_MATERIALS_BUTTON,
+    ADMIN_MATERIALS_LIST,
+    ADMIN_MATERIALS_CREATE,
+    ADMIN_MATERIALS_UPDATE,
+    ADMIN_MATERIALS_DELETE,
+    ADMIN_MATERIALS_GRANT,
+    ADMIN_MATERIALS_REVOKE,
     ADMIN_PAYMENTS_BUTTON,
     ADMIN_PAYMENTS_CLOSE_WINDOW,
     ADMIN_PAYMENTS_CONFIRM_ACCESS,
@@ -23,6 +30,7 @@ from keyboards import (
     BACK_TO_ADMIN,
     BACK_TO_BEHAVIOR,
     BACK_TO_MAIN,
+    BACK_TO_MATERIALS,
     BROADCAST_ALL_BUTTON,
     BROADCAST_EXPIRED_BUTTON,
     BROADCAST_LEADS_BUTTON,
@@ -31,13 +39,13 @@ from keyboards import (
     BROADCAST_TEMPLATES_BUTTON,
     LEARNING_PROGRESS_BUTTON,
     MATERIALS_CATALOG_BUTTON,
-    MATERIALS_PRACTICES_BUTTON,
-    MATERIALS_CHALLENGES_BUTTON,
     materials_menu_keyboard,
     learning_menu_keyboard,
     admin_behavior_keyboard,
     admin_broadcast_keyboard,
     admin_main_keyboard,
+    admin_materials_keyboard,
+    admin_materials_categories_keyboard,
     admin_payments_keyboard,
     admin_settings_keyboard,
 )
@@ -72,12 +80,32 @@ def test_admin_main_keyboard_layout():
     assert rows == [
         [ADMIN_USERS_BUTTON],
         [ADMIN_BROADCAST_BUTTON, ADMIN_CONTENT_MENU],
-        [ADMIN_BEHAVIOR_BUTTON, ADMIN_SETTINGS_BUTTON],
-        [ADMIN_STATS_BUTTON, ADMIN_DEBUG_BUTTON],
+        [ADMIN_MATERIALS_BUTTON, ADMIN_BEHAVIOR_BUTTON],
+        [ADMIN_SETTINGS_BUTTON, ADMIN_STATS_BUTTON],
+        [ADMIN_DEBUG_BUTTON],
         [BACK_TO_MAIN],
     ]
     flattened = [text for row in rows for text in row]
     assert ADMIN_PAYMENTS_BUTTON not in flattened
+
+
+def test_admin_materials_keyboard_layout():
+    rows = _keyboard_texts(admin_materials_keyboard())
+    assert rows == [
+        [ADMIN_MATERIALS_LIST],
+        [ADMIN_MATERIALS_CREATE, ADMIN_MATERIALS_UPDATE],
+        [ADMIN_MATERIALS_DELETE],
+        [ADMIN_MATERIALS_GRANT, ADMIN_MATERIALS_REVOKE],
+        [BACK_TO_ADMIN, BACK_TO_MAIN],
+    ]
+
+
+def test_admin_materials_categories_keyboard_appends_navigation():
+    rows = _keyboard_texts(
+        admin_materials_categories_keyboard(["podcasts", "archive.week1"])
+    )
+    assert rows[:-1] == [["podcasts"], ["archive.week1"]]
+    assert rows[-1] == [BACK_TO_ADMIN, BACK_TO_MAIN]
 
 
 def test_admin_behavior_keyboard_contains_payments_button():
@@ -117,36 +145,42 @@ def test_learning_menu_keyboard_layout():
     ]
 
 
-def test_materials_menu_keyboard_all_sections_available():
+def test_materials_menu_keyboard_root_layout():
     rows = _keyboard_texts(
         materials_menu_keyboard(weekly_enabled=True, schedule_enabled=True)
     )
     assert rows == [
         ["Материалы недели", MATERIALS_CATALOG_BUTTON],
-        [MATERIALS_PRACTICES_BUTTON, MATERIALS_CHALLENGES_BUTTON],
         ["Расписание"],
         [BACK_TO_MAIN],
     ]
 
 
-def test_materials_menu_keyboard_highlights_locked_sections():
+def test_materials_menu_keyboard_root_shows_lock_icons():
     rows = _keyboard_texts(
         materials_menu_keyboard(weekly_enabled=False, schedule_enabled=False)
     )
-    assert rows[0][0] == "Материалы недели 🔒"
-    assert rows[0][1] == MATERIALS_CATALOG_BUTTON
-    assert rows[1] == [MATERIALS_PRACTICES_BUTTON, MATERIALS_CHALLENGES_BUTTON]
-    assert rows[2] == ["Расписание 🔒"]
-    assert rows[3] == [BACK_TO_MAIN]
+    assert rows[0] == ["Материалы недели 🔒", MATERIALS_CATALOG_BUTTON]
+    assert rows[1] == ["Расписание 🔒"]
+    assert rows[2] == [BACK_TO_MAIN]
 
 
-def test_materials_menu_keyboard_mixed_flags():
+def test_materials_menu_keyboard_catalog_submenu_marks_state():
+    submenu_items = [
+        {"title": "Подкасты", "locked": False, "has_children": False},
+        {"title": "Архив недель", "locked": True, "has_children": True},
+    ]
     rows = _keyboard_texts(
-        materials_menu_keyboard(weekly_enabled=True, schedule_enabled=False)
+        materials_menu_keyboard(
+            weekly_enabled=True,
+            schedule_enabled=True,
+            submenu="catalog",
+            submenu_items=submenu_items,
+        )
     )
-    assert rows[0] == ["Материалы недели", MATERIALS_CATALOG_BUTTON]
-    assert rows[1] == [MATERIALS_PRACTICES_BUTTON, MATERIALS_CHALLENGES_BUTTON]
-    assert rows[2] == ["Расписание 🔒"]
+    assert rows[0] == ["Подкасты"]
+    assert rows[1] == ["Архив недель 🔒"]
+    assert rows[2] == [BACK_TO_MATERIALS]
     assert rows[3] == [BACK_TO_MAIN]
 
 

@@ -50,6 +50,8 @@ from keyboards import (
     admin_behavior_keyboard,
     admin_onboarding_steps_keyboard,
     admin_onboarding_delete_keyboard,
+    admin_materials_keyboard,
+    admin_materials_categories_keyboard,
     admin_broadcast_keyboard,
     admin_broadcast_history_keyboard,
     admin_broadcast_confirm_keyboard,
@@ -58,6 +60,7 @@ from keyboards import (
     BROADCAST_TEMPLATE_PREFIX,
     BACK_TO_MAIN,
     BACK_TO_LEARNING,
+    BACK_TO_MATERIALS,
     BACK_TO_ADMIN,
     BACK_TO_TEXT_GROUPS,
     BACK_TO_LESSONS,
@@ -107,6 +110,13 @@ from keyboards import (
     ADMIN_DEBUG_BUTTON,
     ADMIN_SETTINGS_BUTTON,
     ADMIN_PAYMENTS_BUTTON,
+    ADMIN_MATERIALS_BUTTON,
+    ADMIN_MATERIALS_LIST,
+    ADMIN_MATERIALS_CREATE,
+    ADMIN_MATERIALS_UPDATE,
+    ADMIN_MATERIALS_DELETE,
+    ADMIN_MATERIALS_GRANT,
+    ADMIN_MATERIALS_REVOKE,
     ADMIN_BROADCAST_REMINDER_TEXT,
     admin_users_segments_keyboard,
     admin_users_pagination_keyboard,
@@ -1164,6 +1174,15 @@ class AdminPaymentsStates(StatesGroup):
     waiting_access_user = State()
     waiting_revoke_user = State()
     waiting_payment_review = State()
+
+
+class AdminMaterialsStates(StatesGroup):
+    waiting_create_payload = State()
+    waiting_update_payload = State()
+    waiting_delete_slug = State()
+    waiting_delete_confirm = State()
+    waiting_grant_payload = State()
+    waiting_revoke_payload = State()
 
 
 class TestStates(StatesGroup):
@@ -2598,10 +2617,14 @@ async def answer_with_main_menu(
     *,
     section: str = "root",
     from_callback: bool = False,
+    custom_keyboard: ReplyKeyboardMarkup | None = None,
 ) -> None:
     """Отправляет или обновляет сообщение с главным меню."""
     user_row = user or await get_user_with_id(message.from_user.id)
-    kb = await build_menu_keyboard(user=user_row, is_admin=is_admin, section=section)
+    if custom_keyboard is not None:
+        kb = custom_keyboard
+    else:
+        kb = await build_menu_keyboard(user=user_row, is_admin=is_admin, section=section)
     await message.answer(text, reply_markup=kb)
 
 
@@ -3011,14 +3034,260 @@ async def send_learning_progress_section(
     await message.answer(progress_text, reply_markup=keyboard)
 
 
+def _normalize_materials_choice(text: str | None) -> str:
+    if not text:
+        return ""
+    normalized = text.strip()
+    for suffix in (" 🔒", " ▶️"):
+        if normalized.endswith(suffix):
+            normalized = normalized[: -len(suffix)].rstrip()
+    return normalized
+
+
+async def _materials_get_state(state: FSMContext | None) -> dict:
+    if state is None:
+        return {"stack": [], "options": {}}
+    data = await state.get_data()
+    return data.get("materials_menu", {"stack": [], "options": {}})
+
+
+async def _materials_update_state(
+    state: FSMContext | None,
+    *,
+    stack: list[str],
+    options: dict[str, dict],
+) -> None:
+    if state is None:
+        return
+    await state.update_data(materials_menu={"stack": stack, "options": options})
+
+
+async def _materials_reset_state(state: FSMContext | None) -> None:
+    await _materials_update_state(state, stack=[], options={})
+
+
+async def get_material_category_by_slug(
+    slug: str,
+    *,
+    include_inactive: bool = False,
+) -> Optional[dict]:
+    if not slug:
+        return None
+    row = await fetchrow(
+        """
+        SELECT c.*, parent.slug AS parent_slug,
+               EXISTS (
+                   SELECT 1 FROM material_categories child
+                   WHERE child.parent_id = c.id AND child.is_active
+               ) AS has_children
+        FROM material_categories c
+        LEFT JOIN material_categories parent ON parent.id = c.parent_id
+        WHERE c.slug=$1
+        """,
+        slug,
+    )
+    if not row:
+        return None
+    if not include_inactive and not row["is_active"]:
+        return None
+    return dict(row)
+
+
+async def list_material_categories(
+    parent_slug: str | None = None,
+    *,
+    include_inactive: bool = False,
+) -> list[dict]:
+    params: list[Any] = []
+    where_clauses: list[str] = []
+
+    if parent_slug:
+        parent_row = await fetchrow(
+            "SELECT id FROM material_categories WHERE slug=$1",
+            parent_slug,
+        )
+        if not parent_row:
+            return []
+        where_clauses.append("c.parent_id = $1")
+        params.append(parent_row["id"])
+    else:
+        where_clauses.append("c.parent_id IS NULL")
+
+    if not include_inactive:
+        where_clauses.append("c.is_active")
+
+    where_sql = " AND ".join(where_clauses) if where_clauses else "TRUE"
+
+    query = f"""
+        SELECT c.*, parent.slug AS parent_slug,
+               EXISTS (
+                   SELECT 1 FROM material_categories child
+                   WHERE child.parent_id = c.id AND child.is_active
+               ) AS has_children
+        FROM material_categories c
+        LEFT JOIN material_categories parent ON parent.id = c.parent_id
+        WHERE {where_sql}
+        ORDER BY c.sort_order, c.title
+    """
+
+    rows = await fetch(query, *params)
+    result = [dict(row) for row in rows]
+    if not include_inactive:
+        result = [row for row in result if row.get("is_active")]
+    return result
+
+
+async def user_has_material_access(
+    user_row: Optional[dict],
+    category: dict,
+    *,
+    is_admin: bool = False,
+) -> bool:
+    if not category:
+        return False
+    if is_admin:
+        return True
+    if not category.get("requires_access", True):
+        return True
+    if not user_row:
+        return False
+    if await is_member(user_row):
+        return True
+    access_row = await fetchrow(
+        """
+        SELECT 1
+        FROM material_category_access
+        WHERE category_id=$1 AND user_id=$2
+          AND (expires_at IS NULL OR expires_at > NOW())
+        """,
+        category["id"],
+        user_row["id"],
+    )
+    return access_row is not None
+
+
+async def _build_materials_keyboard(
+    user_row: Optional[dict],
+    *,
+    submenu: str | None,
+    is_admin: bool,
+) -> tuple[ReplyKeyboardMarkup, dict[str, dict]]:
+    flags = await get_menu_flags()
+    weekly_enabled = flags.get("show_weekly_materials", True)
+    schedule_enabled = flags.get("show_schedule", True)
+
+    if submenu is None:
+        keyboard = materials_menu_keyboard(
+            weekly_enabled=weekly_enabled,
+            schedule_enabled=schedule_enabled,
+        )
+        return keyboard, {}
+
+    parent_slug = None if submenu == "catalog" else submenu
+    categories = await list_material_categories(parent_slug)
+    submenu_items: list[dict] = []
+    options: dict[str, dict] = {}
+
+    for category in categories:
+        accessible = await user_has_material_access(
+            user_row,
+            category,
+            is_admin=is_admin,
+        )
+        submenu_items.append(
+            {
+                "title": category["title"],
+                "locked": not accessible,
+                "has_children": bool(category.get("has_children")),
+            }
+        )
+        options[_normalize_materials_choice(category["title"])] = {
+            "slug": category["slug"],
+            "locked": not accessible,
+            "has_children": bool(category.get("has_children")),
+        }
+
+    keyboard = materials_menu_keyboard(
+        weekly_enabled=weekly_enabled,
+        schedule_enabled=schedule_enabled,
+        submenu=submenu,
+        submenu_items=submenu_items,
+    )
+    return keyboard, options
+
+
+async def _category_stack_for(category: dict) -> list[str]:
+    stack: list[str] = []
+    current = category
+    visited: set[str] = set()
+
+    while current.get("parent_slug"):
+        parent_slug = current["parent_slug"]
+        if parent_slug in visited:
+            break
+        visited.add(parent_slug)
+        stack.append(parent_slug)
+        parent_row = await get_material_category_by_slug(
+            parent_slug,
+            include_inactive=True,
+        )
+        if not parent_row:
+            break
+        current = parent_row
+
+    stack.reverse()
+
+    if category.get("parent_id"):
+        stack.insert(0, "catalog")
+    elif not stack:
+        stack = ["catalog"]
+
+    return stack
+
+
+async def send_materials_root_section(
+    message: types.Message,
+    user: Optional[dict],
+    is_admin: bool,
+    *,
+    state: FSMContext | None = None,
+    from_callback: bool = False,
+) -> None:
+    user_row = user or await get_user_with_id(message.from_user.id)
+    keyboard, _ = await _build_materials_keyboard(
+        user_row,
+        submenu=None,
+        is_admin=is_admin,
+    )
+    await _materials_reset_state(state)
+
+    prompt_key, default_text = _MENU_SECTION_PROMPTS.get(
+        "materials",
+        _MENU_SECTION_PROMPTS["root"],
+    )
+    prompt_text = await get_content(prompt_key, default_text)
+
+    await answer_with_main_menu(
+        message,
+        user_row,
+        is_admin,
+        prompt_text,
+        section="materials",
+        from_callback=from_callback,
+        custom_keyboard=keyboard,
+    )
+
+
 async def send_weekly_materials_section(
     message: types.Message,
     user: Optional[dict],
     is_admin: bool,
     *,
+    state: FSMContext | None = None,
     from_callback: bool = False,
 ) -> None:
     user_row = user or await get_user_with_id(message.from_user.id)
+    await _materials_reset_state(state)
 
     weekly_enabled = await get_bool_setting(
         "show_weekly_materials", _ADMIN_SETTINGS_DEFAULTS["show_weekly_materials"]
@@ -3082,14 +3351,22 @@ async def send_materials_catalog_section(
     user: Optional[dict],
     is_admin: bool,
     *,
+    state: FSMContext | None = None,
     from_callback: bool = False,
 ) -> None:
     user_row = user or await get_user_with_id(message.from_user.id)
+    keyboard, options = await _build_materials_keyboard(
+        user_row,
+        submenu="catalog",
+        is_admin=is_admin,
+    )
+    await _materials_update_state(state, stack=["catalog"], options=options)
+
     catalog_text = await get_content(
         "menu.materials.catalog",
         (
             "Каталог материалов клуба.\n\n"
-            "Здесь собраны ссылки на базовые модули, записи эфиров и дополнительные форматы."
+            "Здесь собраны подкасты, практики, челленджи и архив недель. Выбирай раздел ниже."
         ),
     )
 
@@ -3100,6 +3377,7 @@ async def send_materials_catalog_section(
         catalog_text,
         section="materials",
         from_callback=from_callback,
+        custom_keyboard=keyboard,
     )
 
 
@@ -3108,23 +3386,15 @@ async def send_materials_practices_section(
     user: Optional[dict],
     is_admin: bool,
     *,
+    state: FSMContext | None = None,
     from_callback: bool = False,
 ) -> None:
-    user_row = user or await get_user_with_id(message.from_user.id)
-    practices_text = await get_content(
-        "menu.materials.practices",
-        (
-            "Практики клуба.\n\n"
-            "Возвращайся к упражнениям, чтобы закреплять результаты и отслеживать изменения."
-        ),
-    )
-
-    await answer_with_main_menu(
+    await send_materials_category_section(
         message,
-        user_row,
+        user,
         is_admin,
-        practices_text,
-        section="materials",
+        state=state,
+        category_slug="practices",
         from_callback=from_callback,
     )
 
@@ -3134,24 +3404,129 @@ async def send_materials_challenges_section(
     user: Optional[dict],
     is_admin: bool,
     *,
+    state: FSMContext | None = None,
+    from_callback: bool = False,
+) -> None:
+    await send_materials_category_section(
+        message,
+        user,
+        is_admin,
+        state=state,
+        category_slug="challenges",
+        from_callback=from_callback,
+    )
+
+
+async def send_materials_category_section(
+    message: types.Message,
+    user: Optional[dict],
+    is_admin: bool,
+    *,
+    state: FSMContext | None = None,
+    category_slug: str,
     from_callback: bool = False,
 ) -> None:
     user_row = user or await get_user_with_id(message.from_user.id)
-    challenges_text = await get_content(
-        "menu.materials.challenges",
-        (
-            "Челленджи и тематические марафоны.\n\n"
-            "Выбирай формат под задачу и отмечай прогресс в «Материалах недели»."
-        ),
+    category = await get_material_category_by_slug(category_slug)
+
+    if not category:
+        default_text = await get_content(
+            f"menu.materials.{category_slug}",
+            "Раздел в разработке. Мы скоро добавим материалы в этот блок.",
+        )
+        keyboard, options = await _build_materials_keyboard(
+            user_row,
+            submenu="catalog",
+            is_admin=is_admin,
+        )
+        await _materials_update_state(state, stack=["catalog"], options=options)
+        await answer_with_main_menu(
+            message,
+            user_row,
+            is_admin,
+            default_text,
+            section="materials",
+            from_callback=from_callback,
+            custom_keyboard=keyboard,
+        )
+        return
+
+    stack = await _category_stack_for(category)
+    submenu = stack[-1] if stack else None
+    has_access = await user_has_material_access(
+        user_row,
+        category,
+        is_admin=is_admin,
     )
+
+    if not has_access:
+        keyboard, options = await _build_materials_keyboard(
+            user_row,
+            submenu=submenu,
+            is_admin=is_admin,
+        )
+        await _materials_update_state(state, stack=stack, options=options)
+        locked_key = f"{category['content_key']}.locked"
+        locked_default = (
+            f"Раздел «{category['title']}» доступен участницам клуба.\n\n"
+            f"Оформи доступ в разделе «{ADMIN_PAYMENTS_BUTTON}», и бот пришлёт ссылки автоматически."
+        )
+        locked_text = await get_content(locked_key, locked_default)
+        await answer_with_main_menu(
+            message,
+            user_row,
+            is_admin,
+            locked_text,
+            section="materials",
+            from_callback=from_callback,
+            custom_keyboard=keyboard,
+        )
+        return
+
+    if category.get("has_children"):
+        submenu_slug = category["slug"]
+        keyboard, options = await _build_materials_keyboard(
+            user_row,
+            submenu=submenu_slug,
+            is_admin=is_admin,
+        )
+        stack_with_current = stack + [submenu_slug]
+        await _materials_update_state(state, stack=stack_with_current, options=options)
+        section_text = await get_content(
+            category["content_key"],
+            f"Раздел «{category['title']}» обновляется. Возвращайся позже, чтобы увидеть новые материалы.",
+        )
+        await answer_with_main_menu(
+            message,
+            user_row,
+            is_admin,
+            section_text,
+            section="materials",
+            from_callback=from_callback,
+            custom_keyboard=keyboard,
+        )
+        return
+
+    keyboard, options = await _build_materials_keyboard(
+        user_row,
+        submenu=submenu,
+        is_admin=is_admin,
+    )
+    await _materials_update_state(state, stack=stack, options=options)
+
+    content_default = (
+        f"Раздел «{category['title']}» скоро пополнится. Загляни позже, материалы уже в подготовке."
+    )
+    content_text = await get_content(category["content_key"], content_default)
 
     await answer_with_main_menu(
         message,
         user_row,
         is_admin,
-        challenges_text,
+        content_text,
         section="materials",
         from_callback=from_callback,
+        custom_keyboard=keyboard,
     )
 
 
@@ -4621,7 +4996,7 @@ async def menu_open_learning(message: types.Message, state: FSMContext):
 async def menu_open_materials(message: types.Message, state: FSMContext):
     await _reset_state_if_needed(state)
     user, is_admin = await _get_user_and_admin(message)
-    await send_menu_section(message, user, is_admin, "materials")
+    await send_materials_root_section(message, user, is_admin, state=state)
 
 
 @router.message(F.text == "👤 Профиль")
@@ -4925,28 +5300,84 @@ async def menu_admin_entry(message: types.Message, state: FSMContext):
 async def menu_weekly_materials(message: types.Message, state: FSMContext):
     await _reset_state_if_needed(state)
     user, is_admin = await _get_user_and_admin(message)
-    await send_weekly_materials_section(message, user, is_admin)
+    await send_weekly_materials_section(message, user, is_admin, state=state)
 
 
 @router.message(F.text == MATERIALS_CATALOG_BUTTON)
 async def menu_materials_catalog(message: types.Message, state: FSMContext):
     await _reset_state_if_needed(state)
     user, is_admin = await _get_user_and_admin(message)
-    await send_materials_catalog_section(message, user, is_admin)
+    await send_materials_catalog_section(message, user, is_admin, state=state)
+
+
+@router.message(F.text == BACK_TO_MATERIALS)
+async def menu_back_to_materials(message: types.Message, state: FSMContext):
+    await _reset_state_if_needed(state)
+    user, is_admin = await _get_user_and_admin(message)
+    menu_state = await _materials_get_state(state)
+    stack = list(menu_state.get("stack", []))
+
+    if not stack:
+        await send_materials_root_section(message, user, is_admin, state=state)
+        return
+
+    stack.pop()
+
+    if not stack:
+        await send_materials_root_section(message, user, is_admin, state=state)
+        return
+
+    submenu = stack[-1]
+    if submenu == "catalog":
+        await send_materials_catalog_section(message, user, is_admin, state=state)
+        return
+
+    await send_materials_category_section(
+        message,
+        user,
+        is_admin,
+        state=state,
+        category_slug=submenu,
+    )
 
 
 @router.message(F.text == MATERIALS_PRACTICES_BUTTON)
 async def menu_materials_practices(message: types.Message, state: FSMContext):
     await _reset_state_if_needed(state)
     user, is_admin = await _get_user_and_admin(message)
-    await send_materials_practices_section(message, user, is_admin)
+    await send_materials_practices_section(message, user, is_admin, state=state)
 
 
 @router.message(F.text == MATERIALS_CHALLENGES_BUTTON)
 async def menu_materials_challenges(message: types.Message, state: FSMContext):
     await _reset_state_if_needed(state)
     user, is_admin = await _get_user_and_admin(message)
-    await send_materials_challenges_section(message, user, is_admin)
+    await send_materials_challenges_section(message, user, is_admin, state=state)
+
+
+@router.message(
+    F.text.func(lambda text: bool(text and text.strip())),
+    F.text.func(lambda text: _normalize_materials_choice(text) != ""),
+)
+async def menu_materials_dynamic_choice(message: types.Message, state: FSMContext):
+    menu_state = await _materials_get_state(state)
+    options: dict[str, dict] = menu_state.get("options", {})
+    if not options:
+        return
+
+    normalized = _normalize_materials_choice(message.text)
+    option = options.get(normalized)
+    if not option:
+        return
+
+    user, is_admin = await _get_user_and_admin(message)
+    await send_materials_category_section(
+        message,
+        user,
+        is_admin,
+        state=state,
+        category_slug=option["slug"],
+    )
 
 
 @router.message(F.text.in_({"Расписание", "Расписание 🔒"}))
@@ -5231,6 +5662,20 @@ async def cancel_handler(message: types.Message, state: FSMContext):
         await message.answer(
             "Действие отменено. Возвращаю в раздел «Контент и тексты».",
             reply_markup=admin_content_keyboard(),
+        )
+        return
+
+    if current_state in {
+        AdminMaterialsStates.waiting_create_payload.state,
+        AdminMaterialsStates.waiting_update_payload.state,
+        AdminMaterialsStates.waiting_delete_slug.state,
+        AdminMaterialsStates.waiting_delete_confirm.state,
+        AdminMaterialsStates.waiting_grant_payload.state,
+        AdminMaterialsStates.waiting_revoke_payload.state,
+    } and is_admin:
+        await message.answer(
+            "Действие отменено. Возвращаю в раздел «Материалы».",
+            reply_markup=admin_materials_keyboard(),
         )
         return
 
@@ -6024,6 +6469,718 @@ async def admin_broadcast_use_template(message: types.Message, state: FSMContext
         body=body,
         template_title=template.get("title"),
     )
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Админка: материалы
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def _parse_materials_payload(text: str | None) -> dict[str, str]:
+    data: dict[str, str] = {}
+    if not text:
+        return data
+    for chunk in text.split(";"):
+        if "=" not in chunk:
+            continue
+        key, value = chunk.split("=", 1)
+        data[key.strip().lower()] = value.strip()
+    return data
+
+
+def _parse_optional_bool(value: str | None) -> Optional[bool]:
+    if value is None or value == "":
+        return None
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "y", "да", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "n", "нет", "off"}:
+        return False
+    raise ValueError("invalid_boolean")
+
+
+def _parse_optional_int(value: str | None) -> Optional[int]:
+    if value is None or value == "":
+        return None
+    return int(value)
+
+
+async def _material_access_counts() -> dict[int, int]:
+    rows = await fetch(
+        "SELECT category_id, COUNT(*) AS cnt FROM material_category_access GROUP BY category_id"
+    )
+    return {row["category_id"]: row["cnt"] for row in rows}
+
+
+async def _collect_all_material_slugs() -> list[str]:
+    slugs: list[str] = []
+
+    async def walk(category: dict) -> None:
+        slugs.append(category["slug"])
+        children = await list_material_categories(
+            category["slug"],
+            include_inactive=True,
+        )
+        for child in children:
+            await walk(child)
+
+    roots = await list_material_categories(include_inactive=True)
+    for root in roots:
+        await walk(root)
+    return slugs
+
+
+async def _render_materials_tree() -> str:
+    counts = await _material_access_counts()
+    roots = await list_material_categories(include_inactive=True)
+
+    lines = ["<b>Категории материалов</b>"]
+
+    if not roots:
+        lines.append("Категории ещё не созданы. Используй «➕ Добавить категорию». ")
+        return "\n".join(lines)
+
+    async def walk(category: dict, indent: str = "") -> None:
+        badge = "🔓" if not category.get("requires_access", True) else "🔒"
+        active_suffix = "" if category.get("is_active", True) else " (выключена)"
+        count = counts.get(category["id"], 0)
+        count_suffix = f" — доп. доступов: {count}" if count else ""
+        lines.append(
+            f"{indent}• <code>{category['slug']}</code> — {category['title']} {badge}{active_suffix}{count_suffix}"
+        )
+        children = await list_material_categories(
+            category["slug"],
+            include_inactive=True,
+        )
+        for child in children:
+            await walk(child, indent + "    ")
+
+    for root in roots:
+        await walk(root)
+
+    lines.append("\n🔓 — раздел открыт для всех, 🔒 — требуется членство или вручную выданный доступ.")
+    return "\n".join(lines)
+
+
+async def send_admin_materials_menu(message: types.Message) -> None:
+    intro = (
+        "<b>Управление материалами</b>\n\n"
+        "Добавляй категории каталога, меняй настройки доступа и выдавай персональные разрешения."
+    )
+    await message.answer(
+        intro,
+        reply_markup=admin_materials_keyboard(),
+        parse_mode=ParseMode.HTML,
+    )
+
+
+@router.message(F.text == ADMIN_MATERIALS_BUTTON)
+async def admin_materials_menu(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+    await _reset_state_if_needed(state)
+    await send_admin_materials_menu(message)
+
+
+@router.message(F.text == ADMIN_MATERIALS_LIST)
+async def admin_materials_list(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+    await _reset_state_if_needed(state)
+    tree = await _render_materials_tree()
+    await message.answer(
+        tree,
+        reply_markup=admin_materials_keyboard(),
+        parse_mode=ParseMode.HTML,
+    )
+
+
+@router.message(F.text == ADMIN_MATERIALS_CREATE)
+async def admin_materials_create_prompt(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+    await _reset_state_if_needed(state)
+    await state.set_state(AdminMaterialsStates.waiting_create_payload)
+    instructions = (
+        "<b>Добавление категории</b>\n\n"
+        "Формат: <code>slug=podcasts;title=Подкасты;content_key=menu.materials.podcasts;parent=archive;requires_access=true;sort=10</code>.\n\n"
+        "• <code>slug</code> — уникальный идентификатор.\n"
+        "• <code>title</code> — название кнопки.\n"
+        "• <code>content_key</code> — ключ в content.yaml.\n"
+        "• <code>parent</code> — slug родителя (оставь пустым для верхнего уровня).\n"
+        "• <code>requires_access</code> — true/false (по умолчанию true).\n"
+        "• <code>sort</code> — порядок сортировки (опционально).\n\n"
+        "Отправь параметры одним сообщением или нажми «Отмена»."
+    )
+    await message.answer(
+        instructions,
+        reply_markup=cancel_keyboard(),
+        parse_mode=ParseMode.HTML,
+    )
+
+
+@router.message(AdminMaterialsStates.waiting_create_payload, F.text.len() > 0)
+async def admin_materials_receive_create(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        await state.clear()
+        return
+
+    payload = _parse_materials_payload(message.text)
+    slug = payload.get("slug")
+    title = payload.get("title")
+    content_key = payload.get("content_key")
+
+    if not slug or not title or not content_key:
+        await message.answer(
+            "Укажи <code>slug</code>, <code>title</code> и <code>content_key</code> в формате <code>ключ=значение</code>.",
+            reply_markup=cancel_keyboard(),
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    existing = await get_material_category_by_slug(slug, include_inactive=True)
+    if existing:
+        await message.answer(
+            "Категория с таким slug уже существует. Укажи другой идентификатор.",
+            reply_markup=cancel_keyboard(),
+        )
+        return
+
+    parent_slug = payload.get("parent") or None
+    parent_id = None
+    if parent_slug:
+        parent_row = await get_material_category_by_slug(parent_slug, include_inactive=True)
+        if not parent_row:
+            await message.answer(
+                f"Родительская категория <code>{html.escape(parent_slug)}</code> не найдена.",
+                reply_markup=cancel_keyboard(),
+                parse_mode=ParseMode.HTML,
+            )
+            return
+        parent_id = parent_row["id"]
+
+    try:
+        requires_access = _parse_optional_bool(payload.get("requires_access"))
+        sort_order = _parse_optional_int(payload.get("sort"))
+    except ValueError:
+        await message.answer(
+            "Поля <code>requires_access</code> и <code>sort</code> должны быть булевым и числом соответственно.",
+            reply_markup=cancel_keyboard(),
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    await execute(
+        """
+        INSERT INTO material_categories (slug, title, content_key, parent_id, requires_access, sort_order, is_active, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, COALESCE($6, 100), TRUE, NOW(), NOW())
+        """,
+        slug,
+        title,
+        content_key,
+        parent_id,
+        True if requires_access is None else requires_access,
+        sort_order,
+    )
+
+    await log_admin_action(
+        message.from_user.id,
+        "materials_category_create",
+        {
+            "slug": slug,
+            "title": title,
+            "content_key": content_key,
+            "parent": parent_slug,
+        },
+    )
+
+    await state.clear()
+    await message.answer(
+        f"Категория «{title}» добавлена ✅",
+        reply_markup=admin_materials_keyboard(),
+    )
+
+
+@router.message(F.text == ADMIN_MATERIALS_UPDATE)
+async def admin_materials_update_prompt(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+    await _reset_state_if_needed(state)
+    await state.set_state(AdminMaterialsStates.waiting_update_payload)
+    instructions = (
+        "<b>Обновление категории</b>\n\n"
+        "Формат: <code>slug=podcasts;title=Новый заголовок;requires_access=false;sort=20;parent=archive;active=true</code>.\n\n"
+        "Укажи только те поля, которые нужно изменить. Допустимые ключи: <code>title</code>, <code>content_key</code>, <code>parent</code>,"
+        " <code>requires_access</code>, <code>sort</code>, <code>active</code>."
+    )
+    await message.answer(
+        instructions,
+        reply_markup=cancel_keyboard(),
+        parse_mode=ParseMode.HTML,
+    )
+
+
+@router.message(AdminMaterialsStates.waiting_update_payload, F.text.len() > 0)
+async def admin_materials_receive_update(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        await state.clear()
+        return
+
+    payload = _parse_materials_payload(message.text)
+    slug = payload.get("slug")
+    if not slug:
+        await message.answer(
+            "Укажи <code>slug</code> категории, которую нужно обновить.",
+            reply_markup=cancel_keyboard(),
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    category = await get_material_category_by_slug(slug, include_inactive=True)
+    if not category:
+        await message.answer(
+            f"Категория <code>{html.escape(slug)}</code> не найдена.",
+            reply_markup=cancel_keyboard(),
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    updates: list[str] = []
+    params: list[Any] = [slug]
+    idx = 2
+
+    title = payload.get("title")
+    if title:
+        updates.append(f"title=${idx}")
+        params.append(title)
+        idx += 1
+
+    content_key = payload.get("content_key")
+    if content_key:
+        updates.append(f"content_key=${idx}")
+        params.append(content_key)
+        idx += 1
+
+    if "parent" in payload:
+        parent_slug = payload.get("parent") or None
+        parent_id = None
+        if parent_slug:
+            if parent_slug == slug:
+                await message.answer(
+                    "Категория не может ссылаться на саму себя как на родителя.",
+                    reply_markup=cancel_keyboard(),
+                )
+                return
+            parent_row = await get_material_category_by_slug(parent_slug, include_inactive=True)
+            if not parent_row:
+                await message.answer(
+                    f"Родительская категория <code>{html.escape(parent_slug)}</code> не найдена.",
+                    reply_markup=cancel_keyboard(),
+                    parse_mode=ParseMode.HTML,
+                )
+                return
+            parent_id = parent_row["id"]
+        updates.append(f"parent_id=${idx}")
+        params.append(parent_id)
+        idx += 1
+
+    try:
+        if "requires_access" in payload:
+            requires_access = _parse_optional_bool(payload.get("requires_access"))
+            if requires_access is None:
+                requires_access = True
+            updates.append(f"requires_access=${idx}")
+            params.append(requires_access)
+            idx += 1
+
+        if "sort" in payload:
+            sort_order = _parse_optional_int(payload.get("sort"))
+            updates.append(f"sort_order=${idx}")
+            params.append(sort_order if sort_order is not None else category.get("sort_order", 100))
+            idx += 1
+
+        if "active" in payload:
+            active_value = _parse_optional_bool(payload.get("active"))
+            if active_value is None:
+                active_value = True
+            updates.append(f"is_active=${idx}")
+            params.append(active_value)
+            idx += 1
+    except ValueError:
+        await message.answer(
+            "Не удалось разобрать булевые или числовые параметры. Проверь значения и попробуй снова.",
+            reply_markup=cancel_keyboard(),
+        )
+        return
+
+    if not updates:
+        await message.answer(
+            "Укажи хотя бы одно поле для обновления.",
+            reply_markup=cancel_keyboard(),
+        )
+        return
+
+    updates.append("updated_at=NOW()")
+    query = f"UPDATE material_categories SET {', '.join(updates)} WHERE slug=$1"
+    await execute(query, *params)
+
+    await log_admin_action(
+        message.from_user.id,
+        "materials_category_update",
+        {"slug": slug, **{k: v for k, v in payload.items() if k != "slug"}},
+    )
+
+    await state.clear()
+    await message.answer(
+        f"Категория <code>{html.escape(slug)}</code> обновлена ✅",
+        reply_markup=admin_materials_keyboard(),
+        parse_mode=ParseMode.HTML,
+    )
+
+
+@router.message(F.text == ADMIN_MATERIALS_DELETE)
+async def admin_materials_delete_prompt(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+    await _reset_state_if_needed(state)
+    await state.set_state(AdminMaterialsStates.waiting_delete_slug)
+    slugs = await _collect_all_material_slugs()
+    keyboard = (
+        admin_materials_categories_keyboard(slugs)
+        if slugs
+        else admin_materials_keyboard()
+    )
+    await message.answer(
+        "<b>Удаление категории</b>\n\nУкажи slug категории, которую нужно удалить.",
+        reply_markup=keyboard,
+        parse_mode=ParseMode.HTML,
+    )
+
+
+@router.message(AdminMaterialsStates.waiting_delete_slug, F.text.len() > 0)
+async def admin_materials_receive_delete_slug(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        await state.clear()
+        return
+
+    slug = (message.text or "").strip()
+    category = await get_material_category_by_slug(slug, include_inactive=True)
+    if not category:
+        await message.answer(
+            f"Категория <code>{html.escape(slug)}</code> не найдена. Проверь slug и попробуй снова.",
+            reply_markup=cancel_keyboard(),
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    await state.update_data(materials_delete_slug=slug, materials_delete_title=category["title"])
+    await state.set_state(AdminMaterialsStates.waiting_delete_confirm)
+    await message.answer(
+        (
+            f"Удалить категорию «{category['title']}» (<code>{html.escape(slug)}</code>)?\n"
+            "Ответь «Да», чтобы подтвердить, или нажми «Отмена»."
+        ),
+        reply_markup=cancel_keyboard(),
+        parse_mode=ParseMode.HTML,
+    )
+
+
+@router.message(AdminMaterialsStates.waiting_delete_confirm, F.text.len() > 0)
+async def admin_materials_delete_confirm(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        await state.clear()
+        return
+
+    answer = (message.text or "").strip().lower()
+    data = await state.get_data()
+    slug = (data or {}).get("materials_delete_slug")
+    title = (data or {}).get("materials_delete_title", slug)
+
+    if answer not in {"да", "yes", "y"}:
+        await state.clear()
+        await message.answer("Удаление отменено.", reply_markup=admin_materials_keyboard())
+        return
+
+    deleted = await fetchrow(
+        "DELETE FROM material_categories WHERE slug=$1 RETURNING id",
+        slug,
+    )
+    await state.clear()
+
+    if not deleted:
+        await message.answer(
+            "Категория уже удалена или не найдена.",
+            reply_markup=admin_materials_keyboard(),
+        )
+        return
+
+    await log_admin_action(
+        message.from_user.id,
+        "materials_category_delete",
+        {"slug": slug},
+    )
+
+    await message.answer(
+        f"Категория «{title}» удалена ✅",
+        reply_markup=admin_materials_keyboard(),
+    )
+
+
+@router.message(F.text == ADMIN_MATERIALS_GRANT)
+async def admin_materials_grant_prompt(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+    await _reset_state_if_needed(state)
+    await state.set_state(AdminMaterialsStates.waiting_grant_payload)
+    instructions = (
+        "<b>Выдача персонального доступа</b>\n\n"
+        "Формат: <code>slug=podcasts;tg=123456789;days=30</code>.\n\n"
+        "• <code>slug</code> — идентификатор категории.\n"
+        "• <code>tg</code> или <code>user</code> — Telegram ID или внутренний id участницы.\n"
+        "• <code>days</code> или <code>expires</code> — срок действия (опционально)."
+    )
+    await message.answer(
+        instructions,
+        reply_markup=cancel_keyboard(),
+        parse_mode=ParseMode.HTML,
+    )
+
+
+@router.message(AdminMaterialsStates.waiting_grant_payload, F.text.len() > 0)
+async def admin_materials_receive_grant(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        await state.clear()
+        return
+
+    payload = _parse_materials_payload(message.text)
+    slug = payload.get("slug")
+    if not slug:
+        await message.answer(
+            "Укажи <code>slug</code> категории для выдачи доступа.",
+            reply_markup=cancel_keyboard(),
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    category = await get_material_category_by_slug(slug, include_inactive=True)
+    if not category:
+        await message.answer(
+            f"Категория <code>{html.escape(slug)}</code> не найдена.",
+            reply_markup=cancel_keyboard(),
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    user_row: Optional[dict] = None
+    user_error = ""
+
+    tg_raw = payload.get("tg")
+    user_id_raw = payload.get("user") or payload.get("user_id")
+
+    if tg_raw:
+        try:
+            tg_id = int(tg_raw)
+        except ValueError:
+            user_error = "Telegram ID должен быть числом."
+        else:
+            user_row = await fetchrow(
+                "SELECT * FROM users WHERE tg_user_id=$1",
+                tg_id,
+            )
+            if not user_row:
+                user_error = f"Пользователь с tg-id {tg_id} не найден."
+    elif user_id_raw:
+        try:
+            internal_id = int(user_id_raw)
+        except ValueError:
+            user_error = "Поле user должно быть числом."
+        else:
+            user_row = await fetchrow(
+                "SELECT * FROM users WHERE id=$1",
+                internal_id,
+            )
+            if not user_row:
+                user_error = f"Пользователь с id {internal_id} не найден."
+    else:
+        user_error = "Укажи <code>tg</code> или <code>user</code> для выдачи доступа."
+
+    if user_error:
+        await message.answer(
+            user_error,
+            reply_markup=cancel_keyboard(),
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    expires_at = None
+    if payload.get("days"):
+        try:
+            days = int(payload.get("days"))
+            expires_at = now_utc() + timedelta(days=days)
+        except ValueError:
+            await message.answer(
+                "Параметр <code>days</code> должен быть числом.",
+                reply_markup=cancel_keyboard(),
+                parse_mode=ParseMode.HTML,
+            )
+            return
+    elif payload.get("expires"):
+        raw = payload.get("expires")
+        try:
+            expires_at = datetime.fromisoformat(raw)
+        except ValueError:
+            await message.answer(
+                "Не удалось разобрать дату <code>expires</code>. Используй ISO-формат, например 2024-12-31T23:59:00.",
+                reply_markup=cancel_keyboard(),
+                parse_mode=ParseMode.HTML,
+            )
+            return
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        else:
+            expires_at = expires_at.astimezone(timezone.utc)
+
+    await execute(
+        """
+        INSERT INTO material_category_access (category_id, user_id, granted_by, granted_at, expires_at)
+        VALUES ($1, $2, $3, NOW(), $4)
+        ON CONFLICT (category_id, user_id)
+        DO UPDATE SET granted_by=EXCLUDED.granted_by, granted_at=EXCLUDED.granted_at, expires_at=EXCLUDED.expires_at
+        """,
+        category["id"],
+        user_row["id"],
+        message.from_user.id,
+        expires_at,
+    )
+
+    await log_admin_action(
+        message.from_user.id,
+        "materials_grant_access",
+        {
+            "slug": slug,
+            "user_id": user_row["id"],
+            "expires_at": expires_at.isoformat() if expires_at else None,
+        },
+    )
+
+    await state.clear()
+    expires_hint = (
+        f" до {expires_at.strftime('%Y-%m-%d %H:%M')} UTC" if expires_at else ""
+    )
+    await message.answer(
+        f"Доступ к «{category['title']}» выдан{expires_hint} ✅",
+        reply_markup=admin_materials_keyboard(),
+    )
+
+
+@router.message(F.text == ADMIN_MATERIALS_REVOKE)
+async def admin_materials_revoke_prompt(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+    await _reset_state_if_needed(state)
+    await state.set_state(AdminMaterialsStates.waiting_revoke_payload)
+    instructions = (
+        "<b>Отзыв персонального доступа</b>\n\n"
+        "Формат: <code>slug=podcasts;tg=123456789</code> или <code>slug=archive;user=42</code>."
+    )
+    await message.answer(
+        instructions,
+        reply_markup=cancel_keyboard(),
+        parse_mode=ParseMode.HTML,
+    )
+
+
+@router.message(AdminMaterialsStates.waiting_revoke_payload, F.text.len() > 0)
+async def admin_materials_receive_revoke(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        await state.clear()
+        return
+
+    payload = _parse_materials_payload(message.text)
+    slug = payload.get("slug")
+    if not slug:
+        await message.answer(
+            "Укажи <code>slug</code> категории.",
+            reply_markup=cancel_keyboard(),
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    category = await get_material_category_by_slug(slug, include_inactive=True)
+    if not category:
+        await message.answer(
+            f"Категория <code>{html.escape(slug)}</code> не найдена.",
+            reply_markup=cancel_keyboard(),
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    user_row: Optional[dict] = None
+    user_error = ""
+    tg_raw = payload.get("tg")
+    user_id_raw = payload.get("user") or payload.get("user_id")
+
+    if tg_raw:
+        try:
+            tg_id = int(tg_raw)
+        except ValueError:
+            user_error = "Telegram ID должен быть числом."
+        else:
+            user_row = await fetchrow(
+                "SELECT * FROM users WHERE tg_user_id=$1",
+                tg_id,
+            )
+            if not user_row:
+                user_error = f"Пользователь с tg-id {tg_id} не найден."
+    elif user_id_raw:
+        try:
+            internal_id = int(user_id_raw)
+        except ValueError:
+            user_error = "Поле user должно быть числом."
+        else:
+            user_row = await fetchrow(
+                "SELECT * FROM users WHERE id=$1",
+                internal_id,
+            )
+            if not user_row:
+                user_error = f"Пользователь с id {internal_id} не найден."
+    else:
+        user_error = "Укажи <code>tg</code> или <code>user</code> для отзыва доступа."
+
+    if user_error:
+        await message.answer(
+            user_error,
+            reply_markup=cancel_keyboard(),
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    removed = await fetchrow(
+        "DELETE FROM material_category_access WHERE category_id=$1 AND user_id=$2 RETURNING id",
+        category["id"],
+        user_row["id"],
+    )
+
+    await state.clear()
+
+    if not removed:
+        await message.answer(
+            "Для этой участницы не было активных доступов.",
+            reply_markup=admin_materials_keyboard(),
+        )
+        return
+
+    await log_admin_action(
+        message.from_user.id,
+        "materials_revoke_access",
+        {"slug": slug, "user_id": user_row["id"]},
+    )
+
+    await message.answer(
+        "Доступ отозван ✅",
+        reply_markup=admin_materials_keyboard(),
+    )
+
 
 @router.message(F.text == ADMIN_CONTENT_MENU)
 async def admin_content_menu(message: types.Message, state: FSMContext):
@@ -8648,6 +9805,12 @@ async def fallback(message: types.Message, state: FSMContext):
         AdminContentStates.waiting_history_key,
         AdminContentStates.waiting_history_choice,
         AdminContentStates.waiting_import_file,
+        AdminMaterialsStates.waiting_create_payload,
+        AdminMaterialsStates.waiting_update_payload,
+        AdminMaterialsStates.waiting_delete_slug,
+        AdminMaterialsStates.waiting_delete_confirm,
+        AdminMaterialsStates.waiting_grant_payload,
+        AdminMaterialsStates.waiting_revoke_payload,
     ):
         return
 

@@ -59,10 +59,18 @@ ADMIN_STATS_FORMS_BREAKDOWN = "🗂 Формы и консультации"
 ADMIN_DEBUG_BUTTON = "🛠️ Диагностика"
 ADMIN_SETTINGS_BUTTON = "⚙️ Настройки"
 ADMIN_PAYMENTS_BUTTON = "💳 Оплаты"
+ADMIN_MATERIALS_BUTTON = "📚 Материалы"
 ADMIN_BEHAVIOR_BUTTON = "🎛 Логика бота"
 ADMIN_BROADCAST_REMINDER_TEXT = "✏️ Текст напоминаний"
 ADMIN_BROADCAST_HISTORY_BUTTON = "📜 История рассылок"
 BROADCAST_HISTORY_MORE_BUTTON = "➕ Ещё"
+
+ADMIN_MATERIALS_LIST = "📂 Список категорий"
+ADMIN_MATERIALS_CREATE = "➕ Добавить категорию"
+ADMIN_MATERIALS_UPDATE = "✏️ Изменить категорию"
+ADMIN_MATERIALS_DELETE = "🗑️ Удалить категорию"
+ADMIN_MATERIALS_GRANT = "✅ Выдать доступ"
+ADMIN_MATERIALS_REVOKE = "🚫 Отозвать доступ"
 
 ADMIN_BEHAVIOR_START = "✉️ Приветствие /start"
 ADMIN_BEHAVIOR_REGISTRATION = "✅ Сообщение после регистрации"
@@ -94,8 +102,10 @@ FEEDBACK_OPTIONS: dict[str, str] = {
 
 LEARNING_PROGRESS_BUTTON = "Мой прогресс"
 MATERIALS_CATALOG_BUTTON = "Каталог материалов"
+MATERIALS_PODCASTS_BUTTON = "Подкасты"
 MATERIALS_PRACTICES_BUTTON = "Практики"
 MATERIALS_CHALLENGES_BUTTON = "Челленджи"
+MATERIALS_ARCHIVE_BUTTON = "Архив недель"
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Главное меню и разделы
@@ -163,22 +173,51 @@ def materials_menu_keyboard(
     *,
     weekly_enabled: bool,
     schedule_enabled: bool,
+    submenu: str | None = None,
+    submenu_items: list[dict] | None = None,
 ) -> ReplyKeyboardMarkup:
     weekly_text = "Материалы недели" if weekly_enabled else "Материалы недели 🔒"
     schedule_text = "Расписание" if schedule_enabled else "Расписание 🔒"
+
+    if submenu:
+        rows: list[list[KeyboardButton]] = []
+        for item in submenu_items or []:
+            title = item.get("title", "")
+            locked = item.get("locked", False)
+            has_children = item.get("has_children", False)
+            label = title
+            if locked:
+                label = f"{label} 🔒"
+            elif has_children:
+                label = f"{label} ▶️"
+            rows.append([KeyboardButton(text=label)])
+
+        rows.append([KeyboardButton(text=BACK_TO_MATERIALS)])
+        rows.append([KeyboardButton(text=BACK_TO_MAIN)])
+
+        placeholder_map = {
+            "catalog": "Каталог материалов",
+        }
+        placeholder = placeholder_map.get(submenu, "Выбери материалы")
+        return ReplyKeyboardMarkup(
+            keyboard=rows,
+            resize_keyboard=True,
+            input_field_placeholder=placeholder,
+        )
+
     rows = [
         [
             KeyboardButton(text=weekly_text),
             KeyboardButton(text=MATERIALS_CATALOG_BUTTON),
         ],
-        [
-            KeyboardButton(text=MATERIALS_PRACTICES_BUTTON),
-            KeyboardButton(text=MATERIALS_CHALLENGES_BUTTON),
-        ],
         [KeyboardButton(text=schedule_text)],
         [KeyboardButton(text=BACK_TO_MAIN)],
     ]
-    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
+    return ReplyKeyboardMarkup(
+        keyboard=rows,
+        resize_keyboard=True,
+        input_field_placeholder="Раздел «Материалы»",
+    )
 
 
 def profile_menu_keyboard(
@@ -289,8 +328,9 @@ def admin_main_keyboard() -> ReplyKeyboardMarkup:
     rows = [
         [KeyboardButton(text=ADMIN_USERS_BUTTON)],
         [KeyboardButton(text=ADMIN_BROADCAST_BUTTON), KeyboardButton(text=ADMIN_CONTENT_MENU)],
-        [KeyboardButton(text=ADMIN_BEHAVIOR_BUTTON), KeyboardButton(text=ADMIN_SETTINGS_BUTTON)],
-        [KeyboardButton(text=ADMIN_STATS_BUTTON), KeyboardButton(text=ADMIN_DEBUG_BUTTON)],
+        [KeyboardButton(text=ADMIN_MATERIALS_BUTTON), KeyboardButton(text=ADMIN_BEHAVIOR_BUTTON)],
+        [KeyboardButton(text=ADMIN_SETTINGS_BUTTON), KeyboardButton(text=ADMIN_STATS_BUTTON)],
+        [KeyboardButton(text=ADMIN_DEBUG_BUTTON)],
         [KeyboardButton(text=BACK_TO_MAIN)],
     ]
     return ReplyKeyboardMarkup(
@@ -298,6 +338,25 @@ def admin_main_keyboard() -> ReplyKeyboardMarkup:
         resize_keyboard=True,
         input_field_placeholder="Админ-панель — выберите раздел",
     )
+
+
+def admin_materials_keyboard() -> ReplyKeyboardMarkup:
+    rows = [
+        [KeyboardButton(text=ADMIN_MATERIALS_LIST)],
+        [KeyboardButton(text=ADMIN_MATERIALS_CREATE), KeyboardButton(text=ADMIN_MATERIALS_UPDATE)],
+        [KeyboardButton(text=ADMIN_MATERIALS_DELETE)],
+        [KeyboardButton(text=ADMIN_MATERIALS_GRANT), KeyboardButton(text=ADMIN_MATERIALS_REVOKE)],
+        [KeyboardButton(text=BACK_TO_ADMIN), KeyboardButton(text=BACK_TO_MAIN)],
+    ]
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
+
+
+def admin_materials_categories_keyboard(categories: list[str]) -> ReplyKeyboardMarkup:
+    rows: list[list[KeyboardButton]] = [
+        [KeyboardButton(text=slug)] for slug in categories
+    ]
+    rows.append([KeyboardButton(text=BACK_TO_ADMIN), KeyboardButton(text=BACK_TO_MAIN)])
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
 
 def admin_stats_keyboard() -> ReplyKeyboardMarkup:
