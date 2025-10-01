@@ -306,9 +306,9 @@ ALTER TABLE weekly_keys
 DO $$
 BEGIN
   BEGIN
-    EXECUTE $$ALTER TABLE weekly_keys
+    EXECUTE $wk$ALTER TABLE weekly_keys
       ADD CONSTRAINT weekly_keys_status_check
-      CHECK (status IN ('inactive','active'))$$;
+      CHECK (status IN ('inactive','active'))$wk$;
   EXCEPTION WHEN duplicate_object THEN
     NULL;
   END;
@@ -346,9 +346,9 @@ ALTER TABLE user_keys
 DO $$
 BEGIN
   BEGIN
-    EXECUTE $$ALTER TABLE user_keys
+    EXECUTE $uk$ALTER TABLE user_keys
       ADD CONSTRAINT user_keys_status_check
-      CHECK (status IN ('available','claimed','revoked'))$$;
+      CHECK (status IN ('available','claimed','revoked'))$uk$;
   EXCEPTION WHEN duplicate_object THEN
     NULL;
   END;
