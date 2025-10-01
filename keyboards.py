@@ -71,6 +71,7 @@ ADMIN_MATERIALS_BUTTON = "📚 Материалы"
 ADMIN_KEYS_BUTTON = "🔑 Ключи"
 ADMIN_BEHAVIOR_BUTTON = "🎛 Логика бота"
 ADMIN_BROADCAST_REMINDER_TEXT = "✏️ Текст напоминаний"
+ADMIN_BROADCAST_NEW_BUTTON = "🆕 Новая рассылка"
 ADMIN_BROADCAST_HISTORY_BUTTON = "📜 История рассылок"
 BROADCAST_HISTORY_MORE_BUTTON = "➕ Ещё"
 
