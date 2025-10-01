@@ -179,6 +179,12 @@ from keyboards import (
 logger = logging.getLogger("handlers")
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Router и хэндлеры
+# ──────────────────────────────────────────────────────────────────────────────
+router = Router(name="main-router")
+
+
 _notify_admins_cached: Optional[Callable[[str], Awaitable[None]]] = None
 
 _BOT_USERNAME_CACHE: Optional[str] = None
@@ -6215,7 +6221,6 @@ def validate_email(email: str) -> bool:
 # ──────────────────────────────────────────────────────────────────────────────
 # Router и хэндлеры
 # ──────────────────────────────────────────────────────────────────────────────
-router = Router(name="main-router")
 @router.my_chat_member()
 async def on_my_chat_member(event: types.ChatMemberUpdated):
     try:
