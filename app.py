@@ -14,13 +14,14 @@ from typing import Optional, Any, Dict, List, Literal
 from contextlib import asynccontextmanager
 from pprint import pformat
 from datetime import datetime, timedelta, timezone
+from dotenv import load_dotenv
+
+load_dotenv()
+
 from throttling_mw import ThrottleMiddleware
 from fastapi import FastAPI, Request, HTTPException, Header, Body, Query, status
 from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel, Field, field_validator
-from dotenv import load_dotenv
-
-load_dotenv()
 
 from aiogram import Bot, Dispatcher, types
 from aiogram.client.default import DefaultBotProperties
