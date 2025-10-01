@@ -1,5 +1,7 @@
 # handlers.py
 import asyncio
+import io
+import json
 import math
 import os
 import re
@@ -7,11 +9,12 @@ import yaml
 import logging
 import time
 import html
-from datetime import datetime, timedelta, timezone
+from collections import OrderedDict
+from datetime import datetime, date, timedelta, timezone
 from typing import Optional, Iterable, Dict, List, Callable, Awaitable, Any
 from aiogram import Router, F, types
 from aiogram.enums import ParseMode
-from aiogram.types import ReplyKeyboardMarkup
+from aiogram.types import ReplyKeyboardMarkup, BufferedInputFile
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.filters import Command, CommandObject, CommandStart
@@ -24,8 +27,8 @@ except ImportError:  # aiogram < 3.13.1 compatibility
     from aiogram.dispatcher.event.bases import SkipHandler as EventSkip
 from urllib.parse import parse_qs, urlparse
 from aiogram.dispatcher.middlewares.base import BaseMiddleware
-from db import fetchrow, fetch, execute
-from settings import ADMIN_IDS
+from db import fetchrow, fetch, execute, transaction
+from settings import ADMIN_IDS, YOOMONEY_CHECKOUT_URL
 from keyboards import (
     main_menu_keyboard,
     info_menu_keyboard,
@@ -41,12 +44,14 @@ from keyboards import (
     admin_settings_keyboard,
     admin_content_keyboard,
     admin_content_suggestions_keyboard,
+    admin_content_versions_keyboard,
     admin_text_groups_keyboard,
     admin_text_items_keyboard,
     admin_behavior_keyboard,
     admin_onboarding_steps_keyboard,
     admin_onboarding_delete_keyboard,
     admin_broadcast_keyboard,
+    admin_broadcast_history_keyboard,
     admin_broadcast_confirm_keyboard,
     admin_broadcast_templates_keyboard,
     admin_broadcast_delete_keyboard,
@@ -70,10 +75,16 @@ from keyboards import (
     ADMIN_CONTENT_MENU,
     ADMIN_CONTENT_VIEW,
     ADMIN_CONTENT_CREATE,
+    ADMIN_CONTENT_HISTORY,
     ADMIN_CONTENT_SUGGEST_MORE,
+    ADMIN_CONTENT_SAVE_TEMPLATE_BUTTON,
     ADMIN_CONTENT_TAGS_HELP,
+    ADMIN_CONTENT_ROLLBACK_PREFIX,
+    ADMIN_CONTENT_EXPORT,
+    ADMIN_CONTENT_IMPORT,
     ADMIN_USERS_BUTTON,
     ADMIN_BROADCAST_BUTTON,
+    ADMIN_BROADCAST_HISTORY_BUTTON,
     ADMIN_BEHAVIOR_BUTTON,
     BROADCAST_ALL_BUTTON,
     BROADCAST_LEADS_BUTTON,
@@ -86,6 +97,7 @@ from keyboards import (
     CHANGE_BROADCAST_SEGMENT_BUTTON,
     BACK_TO_BROADCAST,
     DELETE_BROADCAST_TEMPLATE_BUTTON,
+    BROADCAST_HISTORY_MORE_BUTTON,
     ADD_ONBOARDING_STEP,
     DELETE_ONBOARDING_STEP,
     ADMIN_BEHAVIOR_START,
@@ -95,6 +107,7 @@ from keyboards import (
     ADMIN_DEBUG_BUTTON,
     ADMIN_SETTINGS_BUTTON,
     ADMIN_PAYMENTS_BUTTON,
+    ADMIN_BROADCAST_REMINDER_TEXT,
     admin_users_segments_keyboard,
     admin_users_pagination_keyboard,
     admin_user_card_keyboard,
@@ -122,11 +135,19 @@ from keyboards import (
     ADMIN_STATS_LESSON_PROGRESS,
     ADMIN_STATS_PAYMENTS_BREAKDOWN,
     ADMIN_STATS_RECENT_PAYMENTS,
+    ADMIN_STATS_FORMS_BREAKDOWN,
+    LEARNING_PROGRESS_BUTTON,
+    MATERIALS_CATALOG_BUTTON,
+    MATERIALS_PRACTICES_BUTTON,
+    MATERIALS_CHALLENGES_BUTTON,
 )
 # ──────────────────────────────────────────────────────────────────────────────
 # Логгер
 # ──────────────────────────────────────────────────────────────────────────────
 logger = logging.getLogger("handlers")
+
+
+_notify_admins_cached: Optional[Callable[[str], Awaitable[None]]] = None
 
 
 FORM_SLUG_ANALYSIS = "analysis"
@@ -143,6 +164,8 @@ FORM_ALIASES: dict[str, str] = {
     "analysis": FORM_SLUG_ANALYSIS,
     "test": FORM_SLUG_TEST,
     "тест": FORM_SLUG_TEST,
+    "magnetism-window": "magnetism-window",
+    "magnetism_window": "magnetism-window",
 }
 # ──────────────────────────────────────────────────────────────────────────────
 # Конфиг из окружения
@@ -234,6 +257,30 @@ _URL_RE = re.compile(r"https?://[^\s<>\]\)]+", re.IGNORECASE)
 _FORM_SLUG_SANITIZE_RE = re.compile(r"[^a-z0-9_-]+", re.IGNORECASE)
 
 
+def _lookup_form_alias(value: str) -> Optional[str]:
+    cleaned = (value or "").strip()
+    if not cleaned:
+        return None
+
+    lowered = cleaned.lower()
+    candidates = [lowered]
+
+    replaced = lowered.replace("-", "_")
+    if replaced not in candidates:
+        candidates.append(replaced)
+
+    collapsed = re.sub(r"\s+", "_", replaced)
+    if collapsed not in candidates:
+        candidates.append(collapsed)
+
+    for candidate in candidates:
+        alias = FORM_ALIASES.get(candidate)
+        if alias:
+            return alias
+
+    return None
+
+
 def _sanitize_form_slug(candidate: str) -> str:
     cleaned = (candidate or "").strip()
     if not cleaned:
@@ -280,8 +327,15 @@ def resolve_form_slug(raw_value: Optional[str], fallback: Optional[str] = None) 
         candidates.append(fallback)
 
     for candidate in candidates:
+        alias = _lookup_form_alias(candidate)
+        if alias:
+            return alias
+
         slug = _sanitize_form_slug(candidate)
         if slug:
+            alias = _lookup_form_alias(slug)
+            if alias:
+                return alias
             return slug
     return None
 
@@ -359,6 +413,102 @@ def render_content(text: str, **placeholders: str) -> str:
     return rendered
 
 
+_MONTHS_RU: dict[str, int] = {
+    "январь": 1,
+    "января": 1,
+    "янв": 1,
+    "февраль": 2,
+    "февраля": 2,
+    "фев": 2,
+    "март": 3,
+    "марта": 3,
+    "мар": 3,
+    "апрель": 4,
+    "апреля": 4,
+    "апр": 4,
+    "май": 5,
+    "мая": 5,
+    "июнь": 6,
+    "июня": 6,
+    "июн": 6,
+    "июль": 7,
+    "июля": 7,
+    "июл": 7,
+    "август": 8,
+    "августа": 8,
+    "авг": 8,
+    "сен": 9,
+    "сент": 9,
+    "сентябрь": 9,
+    "сентября": 9,
+    "октябрь": 10,
+    "октября": 10,
+    "окт": 10,
+    "ноябрь": 11,
+    "ноября": 11,
+    "ноя": 11,
+    "декабрь": 12,
+    "декабря": 12,
+    "дек": 12,
+}
+
+
+def _normalize_year(value: str) -> int:
+    year = int(value)
+    if len(value) >= 4:
+        return year
+    current_year = datetime.now().year % 100
+    if year <= current_year:
+        return 2000 + year
+    return 1900 + year
+
+
+def _safe_birthdate(year: int, month: int, day: int) -> Optional[date]:
+    try:
+        parsed = date(year, month, day)
+    except ValueError:
+        return None
+    if parsed > date.today():
+        return None
+    return parsed
+
+
+def parse_birthdate(text: str | None) -> Optional[date]:
+    """Парсит дату рождения в распространённых форматах."""
+    if not text:
+        return None
+    cleaned = text.strip().lower()
+    if not cleaned:
+        return None
+
+    cleaned = cleaned.replace("г.", "").replace("г", "")
+    cleaned = cleaned.replace(",", " ")
+    cleaned = re.sub(r"\s+", " ", cleaned)
+
+    match = re.match(r"^(\d{1,2})\s+([а-яё]+)\s+(\d{2,4})$", cleaned)
+    if match:
+        day = int(match.group(1))
+        month_name = match.group(2)
+        year_value = match.group(3)
+        month = _MONTHS_RU.get(month_name)
+        if month:
+            return _safe_birthdate(_normalize_year(year_value), month, day)
+
+    digits = re.findall(r"\d+", cleaned)
+    if len(digits) == 3:
+        if len(digits[0]) == 4:
+            year_val, month_val, day_val = digits
+        else:
+            day_val, month_val, year_val = digits
+        return _safe_birthdate(
+            _normalize_year(year_val),
+            int(month_val),
+            int(day_val),
+        )
+
+    return None
+
+
 def _preview_text_for_admin(text: str, limit: int = 1500) -> str:
     """Формирует короткий превью-текст для сообщений админки."""
     if not text:
@@ -391,38 +541,109 @@ async def mark_form_started(user_id: int, slug: Optional[str]) -> None:
     try:
         await execute(
             """
-            INSERT INTO form_sessions (user_id, slug, started_at, created_at, updated_at)
-            VALUES ($1, $2, NOW(), NOW(), NOW())
-            ON CONFLICT (user_id, slug) DO UPDATE
-            SET started_at = COALESCE(form_sessions.started_at, EXCLUDED.started_at),
-                updated_at = NOW()
+            INSERT INTO form_sessions (user_id, form_slug, started_at)
+            VALUES ($1, $2, NOW())
+            ON CONFLICT (user_id, form_slug) DO UPDATE
+            SET started_at = COALESCE(form_sessions.started_at, EXCLUDED.started_at)
             """,
             user_id,
             normalized,
         )
     except Exception as e:
-        logger.warning("mark_form_started failed: user_id=%s slug=%s err=%s", user_id, normalized, e)
+        logger.warning(
+            "mark_form_started failed: user_id=%s slug=%s err=%s",
+            user_id,
+            normalized,
+            e,
+        )
 
 
-async def mark_form_completed(user_id: int, slug: Optional[str]) -> None:
+async def mark_form_completed(user_id: int, slug: Optional[str]) -> tuple[Optional[dict], bool]:
     normalized = resolve_form_slug(slug)
     if not user_id or not normalized:
-        return
+        return None, False
+
     try:
-        await execute(
-            """
-            INSERT INTO form_sessions (user_id, slug, started_at, completed_at, created_at, updated_at)
-            VALUES ($1, $2, NOW(), NOW(), NOW(), NOW())
-            ON CONFLICT (user_id, slug) DO UPDATE
-            SET completed_at = NOW(),
-                started_at = COALESCE(form_sessions.started_at, EXCLUDED.started_at),
-                updated_at = NOW()
-            """,
+        existing = await fetchrow(
+            "SELECT * FROM form_sessions WHERE user_id=$1 AND form_slug=$2",
             user_id,
             normalized,
         )
+        row = await fetchrow(
+            """
+            INSERT INTO form_sessions (user_id, form_slug, started_at, completed_at, last_reminder_at, reminder_count)
+            VALUES ($1, $2, COALESCE($3, NOW()), NOW(), NULL, 0)
+            ON CONFLICT (user_id, form_slug) DO UPDATE
+            SET completed_at = NOW(),
+                started_at = COALESCE(form_sessions.started_at, EXCLUDED.started_at),
+                last_reminder_at = NULL,
+                reminder_count = 0
+            RETURNING *
+            """,
+            user_id,
+            normalized,
+            existing.get("started_at") if existing else None,
+        )
+        return row, existing is None
     except Exception as e:
-        logger.warning("mark_form_completed failed: user_id=%s slug=%s err=%s", user_id, normalized, e)
+        logger.warning(
+            "mark_form_completed failed: user_id=%s slug=%s err=%s",
+            user_id,
+            normalized,
+            e,
+        )
+        return None, False
+
+
+async def upsert_test_request(
+    *,
+    tg_user_id: int,
+    user_id: Optional[int],
+    birthdate: date,
+    preferred_name: Optional[str],
+) -> Optional[dict]:
+    try:
+        return await fetchrow(
+            """
+            INSERT INTO test_requests (tg_user_id, user_id, birthdate, preferred_name, status)
+            VALUES ($1, $2, $3, $4, 'waiting')
+            ON CONFLICT (tg_user_id) DO UPDATE
+            SET user_id = COALESCE(EXCLUDED.user_id, test_requests.user_id),
+                birthdate = EXCLUDED.birthdate,
+                preferred_name = EXCLUDED.preferred_name,
+                status = 'waiting',
+                updated_at = NOW()
+            RETURNING *
+            """,
+            tg_user_id,
+            user_id,
+            birthdate,
+            preferred_name,
+        )
+    except Exception as e:
+        logger.warning(
+            "test_request upsert failed: tg_user_id=%s err=%s",
+            tg_user_id,
+            e,
+        )
+        return None
+
+
+def _get_notify_admins() -> Optional[Callable[[str], Awaitable[None]]]:
+    global _notify_admins_cached
+    if _notify_admins_cached is not None:
+        return _notify_admins_cached
+    try:
+        from app import notify_admins as _notify_admins  # type: ignore
+    except Exception:
+        _notify_admins_cached = None
+        return None
+    _notify_admins_cached = _notify_admins
+    return _notify_admins_cached
+
+
+def _format_birthdate(birthdate: date) -> str:
+    return birthdate.strftime("%d.%m.%Y")
 # ──────────────────────────────────────────────────────────────────────────────
 # Контент: content.yaml + БД content (fallback-логика)
 # ──────────────────────────────────────────────────────────────────────────────
@@ -430,6 +651,39 @@ _CONTENT_CACHE: dict = {}
 _CONTENT_FILE = os.path.join(os.path.dirname(__file__), "content.yaml")
 _CONTENT_DB_CACHE: Dict[str, str] = {}
 _CONTENT_LAST_RELOAD = None
+_CONTENT_HISTORY_LIMIT = 5
+
+
+def _get_yaml_value(key: str, default: str = "") -> tuple[str, bool]:
+    data = _load_yaml_content()
+    if not data:
+        return default, False
+
+    if "." not in key:
+        if key in data:
+            value = data[key]
+            if isinstance(value, (list, dict)):
+                return yaml.safe_dump(value, allow_unicode=True), True
+            return str(value), True
+        return default, False
+
+    cur: Any = data
+    try:
+        for part in key.split("."):
+            if isinstance(cur, list) and part.isdigit():
+                cur = cur[int(part)]
+            elif isinstance(cur, dict):
+                cur = cur[part]
+            else:
+                raise KeyError(part)
+    except Exception:
+        return default, False
+
+    if isinstance(cur, (list, dict)):
+        return yaml.safe_dump(cur, allow_unicode=True), True
+    return str(cur), True
+
+
 def _load_yaml_content() -> dict:
     global _CONTENT_CACHE
     if _CONTENT_CACHE:
@@ -440,44 +694,64 @@ def _load_yaml_content() -> dict:
     except FileNotFoundError:
         _CONTENT_CACHE = {}
     return _CONTENT_CACHE
+async def get_content_with_source(key: str, default: str = "") -> tuple[str, str]:
+    """Возвращает значение контента и источник (БД или YAML-шаблон)."""
+    if key in _CONTENT_DB_CACHE:
+        return _CONTENT_DB_CACHE[key], "db"
+
+    row = await fetchrow("SELECT value FROM content WHERE key=$1", key)
+    if row and row.get("value"):
+        value = row["value"]
+        _CONTENT_DB_CACHE[key] = value
+        return value, "db"
+
+    yaml_value, _ = _get_yaml_value(key, default)
+    return yaml_value, "yaml"
+
+
 async def get_content(key: str, default: str = "") -> str:
     """
     1) Пытаемся достать из БД content.value по key.
     2) Если нет — из content.yaml (поддержка вложенных ключей "onboarding.0").
     """
-    # Проверяем кэш БД сначала
-    if key in _CONTENT_DB_CACHE:
-        return _CONTENT_DB_CACHE[key]
-    
-    # Если нет в кэше, проверяем БД
-    row = await fetchrow("SELECT value FROM content WHERE key=$1", key)
-    if row and row.get("value"):
-        _CONTENT_DB_CACHE[key] = row["value"]
-        return row["value"]
-    # Fallback to YAML
-    y = _load_yaml_content()
-    if "." in key:
-        cur = y
-        try:
-            for part in key.split("."):
-                if part.isdigit():
-                    cur = cur[int(part)]
-                else:
-                    cur = cur[part]
-            if isinstance(cur, (list, dict)):
-                return yaml.safe_dump(cur, allow_unicode=True)
-            return str(cur)
-        except Exception:
-            return default
-    return str(y.get(key, default))
-async def set_content_value(key: str, value: str) -> None:
+    value, _ = await get_content_with_source(key, default)
+    return value
+async def _write_content_version(
+    key: str,
+    value: str,
+    updated_by: int | None,
+    *,
+    conn=None,
+) -> None:
+    try:
+        if conn is not None:
+            await conn.execute(
+                "INSERT INTO content_versions(key, value, updated_by, updated_at) VALUES ($1,$2,$3,NOW())",
+                key,
+                value,
+                updated_by,
+            )
+        else:
+            await execute(
+                "INSERT INTO content_versions(key, value, updated_by, updated_at) VALUES ($1,$2,$3,NOW())",
+                key,
+                value,
+                updated_by,
+            )
+    except Exception as exc:
+        logger.warning("content_versions: insert failed key=%s err=%s", key, exc)
+
+
+async def set_content_value(key: str, value: str, *, updated_by: int | None = None) -> None:
     """
     Upsert контента в таблицу content.
     Если нет уникального индекса по key — используем UPDATE → INSERT.
     """
     # Очищаем HTML перед сохранением
     value = sanitize_html(value)
-    
+
+    await _write_content_version(key, value, updated_by)
+
     updated = await fetchrow("SELECT id FROM content WHERE key=$1", key)
     if updated:
         await execute(
@@ -492,9 +766,143 @@ async def set_content_value(key: str, value: str) -> None:
     # Обновляем кэш
     _CONTENT_DB_CACHE[key] = value
     logger.info("content: set key=%s len=%s", key, len(value or ""))
+
+
+async def get_content_versions(key: str, limit: int = _CONTENT_HISTORY_LIMIT) -> list[dict]:
+    rows = await fetch(
+        """
+        SELECT id, key, value, updated_by, updated_at
+        FROM content_versions
+        WHERE key=$1
+        ORDER BY updated_at DESC, id DESC
+        LIMIT $2
+        """,
+        key,
+        limit,
+    )
+    return [dict(row) for row in rows] if rows else []
+
+
+async def get_content_last_update(key: str) -> dict | None:
+    row = await fetchrow(
+        """
+        SELECT updated_at, updated_by
+        FROM content_versions
+        WHERE key=$1
+        ORDER BY updated_at DESC, id DESC
+        LIMIT 1
+        """,
+        key,
+    )
+    return dict(row) if row else None
+
+
+async def _format_content_version_author(updated_by: Any) -> str:
+    if not updated_by:
+        return "—"
+
+    try:
+        tg_id = int(updated_by)
+    except (TypeError, ValueError):
+        return html.escape(str(updated_by))
+
+    user_row = await fetchrow(
+        "SELECT username, full_name, name FROM users WHERE tg_user_id=$1",
+        tg_id,
+    )
+    if user_row:
+        user_data = dict(user_row)
+        display_name = _admin_user_display_name(user_data)
+        parts: list[str] = []
+        if display_name and display_name != "—":
+            parts.append(html.escape(display_name))
+        username = (user_data.get("username") or "").strip()
+        if username:
+            parts.append(f"@{html.escape(username)}")
+        parts.append(f"tg_id={tg_id}")
+        return " ".join(parts)
+
+    return f"tg_id={tg_id}"
+
+
+async def _send_content_history(
+    message: types.Message,
+    state: FSMContext,
+    key: str,
+    *,
+    source: str,
+) -> bool:
+    versions = await get_content_versions(key, limit=_CONTENT_HISTORY_LIMIT)
+    if not versions:
+        return False
+
+    version_choices = {str(idx): int(item["id"]) for idx, item in enumerate(versions, start=1)}
+    await state.update_data(content_history={"key": key, "choices": version_choices})
+    await state.set_state(AdminContentStates.waiting_history_choice)
+
+    lines = ["<b>История изменений</b>", f"<b>Ключ:</b> <code>{html.escape(key)}</code>", ""]
+
+    for idx, version in enumerate(versions, start=1):
+        timestamp_text = _format_datetime_safe(version.get("updated_at"))
+        author_text = await _format_content_version_author(version.get("updated_by"))
+        preview = _preview_text_for_admin(str(version.get("value") or ""), limit=400)
+        lines.extend([
+            f"{idx}. {timestamp_text} — {author_text}",
+            preview,
+            "",
+        ])
+
+    lines.extend([
+        "Выбери версию кнопкой «↩️ Откатить N», чтобы вернуть текст.",
+        "Отмена — вернуться назад.",
+    ])
+
+    await message.answer(
+        "\n".join(lines).strip(),
+        reply_markup=admin_content_versions_keyboard(len(versions)),
+        disable_web_page_preview=True,
+    )
+
+    await log_admin_action(
+        message.from_user.id,
+        "content_history_view",
+        {"key": key, "count": len(versions), "source": source},
+    )
+    return True
 async def list_content_keys_db() -> list[str]:
     rows = await fetch("SELECT key FROM content ORDER BY key ASC")
     return [r["key"] for r in rows] if rows else []
+
+
+async def _collect_content_export_data() -> OrderedDict[str, str]:
+    db_keys = await list_content_keys_db()
+    db_values: dict[str, str] = {}
+
+    if db_keys:
+        rows = await fetch(
+            "SELECT key, value FROM content WHERE key = ANY($1::text[])",
+            db_keys,
+        )
+        value_map = {str(row["key"]): str(row.get("value") or "") for row in (rows or [])}
+        for key in db_keys:
+            if key in value_map:
+                db_values[key] = value_map[key]
+
+    yaml_content = _load_yaml_content()
+    yaml_keys = list(_flatten_yaml_keys(yaml_content))
+    combined_keys = _merge_unique_content_keys(db_keys, yaml_keys)
+
+    export_data: OrderedDict[str, str] = OrderedDict()
+    for key in combined_keys:
+        if key in db_values:
+            export_data[key] = db_values[key]
+            continue
+
+        yaml_value, found = _get_yaml_value(key, default="")
+        if found:
+            export_data[key] = yaml_value
+
+    return export_data
 
 
 async def get_onboarding_steps() -> list[str]:
@@ -520,12 +928,12 @@ async def get_onboarding_steps() -> list[str]:
     return [str(step) for step in (yaml_steps or [])]
 
 
-async def save_onboarding_steps(steps: list[str]) -> None:
+async def save_onboarding_steps(steps: list[str], *, updated_by: int | None = None) -> None:
     """Перезаписывает шаги онбординга в таблице content."""
     cleaned_steps = [sanitize_html(step or "") for step in steps]
     await execute("DELETE FROM content WHERE key LIKE $1", "onboarding.%")
     for idx, step in enumerate(cleaned_steps):
-        await set_content_value(f"onboarding.{idx}", step)
+        await set_content_value(f"onboarding.{idx}", step, updated_by=updated_by)
 
 
 def format_onboarding_summary(steps: list[str]) -> str:
@@ -612,6 +1020,87 @@ async def delete_broadcast_template(title: str) -> bool:
         title,
     )
     return bool(row)
+
+
+async def list_recent_broadcasts(limit: int = 5, offset: int = 0) -> list[dict]:
+    normalized_limit = max(0, int(limit))
+    if normalized_limit <= 0:
+        return []
+    normalized_offset = max(0, int(offset))
+    rows = await fetch(
+        """
+        SELECT id, admin_id, payload, created_at
+        FROM admin_log
+        WHERE action = 'broadcast'
+        ORDER BY created_at DESC
+        LIMIT $1 OFFSET $2
+        """,
+        normalized_limit,
+        normalized_offset,
+    )
+    result: list[dict] = []
+    for row in rows:
+        entry = dict(row)
+        payload = entry.get("payload")
+        if isinstance(payload, str):
+            try:
+                payload = json.loads(payload)
+            except json.JSONDecodeError:
+                payload = {"raw": payload}
+        elif payload is None:
+            payload = {}
+        else:
+            payload = dict(payload)
+        entry["payload"] = payload
+        result.append(entry)
+    return result
+
+
+def _format_broadcast_history_entry(entry: dict, *, short: bool = False) -> str:
+    payload = entry.get("payload") or {}
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except json.JSONDecodeError:
+            payload = {"raw": payload}
+    elif not isinstance(payload, dict):
+        payload = dict(payload)
+
+    created_at_text = _format_datetime_safe(entry.get("created_at"))
+    segment = payload.get("segment") or "all"
+    segment_label = _BROADCAST_SEGMENT_LABELS.get(segment, segment)
+    recipients = payload.get("recipients")
+    ok = payload.get("ok")
+    fail = payload.get("fail")
+    template = payload.get("template") or payload.get("template_title")
+
+    recipients_text = str(recipients) if recipients is not None else "—"
+    ok_text = str(ok) if ok is not None else "—"
+    fail_text = str(fail) if fail is not None else "—"
+
+    if short:
+        template_short = html.escape(template) if template else "без шаблона"
+        delivery = f"{ok_text} доставлено"
+        if fail is not None:
+            delivery += f", ошибок {fail_text}"
+        return (
+            f"{created_at_text} • {segment_label} • получателей: {recipients_text}, "
+            f"{delivery}, {template_short}"
+        )
+
+    template_text = html.escape(template) if template else "—"
+    lines = [
+        f"<b>{created_at_text}</b>",
+        f"Сегмент: <code>{html.escape(segment_label)}</code>",
+        f"Получателей: {recipients_text}",
+        f"Успешно/ошибки: {ok_text}/{fail_text}",
+        f"Шаблон: {template_text}",
+    ]
+
+    if payload.get("use_html"):
+        lines.append("Формат: HTML")
+
+    return "\n".join(lines)
 def _flatten_yaml_keys(src: Any, prefix: str = "") -> Iterable[str]:
     if isinstance(src, dict):
         for k, v in (src or {}).items():
@@ -652,6 +1141,9 @@ class AdminContentStates(StatesGroup):
     waiting_custom_key = State()
     waiting_custom_value = State()
     waiting_view_key = State()
+    waiting_history_key = State()
+    waiting_history_choice = State()
+    waiting_import_file = State()
 
 
 class AdminBehaviorStates(StatesGroup):
@@ -672,15 +1164,35 @@ class AdminPaymentsStates(StatesGroup):
     waiting_access_user = State()
     waiting_revoke_user = State()
     waiting_payment_review = State()
+
+
+class TestStates(StatesGroup):
+    waiting_birthdate = State()
+    waiting_name = State()
 # ──────────────────────────────────────────────────────────────────────────────
 # Улучшенные клавиатуры
 # ──────────────────────────────────────────────────────────────────────────────
 _MENU_SECTION_PROMPTS: dict[str, tuple[str, str]] = {
-    "root": ("menu.prompts.root", "Главное меню\n\nВыбери раздел, чтобы продолжить."),
+    "root": (
+        "menu.prompts.root",
+        (
+            "Главное меню.\n\n"
+            "Разделы: «О клубе», «Обучение», «Материалы» и «Профиль». Выбери, что интересно прямо сейчас."
+        ),
+    ),
     "info": ("menu.prompts.info", "Раздел «О клубе».\n\nВыбери интересующий пункт."),
-    "learning": ("menu.prompts.learning", "Раздел «Обучение».\n\nВыбери, с чего продолжить."),
-    "materials": ("menu.prompts.materials", "Раздел «Материалы».\n\nДоступ к материалам зависит от статуса участия."),
-    "profile": ("menu.prompts.profile", "Раздел «Профиль».\n\nУправляй своими данными и доступами."),
+    "learning": (
+        "menu.prompts.learning",
+        "Раздел «Обучение».\n\nЗдесь собраны бесплатные уроки, «Мой прогресс», тест и запись на разбор.",
+    ),
+    "materials": (
+        "menu.prompts.materials",
+        "Раздел «Материалы».\n\nМатериалы недели, каталог клуба, практики, челленджи и расписание эфиров.",
+    ),
+    "profile": (
+        "menu.prompts.profile",
+        "Раздел «Профиль».\n\nПроверяй контакты, статус доступа и обновляй данные.",
+    ),
 }
 
 _ADMIN_SETTINGS_DEFAULTS: dict[str, bool] = {
@@ -688,6 +1200,18 @@ _ADMIN_SETTINGS_DEFAULTS: dict[str, bool] = {
     "payments_manual_review": False,
     "show_weekly_materials": True,
     "show_schedule": True,
+}
+
+_ADMIN_BROADCAST_SETTINGS_DEFAULTS: dict[str, bool] = {
+    "broadcast_form_reminders_enabled": True,
+    "broadcast_soft_reminders_enabled": True,
+    "broadcast_access_expiry_enabled": True,
+}
+
+_ADMIN_BROADCAST_SETTINGS_LABELS: dict[str, str] = {
+    "broadcast_form_reminders_enabled": "Напоминания анкет",
+    "broadcast_soft_reminders_enabled": "Напоминания уроков",
+    "broadcast_access_expiry_enabled": "Напоминания об окончании доступа",
 }
 
 _ADMIN_SETTINGS_LABELS: dict[str, str] = {
@@ -737,14 +1261,93 @@ _ADMIN_TEXT_GROUPS: dict[str, list[tuple[str, str]]] = {
         ("Комментарий о проверке оплаты", "menu.pay.manual_review"),
         ("Окно «Поддержка»", "menu.support"),
     ],
+    "📝 Анкеты": [
+        ("Напоминание о незавершённой анкете", "forms.reminder_template"),
+    ],
 }
 
-_ADMIN_TEXT_PLACEHOLDERS: dict[str, list[str]] = {
-    "menu.start": ["{name}", "{{NAME}}"],
-    "menu.registration_complete": ["{name}", "{{NAME}}"],
-    "menu.pay": ["{checkout_url}", "{{CHECKOUT_URL}}"],
-    "menu.support": ["{support}", "{{SUPPORT_CONTACT}}"],
+ADMIN_TEXTS_PREVIEW_BUTTON = "👁 Предпросмотр"
+
+_ADMIN_TEXT_PLACEHOLDERS: dict[str, dict[str, list[str]]] = {
+    "menu.start": {
+        "required": ["{name}"],
+        "optional": ["{{NAME}}"],
+    },
+    "menu.registration_complete": {
+        "required": ["{name}"],
+        "optional": ["{{NAME}}"],
+    },
+    "menu.pay": {
+        "required": ["{checkout_url}"],
+        "optional": ["{{CHECKOUT_URL}}"],
+    },
+    "menu.support": {
+        "required": ["{support}"],
+        "optional": ["{{SUPPORT_CONTACT}}"],
+    },
+    "forms.reminder_template": {
+        "required": ["{form_label}"],
+        "optional": [],
+    },
 }
+
+_ADMIN_TEXT_PREVIEW_SAMPLE_DATA: dict[str, str] = {
+    "name": "Алиса",
+    "checkout_url": YOOMONEY_CHECKOUT_URL or "https://pay.example.com/checkout",
+    "support": SUPPORT_CONTACT,
+    "support_contact": SUPPORT_CONTACT,
+}
+
+
+def _admin_placeholder_variants(token: str) -> set[str]:
+    normalized = token.strip("{}").strip()
+    if not normalized:
+        return {token}
+    key = normalized.lower()
+    variants = {
+        f"{{{key}}}",
+        f"{{{key.upper()}}}",
+        f"{{{{{key}}}}}",
+        f"{{{{{key.upper()}}}}}",
+    }
+    variants.add(token)
+    return variants
+
+
+def _admin_placeholder_config(key: str) -> tuple[list[str], list[str]]:
+    config = _ADMIN_TEXT_PLACEHOLDERS.get(key) or {}
+    required = list(config.get("required", []))
+    optional = [token for token in config.get("optional", []) if token not in required]
+    return required, optional
+
+
+def _admin_missing_required_placeholders(text: str, key: str) -> list[str]:
+    required_tokens, _ = _admin_placeholder_config(key)
+    if not required_tokens:
+        return []
+    missing: list[str] = []
+    for token in required_tokens:
+        variants = _admin_placeholder_variants(token)
+        if not any(variant in text for variant in variants):
+            missing.append(token)
+    return missing
+
+
+def _admin_placeholder_hint_line(key: str) -> str:
+    required, optional = _admin_placeholder_config(key)
+    if not required and not optional:
+        return ""
+
+    def _format(tokens: list[str]) -> str:
+        return ", ".join(f"<code>{html.escape(token)}</code>" for token in tokens)
+
+    parts: list[str] = []
+    if required:
+        parts.append(f"обязательные — {_format(required)}")
+    if optional:
+        parts.append(f"дополнительные — {_format(optional)}")
+
+    return "Можно использовать плейсхолдеры: " + "; ".join(parts)
 
 _CONTENT_KEY_HINTS: dict[str, str] = {
     "about": "Описание клуба по умолчанию",
@@ -765,7 +1368,7 @@ for setting_key, label in _ADMIN_SETTINGS_LABELS.items():
 
 _CONTENT_KEY_PATTERN = re.compile(r"^[A-Za-z0-9_.-]{3,}$")
 _CONTENT_SUGGESTION_STEP = 6
-_CONTENT_SUGGESTION_LIMIT = 60
+_CONTENT_SUGGESTION_LIMIT: int | None = None
 _CONTENT_PREVIEW_KEY_RE = re.compile(r"<b>Ключ:</b>\s*<code>([^<]+)</code>")
 _CONTENT_PREVIEW_KEY_PLAIN_RE = re.compile(r"Ключ[:：]\s*([A-Za-z0-9_.-]{3,})")
 
@@ -831,6 +1434,26 @@ _ADMIN_PAYMENT_STATUS_LABELS: dict[str, str] = {
     "refund": "Возврат",
     "failed": "Ошибка",
 }
+
+_TEST_REQUEST_STATUS_ORDER = [
+    "waiting",
+    "booked",
+    "in_progress",
+    "done",
+    "cancelled",
+    "archived",
+]
+
+_TEST_REQUEST_STATUS_LABELS: dict[str, str] = {
+    "waiting": "В ожидании",
+    "booked": "Запланировано",
+    "in_progress": "В работе",
+    "done": "Завершено",
+    "cancelled": "Отменено",
+    "archived": "Архив",
+}
+
+_TEST_REQUEST_CLOSED_STATUSES = {"done", "completed", "cancelled", "archived", "rejected"}
 
 
 def _admin_user_segment_from_text(text: str | None) -> str | None:
@@ -1078,6 +1701,37 @@ async def _collect_admin_stats_data() -> dict[str, Any]:
         """
     )
 
+    form_sessions_rows = await fetch(
+        """
+        SELECT form_slug,
+               COUNT(*) AS total,
+               COUNT(*) FILTER (WHERE completed_at IS NOT NULL) AS completed,
+               COUNT(*) FILTER (WHERE completed_at IS NULL) AS in_progress,
+               MAX(started_at) AS last_started,
+               MAX(completed_at) AS last_completed
+          FROM form_sessions
+         GROUP BY form_slug
+        """
+    )
+
+    test_requests_status_rows = await fetch(
+        """
+        SELECT status, COUNT(*) AS count, MAX(updated_at) AS last_updated
+          FROM test_requests
+         GROUP BY status
+        """
+    )
+
+    test_requests_overview = await fetchrow(
+        """
+        SELECT COUNT(*) AS total,
+               COUNT(*) FILTER (
+                   WHERE status NOT IN ('done', 'completed', 'cancelled', 'archived', 'rejected')
+               ) AS active
+          FROM test_requests
+        """
+    )
+
     return {
         "users": {
             "total": int((total or {}).get("c", 0)),
@@ -1090,6 +1744,16 @@ async def _collect_admin_stats_data() -> dict[str, Any]:
             "lesson_stats": [dict(row) for row in lesson_stats_rows or []],
         },
         "payments": [dict(row) for row in payment_stats_rows or []],
+        "forms": {
+            "sessions": [dict(row) for row in form_sessions_rows or []],
+            "test_requests": {
+                "statuses": [dict(row) for row in test_requests_status_rows or []],
+                "summary": {
+                    "total": int((test_requests_overview or {}).get("total", 0)),
+                    "active": int((test_requests_overview or {}).get("active", 0)),
+                },
+            },
+        },
         "timestamp": now_utc(),
     }
 
@@ -1180,6 +1844,80 @@ def _generate_payments_table_data(stats: dict[str, Any]) -> tuple[list[str], lis
     return headers, rows, align
 
 
+def _form_display_label(slug: str) -> str:
+    if not slug:
+        return "—"
+    normalized = slug.strip()
+    base = FORM_LABELS.get(normalized)
+    if base and base != normalized:
+        return f"{base} ({normalized})"
+    return normalized
+
+
+def _generate_form_sessions_table_data(stats: dict[str, Any]) -> tuple[list[str], list[list[str]], list[str]]:
+    forms_data = stats.get("forms") or {}
+    session_rows = forms_data.get("sessions") or []
+
+    headers = [
+        "Форма",
+        "Начато",
+        "Завершено",
+        "Активно",
+        "Посл. старт",
+        "Посл. заверш.",
+    ]
+    align = ["left", "right", "right", "right", "left", "left"]
+
+    if not session_rows:
+        empty_row = ["Нет данных", "0", "0", "0", "—", "—"]
+        return headers, [empty_row], align
+
+    def _row_key(item: dict[str, Any]) -> tuple[int, str]:
+        slug = str(item.get("form_slug") or "")
+        priority = 0 if slug in (FORM_SLUG_ANALYSIS, FORM_SLUG_TEST) else 1
+        return priority, slug
+
+    rows: list[list[str]] = []
+    total_started = 0
+    total_completed = 0
+    total_active = 0
+
+    for item in sorted(session_rows, key=_row_key):
+        slug = str(item.get("form_slug") or "")
+        started = int(item.get("total") or 0)
+        completed = int(item.get("completed") or 0)
+        in_progress = int(item.get("in_progress") or started - completed)
+        in_progress = max(in_progress, 0)
+        last_started = _format_datetime_safe(item.get("last_started"))
+        last_completed = _format_datetime_safe(item.get("last_completed"))
+
+        total_started += started
+        total_completed += completed
+        total_active += in_progress
+
+        rows.append(
+            [
+                _form_display_label(slug),
+                str(started),
+                str(completed),
+                str(in_progress),
+                last_started,
+                last_completed,
+            ]
+        )
+
+    rows.append([
+        "Итого",
+        str(total_started),
+        str(total_completed),
+        str(total_active),
+        "—",
+        "—",
+    ])
+
+    return headers, rows, align
+
+
 def _format_admin_stats_overview(stats: dict[str, Any]) -> str:
     headers_users, rows_users, align_users = _generate_users_table_data(stats)
     headers_lessons, rows_lessons, align_lessons = _generate_lesson_table_data(stats)
@@ -1208,6 +1946,7 @@ def _format_admin_stats_overview(stats: dict[str, Any]) -> str:
         f"Обновлено: {timestamp}",
         "",
         "Используй кнопки ниже, чтобы открыть подробные отчёты.",
+        "«🗂 Формы и консультации» — отдельная сводка по тестам и разборам.",
     ]
     return "\n".join(lines)
 
@@ -1253,6 +1992,81 @@ def _format_admin_stats_payments(stats: dict[str, Any]) -> str:
         "",
         f"Обновлено: {timestamp}",
     ])
+
+
+def _format_admin_stats_forms(stats: dict[str, Any]) -> str:
+    headers, rows, align = _generate_form_sessions_table_data(stats)
+    forms_table = _render_stats_table(headers, rows, align)
+
+    forms_data = stats.get("forms") or {}
+    test_requests = forms_data.get("test_requests") or {}
+    status_rows = test_requests.get("statuses") or []
+    summary = test_requests.get("summary") or {}
+    total_requests = int(summary.get("total") or 0)
+    active_requests = int(summary.get("active") or 0)
+
+    if not total_requests and status_rows:
+        total_requests = sum(int(item.get("count") or 0) for item in status_rows)
+    if not active_requests and status_rows:
+        active_requests = sum(
+            int(item.get("count") or 0)
+            for item in status_rows
+            if str(item.get("status") or "").lower() not in _TEST_REQUEST_CLOSED_STATUSES
+        )
+
+    if status_rows:
+        def _status_key(item: dict[str, Any]) -> tuple[int, str]:
+            status = str(item.get("status") or "")
+            try:
+                return _TEST_REQUEST_STATUS_ORDER.index(status), status
+            except ValueError:
+                return len(_TEST_REQUEST_STATUS_ORDER), status
+
+        ordered_statuses = sorted(status_rows, key=_status_key)
+    else:
+        ordered_statuses = []
+
+    status_lines: list[str] = []
+    for item in ordered_statuses:
+        status = str(item.get("status") or "")
+        label = _TEST_REQUEST_STATUS_LABELS.get(status, status or "—")
+        count = int(item.get("count") or 0)
+        last_updated = _format_datetime_safe(item.get("last_updated"))
+        suffix = f" (обновлено: {last_updated})" if last_updated != "—" else ""
+        is_active = str(status).lower() not in _TEST_REQUEST_CLOSED_STATUSES
+        marker = "🔥" if is_active else "✅"
+        status_lines.append(f"{marker} {label}: <b>{count}</b>{suffix}")
+
+    updates = [item.get("last_updated") for item in ordered_statuses if item.get("last_updated")]
+    last_status_update = max(updates) if updates else None
+
+    lines = [
+        "<b>🗂 Формы и консультации</b>",
+        "",
+        "<b>Формы</b>",
+        forms_table,
+        "",
+        "<b>Заявки на консультацию</b>",
+        f"Всего заявок: <b>{total_requests}</b>",
+        f"Активных (ожидают действий): <b>{active_requests}</b>",
+    ]
+
+    if status_lines:
+        lines.extend(["", "По статусам:", *status_lines])
+    else:
+        lines.extend(["", "Пока нет заявок в базе."])
+
+    timestamp = _format_datetime_safe(stats.get("timestamp"))
+    last_status_text = _format_datetime_safe(last_status_update)
+
+    lines.extend([
+        "",
+        f"Последнее изменение статусов: {last_status_text}",
+        f"Обновлено: {timestamp}",
+    ])
+
+    return "\n".join(lines)
+
 
 async def _admin_set_member_active(user_id: int, access_until: Optional[datetime]) -> None:
     await execute(
@@ -1569,7 +2383,7 @@ def _merge_unique_content_keys(*sources: Iterable[str], limit: int | None = None
     return result
 
 
-async def _collect_content_suggestions(limit: int = _CONTENT_SUGGESTION_LIMIT) -> list[str]:
+async def _collect_content_suggestions(limit: int | None = _CONTENT_SUGGESTION_LIMIT) -> list[str]:
     db_keys = await list_content_keys_db()
     yaml_content = _load_yaml_content()
     yaml_keys = sorted(_flatten_yaml_keys(yaml_content))
@@ -1663,6 +2477,40 @@ def _filter_suggestions(keys: list[str], query: str, limit: int = 5) -> list[str
     return matches[:limit]
 
 
+async def _send_content_key_suggestions(
+    message: types.Message,
+    query: str,
+    matches: list[str],
+) -> None:
+    if not query:
+        return
+
+    escaped_query = html.escape(query)
+    if matches:
+        lines = [
+            f"<b>Похожие ключи на запрос</b> <code>{escaped_query}</code>:",
+            "",
+        ]
+        lines.extend(_format_suggestion_lines(matches))
+        lines.extend(
+            [
+                "",
+                "Можно выбрать ключ кнопкой из списка ниже или ввести его полностью вручную.",
+            ]
+        )
+    else:
+        lines = [
+            f"Не нашёл ключи, похожие на <code>{escaped_query}</code>.",
+            "Попробуй уточнить запрос или пролистай список через «🔁 Ещё варианты».",
+        ]
+
+    await message.answer(
+        "\n".join(lines),
+        parse_mode=ParseMode.HTML,
+        disable_web_page_preview=True,
+    )
+
+
 async def get_bool_setting(key: str, default: bool = True) -> bool:
     raw_value = await get_content(f"settings.{key}", "true" if default else "false")
     normalized = str(raw_value).strip().lower()
@@ -1673,8 +2521,12 @@ async def get_bool_setting(key: str, default: bool = True) -> bool:
     return default
 
 
-async def set_bool_setting(key: str, value: bool) -> None:
-    await set_content_value(f"settings.{key}", "true" if value else "false")
+async def set_bool_setting(key: str, value: bool, *, updated_by: int | None = None) -> None:
+    await set_content_value(
+        f"settings.{key}",
+        "true" if value else "false",
+        updated_by=updated_by,
+    )
 
 
 async def get_menu_flags() -> dict[str, bool]:
@@ -1682,6 +2534,26 @@ async def get_menu_flags() -> dict[str, bool]:
     for setting_key, default in _ADMIN_SETTINGS_DEFAULTS.items():
         flags[setting_key] = await get_bool_setting(setting_key, default)
     return flags
+
+
+async def get_broadcast_flags() -> dict[str, bool]:
+    flags: dict[str, bool] = {}
+    for setting_key, default in _ADMIN_BROADCAST_SETTINGS_DEFAULTS.items():
+        flags[setting_key] = await get_bool_setting(setting_key, default)
+    return flags
+
+
+def _broadcast_status_labels(flags: dict[str, bool]) -> dict[str, bool]:
+    labeled: dict[str, bool] = {}
+    for key, default in _ADMIN_BROADCAST_SETTINGS_DEFAULTS.items():
+        label = _ADMIN_BROADCAST_SETTINGS_LABELS.get(key, key)
+        labeled[label] = flags.get(key, default)
+    return labeled
+
+
+async def build_admin_broadcast_keyboard() -> ReplyKeyboardMarkup:
+    flags = await get_broadcast_flags()
+    return admin_broadcast_keyboard(_broadcast_status_labels(flags))
 
 
 async def build_menu_keyboard(
@@ -1904,7 +2776,8 @@ async def send_test_section(
     is_admin: bool,
     *,
     from_callback: bool = False,
-) -> None:
+    only_text: bool = False,
+) -> tuple[str, Optional[str]] | None:
     user_row = user or await get_user_with_id(message.from_user.id)
     if not user_row:
         user_row = await ensure_user(message.from_user)
@@ -1913,7 +2786,7 @@ async def send_test_section(
         "menu.test",
         (
             "Тест: определение уровня.\n\n"
-            "Пройди тест и получи анализ: {test_url}\n\n"
+            "Пройди тест и получи анализ.\n\n"
             "После теста ты получишь анализ, рекомендации и сможешь записаться на разбор."
         ),
     )
@@ -1926,19 +2799,24 @@ async def send_test_section(
         TEST_SLUG=default_slug or "",
     )
 
+    slug = resolve_form_slug(TEST_FORM_URL, default_slug or FORM_SLUG_TEST) or FORM_SLUG_TEST
     if user_row:
         form_url = extract_first_url(test_text) or TEST_FORM_URL
-        slug = resolve_form_slug(form_url, default_slug or FORM_SLUG_TEST)
-        if slug:
-            try:
-                await mark_form_started(user_row["id"], slug)
-            except Exception as e:
-                logger.warning(
-                    "form_session: mark start failed user_id=%s slug=%s: %s",
-                    user_row.get("id"),
-                    slug,
-                    e,
-                )
+        resolved = resolve_form_slug(form_url, slug)
+        if resolved:
+            slug = resolved
+        try:
+            await mark_form_started(user_row["id"], slug)
+        except Exception as e:
+            logger.warning(
+                "form_session: mark start failed user_id=%s slug=%s: %s",
+                user_row.get("id"),
+                slug,
+                e,
+            )
+
+    if only_text:
+        return test_text, slug
 
     await answer_with_main_menu(
         message,
@@ -1948,6 +2826,7 @@ async def send_test_section(
         section="learning",
         from_callback=from_callback,
     )
+    return test_text, slug
 
 
 async def send_support_section(
@@ -2056,6 +2935,82 @@ async def send_profile_overview(
     await message.answer(profile_text, reply_markup=keyboard)
 
 
+async def send_learning_progress_section(
+    message: types.Message,
+    user: Optional[dict],
+    is_admin: bool,
+    *,
+    from_callback: bool = False,
+) -> None:
+    user_row = user or await get_user_with_id(message.from_user.id)
+    if not user_row:
+        await answer_with_main_menu(
+            message,
+            user_row,
+            is_admin,
+            "Перезапусти /start, чтобы сохранить прогресс и открыть уроки.",
+            section="learning",
+            from_callback=from_callback,
+        )
+        return
+
+    rows = await fetch(
+        "SELECT lesson_num, hw_status FROM funnel_progress WHERE user_id=$1 ORDER BY lesson_num",
+        user_row["id"],
+    )
+    status_map = {int(row["lesson_num"]): row["hw_status"] for row in rows or []}
+    next_lesson = await next_lesson_to_deliver(user_row["id"])
+
+    status_lines: list[str] = []
+    for lesson_num in range(1, 5):
+        status_code = status_map.get(lesson_num)
+        if status_code == "submitted":
+            icon, description = "✅", "завершён"
+        elif status_code == "skipped":
+            icon, description = "⏭️", "пропущен"
+        elif status_code == "pending":
+            icon, description = "⏳", "в работе"
+        else:
+            if next_lesson == 5 or lesson_num < next_lesson:
+                icon, description = "✅", "завершён"
+            elif lesson_num == next_lesson:
+                icon, description = "🚀", "готов к старту"
+            else:
+                icon, description = "🔒", "откроется после предыдущего"
+        status_lines.append(f"{icon} Урок {lesson_num}: {description}")
+
+    progress_rows = "\n".join(status_lines)
+
+    if next_lesson == 5:
+        summary = "Ты прошла все 4 урока! Продолжай практики или изучай материалы клуба."
+        next_label = ""
+    else:
+        summary = f"Следующий шаг: открой урок {next_lesson} через «Бесплатные уроки»."
+        next_label = str(next_lesson)
+
+    template = await get_content(
+        "menu.learning.progress",
+        "<b>Мой прогресс</b>\n\n{progress_rows}\n\n{summary}",
+    )
+    progress_text = render_content(
+        template,
+        progress_rows=progress_rows,
+        PROGRESS_ROWS=progress_rows,
+        summary=summary,
+        SUMMARY=summary,
+        next_lesson=next_label,
+        NEXT_LESSON=next_label,
+    )
+
+    keyboard = await build_menu_keyboard(
+        user=user_row,
+        is_admin=is_admin,
+        section="learning",
+    )
+
+    await message.answer(progress_text, reply_markup=keyboard)
+
+
 async def send_weekly_materials_section(
     message: types.Message,
     user: Optional[dict],
@@ -2088,7 +3043,7 @@ async def send_weekly_materials_section(
             "menu.weekly.locked",
             (
                 "Материалы недели доступны участницам клуба.\n\n"
-                "Оформи доступ в разделе «Оплатить доступ», и бот пришлёт ссылку."
+                f"Оформи доступ в разделе «{ADMIN_PAYMENTS_BUTTON}», и бот пришлёт ссылки автоматически."
             ),
         )
         await answer_with_main_menu(
@@ -2117,6 +3072,84 @@ async def send_weekly_materials_section(
         user_row,
         is_admin,
         weekly_text,
+        section="materials",
+        from_callback=from_callback,
+    )
+
+
+async def send_materials_catalog_section(
+    message: types.Message,
+    user: Optional[dict],
+    is_admin: bool,
+    *,
+    from_callback: bool = False,
+) -> None:
+    user_row = user or await get_user_with_id(message.from_user.id)
+    catalog_text = await get_content(
+        "menu.materials.catalog",
+        (
+            "Каталог материалов клуба.\n\n"
+            "Здесь собраны ссылки на базовые модули, записи эфиров и дополнительные форматы."
+        ),
+    )
+
+    await answer_with_main_menu(
+        message,
+        user_row,
+        is_admin,
+        catalog_text,
+        section="materials",
+        from_callback=from_callback,
+    )
+
+
+async def send_materials_practices_section(
+    message: types.Message,
+    user: Optional[dict],
+    is_admin: bool,
+    *,
+    from_callback: bool = False,
+) -> None:
+    user_row = user or await get_user_with_id(message.from_user.id)
+    practices_text = await get_content(
+        "menu.materials.practices",
+        (
+            "Практики клуба.\n\n"
+            "Возвращайся к упражнениям, чтобы закреплять результаты и отслеживать изменения."
+        ),
+    )
+
+    await answer_with_main_menu(
+        message,
+        user_row,
+        is_admin,
+        practices_text,
+        section="materials",
+        from_callback=from_callback,
+    )
+
+
+async def send_materials_challenges_section(
+    message: types.Message,
+    user: Optional[dict],
+    is_admin: bool,
+    *,
+    from_callback: bool = False,
+) -> None:
+    user_row = user or await get_user_with_id(message.from_user.id)
+    challenges_text = await get_content(
+        "menu.materials.challenges",
+        (
+            "Челленджи и тематические марафоны.\n\n"
+            "Выбирай формат под задачу и отмечай прогресс в «Материалах недели»."
+        ),
+    )
+
+    await answer_with_main_menu(
+        message,
+        user_row,
+        is_admin,
+        challenges_text,
         section="materials",
         from_callback=from_callback,
     )
@@ -2235,7 +3268,11 @@ async def send_pay_section(
     *,
     from_callback: bool = False,
 ) -> None:
-    if not AT_PRODUCT_ID_CLUB:
+    checkout_url = (YOOMONEY_CHECKOUT_URL or "").strip()
+    if not checkout_url and AT_PRODUCT_ID_CLUB:
+        checkout_url = f"https://antitraining.example/checkout/{AT_PRODUCT_ID_CLUB}"
+
+    if not checkout_url:
         await answer_with_main_menu(
             message,
             user,
@@ -2263,7 +3300,6 @@ async def send_pay_section(
         )
         return
 
-    url = f"https://antitraining.example/checkout/{AT_PRODUCT_ID_CLUB}"
     pay_template = await get_content(
         "menu.pay",
         (
@@ -2275,8 +3311,8 @@ async def send_pay_section(
     )
     pay_text = render_content(
         pay_template,
-        checkout_url=url,
-        CHECKOUT_URL=url,
+        checkout_url=checkout_url,
+        CHECKOUT_URL=checkout_url,
     )
 
     if flags.get("payments_manual_review", False):
@@ -2357,11 +3393,11 @@ async def send_admin_menu(
         "• 👥 Пользователи — сегменты, карточки профилей и управление доступом.\n"
         "• 📢 Рассылка — как отправлять сообщения сегментам.\n"
         "• 🧾 Контент и тексты — редактирование сообщений бота без команд.\n"
-        "• 💳 Оплаты — окно продаж, ручная активация и история платежей.\n"
+        "• 🎛 Логика бота — сценарии приветствия, онбординг и доступ к оплатам.\n"
         "• 📊 Статистика — сводка по статусам, прогресс уроков и последние оплаты.\n"
         "• 🛠️ Диагностика — проверка важных настроек.\n"
-        "• ⚙️ Настройки — управление разделами меню и быстрый доступ к текстам.\n\n"
-        "Выберите раздел, чтобы открыть расширенную статистику, карточки пользователей или управление оплатами."
+        "• ⚙️ Настройки — управление разделами меню и вспомогательными опциями.\n\n"
+        "Выберите раздел, чтобы открыть расширенную статистику, карточки пользователей или настроить сценарии бота."
     )
     await message.answer(
         admin_text,
@@ -2382,7 +3418,8 @@ async def send_admin_settings(
         f"Ручная проверка оплат: {'включена' if flags.get('payments_manual_review', False) else 'выключена'}\n"
         f"Материалы недели: {'доступны' if flags.get('show_weekly_materials', True) else 'скрыты'}\n"
         f"Расписание: {'показывается' if flags.get('show_schedule', True) else 'скрыто'}\n\n"
-        "Используй кнопки ниже, чтобы включать и выключать опции или перейти к редактору контента."
+        "Используй кнопки ниже, чтобы включать и выключать опции.\n\n"
+        "Готово? Вернись через «⬅️ В админку» или открой главное меню."
     )
     keyboard = admin_settings_keyboard(flags, _ADMIN_SETTINGS_LABELS)
 
@@ -2392,10 +3429,11 @@ async def send_admin_settings(
 async def send_admin_behavior_menu(message: types.Message) -> None:
     text = (
         "<b>Логика бота</b>\n\n"
-        "Здесь можно быстро настроить ключевые сценарии:\n"
+        "Здесь можно быстро настроить ключевые сценарии и управление доступами:\n"
         "• Изменить приветствие при /start.\n"
         "• Обновить сообщение после регистрации.\n"
-        "• Управлять шагами онбординга для новых участниц.\n\n"
+        "• Управлять шагами онбординга для новых участниц.\n"
+        "• Открыть раздел «💳 Оплаты» для ручных операций с платежами.\n\n"
         "Выбирай нужный раздел — бот попросит только текст, остальное он сделает сам."
     )
     await message.answer(
@@ -2436,6 +3474,7 @@ async def send_admin_payments_overview(message: types.Message) -> None:
             "• «🧾 Последние платежи» обновляет список ниже.",
             "• «✅ Подтвердить доступ» и «🚫 Приостановить доступ» требуют @username или ID участницы.",
             "• Кнопки отметки платежа добавят отметку о ручной проверке в карточку платежа.",
+            "• «⬅️ К логике бота» вернёт к настройкам сценариев и оплат.",
         ]
     )
 
@@ -2465,14 +3504,58 @@ async def send_admin_onboarding_menu(message: types.Message) -> None:
 
 
 async def send_admin_broadcast_menu(message: types.Message) -> None:
+    reminder_template = await get_content("forms.reminder_template", default="")
+    reminder_preview = _preview_text_for_admin(reminder_template, limit=400)
+    broadcast_flags = await get_broadcast_flags()
+    recent = await list_recent_broadcasts(limit=1)
+    if recent:
+        last_broadcast_line = _format_broadcast_history_entry(recent[0], short=True)
+        last_broadcast_text = f"Последняя рассылка: {last_broadcast_line}"
+    else:
+        last_broadcast_text = "Последняя рассылка: пока ничего не отправляли."
+
+    active_jobs = [
+        label
+        for key, label in _ADMIN_BROADCAST_SETTINGS_LABELS.items()
+        if broadcast_flags.get(key, _ADMIN_BROADCAST_SETTINGS_DEFAULTS.get(key, True))
+    ]
+    if active_jobs:
+        jobs_text = "Автоджобы: " + ", ".join(active_jobs)
+    else:
+        jobs_text = "Автоджобы: выключены."
+
+    history_hint = (
+        f"История — кнопка «{ADMIN_BROADCAST_HISTORY_BUTTON}», «{BROADCAST_HISTORY_MORE_BUTTON}» покажет ещё записи."
+    )
+
+    status_lines = []
+    for key, label in _ADMIN_BROADCAST_SETTINGS_LABELS.items():
+        enabled = broadcast_flags.get(
+            key, _ADMIN_BROADCAST_SETTINGS_DEFAULTS.get(key, True)
+        )
+        status_lines.append(f"• {label}: {'включены' if enabled else 'выключены'}")
+    status_text = "\n".join(status_lines)
+    keyboard = admin_broadcast_keyboard(_broadcast_status_labels(broadcast_flags))
+
     text = (
         "<b>Рассылка</b>\n\n"
+        "<b>Краткий дайджест</b>\n"
+        f"{last_broadcast_text}\n"
+        f"{jobs_text}\n"
+        f"{history_hint}\n\n"
         "Выберите сегмент, напишите текст — бот покажет предпросмотр и спросит подтверждение.\n"
-        "Можно сохранять тексты как шаблоны и переиспользовать их позже."
+        "Можно сохранять тексты как шаблоны и переиспользовать их позже.\n\n"
+        "<b>Текст напоминаний:</b>\n"
+        f"{reminder_preview}\n\n"
+        "<b>Автоматические напоминания:</b>\n"
+        f"{status_text}\n\n"
+        "Нужна пауза? Нажми на соответствующую строку, чтобы включить или выключить рассылку.\n\n"
+        "Нужно обновить шаблон напоминания о незавершённых анкетах?"
+        f" Нажми «{ADMIN_BROADCAST_REMINDER_TEXT}» — откроется знакомый редактор текста."
     )
     await message.answer(
         text,
-        reply_markup=admin_broadcast_keyboard(),
+        reply_markup=keyboard,
         disable_web_page_preview=True,
     )
 
@@ -2504,6 +3587,54 @@ async def send_admin_broadcast_templates(message: types.Message) -> None:
     )
 
 
+async def _send_admin_broadcast_history(
+    message: types.Message,
+    state: FSMContext,
+    *,
+    offset: int = 0,
+    page_size: int = 5,
+) -> bool:
+    normalized_offset = max(0, int(offset))
+    page = max(1, int(page_size))
+    rows = await list_recent_broadcasts(limit=page + 1, offset=normalized_offset)
+    entries = rows[:page]
+    has_more = len(rows) > page
+
+    if not entries:
+        if normalized_offset == 0:
+            text = (
+                "<b>История рассылок</b>\n\n"
+                "Пока ещё не было отправленных рассылок."
+            )
+        else:
+            text = (
+                "Больше записей нет."
+            )
+        await state.update_data(broadcast_history_offset=normalized_offset)
+        await message.answer(
+            text,
+            reply_markup=admin_broadcast_history_keyboard(has_more=False),
+            disable_web_page_preview=True,
+        )
+        return False
+
+    lines = ["<b>История рассылок</b>", ""]
+    for entry in entries:
+        lines.append(_format_broadcast_history_entry(entry))
+        lines.append("")
+
+    text = "\n".join(lines).strip()
+    new_offset = normalized_offset + len(entries)
+    await state.update_data(broadcast_history_offset=new_offset)
+
+    await message.answer(
+        text,
+        reply_markup=admin_broadcast_history_keyboard(has_more=has_more),
+        disable_web_page_preview=True,
+    )
+    return True
+
+
 async def send_admin_content_menu(message: types.Message) -> None:
     text = (
         "<b>Контент и тексты</b>\n\n"
@@ -2511,10 +3642,13 @@ async def send_admin_content_menu(message: types.Message) -> None:
         "• 📄 <b>Тексты экранов</b> — выбрать готовый экран и обновить его текст.\n"
         "• 🔍 <b>Посмотреть текст</b> — узнать текущее содержимое любого ключа и при необходимости сразу обновить его ответом.\n"
         "• ➕ <b>Добавить или обновить текст</b> — создать свой ключ или выбрать существующий из подсказок.\n\n"
+        "• ⬇️ <b>Экспорт</b> — выгрузить все ключи в YAML и JSON для резервной копии.\n"
+        "• ⬆️ <b>Импорт</b> — загрузить подготовленный файл и массово обновить тексты.\n\n"
         "Можно писать обычным текстом — бот автоматически преобразует популярные сокращения в теги и очищает форматирование.\n"
         "Подробности о тегах и примерах — в кнопке «ℹ️ Форматирование текста».\n"
         "Допустимы теги: <code>&lt;b&gt;</code>, <code>&lt;i&gt;</code>, <code>&lt;u&gt;</code>, <code>&lt;strong&gt;</code>, <code>&lt;em&gt;</code>, <code>&lt;code&gt;</code>, <code>&lt;a href=&quot;...&quot;&gt;</code>.\n"
         "Бот подсказывает популярные ключи и запоминает последние изменения, чтобы можно было быстро вносить правки.\n"
+        "Достаточно набрать несколько символов — бот пришлёт подходящие ключи с описанием, чтобы быстрее найти нужный текст.\n"
         "Если нужно отменить действие — нажми кнопку «Отмена»."
     )
     keyboard = admin_content_keyboard()
@@ -2601,15 +3735,18 @@ async def is_member(user_row: dict) -> bool:
     access_until = user_row.get("access_until")
     
     if status == "member_active":
-        if access_until and access_until > now_utc():
+        if access_until is None:
             return True
-        # Если срок доступа истек, обновляем статус
-        if access_until and access_until <= now_utc():
-            await execute(
-                "UPDATE users SET status='member_expired', updated_at=NOW() WHERE id=$1",
-                user_row["id"]
-            )
-    
+
+        if access_until > now_utc():
+            return True
+
+        # Если срок доступа истек, обновляем статус только при наличии даты
+        await execute(
+            "UPDATE users SET status='member_expired', updated_at=NOW() WHERE id=$1",
+            user_row["id"]
+        )
+
     return False
 def parse_start_utm(text: Optional[str]) -> dict:
     if not text or " " not in text:
@@ -2662,14 +3799,6 @@ async def save_lesson_feedback(user_id: int, lesson_num: int, feedback_type: str
         user_id, lesson_num, feedback_type, feedback_text
     )
     logger.info("feedback saved: user_id=%s lesson=%s type=%s", user_id, lesson_num, feedback_type)
-
-
-def resolve_form_slug(raw: str | None) -> Optional[str]:
-    if not raw:
-        return None
-    slug = raw.strip().lower().replace("-", "_")
-    slug = re.sub(r"\s+", "_", slug)
-    return FORM_ALIASES.get(slug, slug if slug in FORM_LABELS else None)
 
 
 async def mark_form_started(user_id: int, form_slug: str) -> None:
@@ -3248,23 +4377,32 @@ async def cmd_form_done(message: types.Message, command: CommandObject, state: F
         invite_text = ""
         gen_invite_link = None
         notify_admins = None
+        invite_attempted = False
+        invite_generated = False
         try:
-            from app import gen_invite_link as _gen_invite_link, notify_admins as _notify_admins
+            from app import gen_invite_link as _gen_invite_link
 
             gen_invite_link = _gen_invite_link
-            notify_admins = _notify_admins
         except Exception:
             gen_invite_link = None
+
+        try:
+            from app import notify_admins as _notify_admins
+
+            notify_admins = _notify_admins
+        except Exception:
             notify_admins = None
 
         if gen_invite_link:
             try:
+                invite_attempted = True
                 invite_payload = await gen_invite_link()
                 if invite_payload:
                     if invite_payload.startswith("http"):
                         invite_text = f"Твоя персональная ссылка: {invite_payload}"
                     else:
                         invite_text = invite_payload
+                    invite_generated = True
             except Exception as exc:
                 logger.warning("form_session: gen_invite_link failed user_id=%s slug=%s: %s", user_row["id"], slug, exc)
 
@@ -3272,15 +4410,27 @@ async def cmd_form_done(message: types.Message, command: CommandObject, state: F
             response_lines.append(invite_text)
         else:
             response_lines.append("Мы передали заявку администраторам и свяжемся с тобой в ближайшее время.")
-            if notify_admins:
-                username = message.from_user.username
-                display = f"@{username}" if username else message.from_user.full_name or message.from_user.id
-                try:
-                    await notify_admins(
-                        f"✅ Завершена анкета «{label}»\nПользователь: {display} (tg_id={message.from_user.id})"
+        if notify_admins:
+            username = message.from_user.username
+            display = f"@{username}" if username else message.from_user.full_name or message.from_user.id
+            if invite_generated:
+                invite_status = "Ссылка выдана автоматически"
+            elif invite_attempted:
+                invite_status = "Не удалось выдать ссылку автоматически"
+            else:
+                invite_status = "Автовыдача ссылок недоступна"
+            try:
+                await notify_admins(
+                    "\n".join(
+                        [
+                            f"✅ Завершена анкета «{label}»",
+                            f"Пользователь: {display} (tg_id={message.from_user.id})",
+                            f"Инвайт: {invite_status}",
+                        ]
                     )
-                except Exception as exc:
-                    logger.warning("form_session: notify_admins failed user_id=%s slug=%s: %s", user_row["id"], slug, exc)
+                )
+            except Exception as exc:
+                logger.warning("form_session: notify_admins failed user_id=%s slug=%s: %s", user_row["id"], slug, exc)
     else:
         response_lines.append(f"Анкета «{label}» уже отмечена как завершённая.")
 
@@ -3550,7 +4700,217 @@ async def menu_analysis(message: types.Message, state: FSMContext):
 async def menu_test(message: types.Message, state: FSMContext):
     await _reset_state_if_needed(state)
     user, is_admin = await _get_user_and_admin(message)
-    await send_test_section(message, user, is_admin)
+    if not user:
+        user = await ensure_user(message.from_user)
+
+    result = await send_test_section(message, user, is_admin, only_text=True)
+    if result:
+        intro_text, slug = result
+    else:
+        intro_text, slug = "", FORM_SLUG_TEST
+
+    await state.set_state(TestStates.waiting_birthdate)
+    await state.update_data(
+        test_form_slug=slug,
+        test_user_id=(user or {}).get("id"),
+    )
+
+    intro_template = await get_content("menu.test_intro", intro_text)
+    intro_message = render_content(
+        intro_template,
+        test_url=TEST_FORM_URL,
+        TEST_FORM_URL=TEST_FORM_URL,
+    )
+
+    birth_prompt_template = await get_content(
+        "menu.test_birthdate_prompt",
+        (
+            "Чтобы записать тебя на тест, напиши дату рождения.\n"
+            "Подойдут варианты: 24.08.1992 или 24 августа 1992.\n\n"
+            "Для отмены нажми «Отмена»."
+        ),
+    )
+    birth_prompt = render_content(
+        birth_prompt_template,
+        test_url=TEST_FORM_URL,
+        TEST_FORM_URL=TEST_FORM_URL,
+    )
+
+    parts = [intro_message.strip(), birth_prompt.strip()]
+    message_text = "\n\n".join([part for part in parts if part])
+    await message.answer(message_text, reply_markup=cancel_keyboard())
+
+
+@router.message(F.text == LEARNING_PROGRESS_BUTTON)
+async def menu_learning_progress(message: types.Message, state: FSMContext):
+    await _reset_state_if_needed(state)
+    user, is_admin = await _get_user_and_admin(message)
+    if not user:
+        user = await ensure_user(message.from_user)
+    await send_learning_progress_section(message, user, is_admin)
+
+
+@router.message(TestStates.waiting_birthdate, F.text.casefold() == CANCEL_TEXT.lower())
+async def test_cancel_birthdate(message: types.Message, state: FSMContext):
+    await cancel_handler(message, state)
+
+
+@router.message(TestStates.waiting_birthdate)
+async def test_collect_birthdate(message: types.Message, state: FSMContext):
+    if (message.text or "").casefold() == CANCEL_TEXT.lower():
+        await cancel_handler(message, state)
+        return
+
+    birthdate = parse_birthdate(message.text)
+    if not birthdate:
+        invalid_template = await get_content(
+            "menu.test_birthdate_invalid",
+            (
+                "Не получилось распознать дату. Попробуй формат 24.08.1992 или 24 августа 1992.\n\n"
+                "Если передумала — нажми «Отмена»."
+            ),
+        )
+        response = render_content(
+            invalid_template,
+            raw=message.text or "",
+            RAW=message.text or "",
+        )
+        await message.answer(response, reply_markup=cancel_keyboard())
+        return
+
+    await state.update_data(test_birthdate=birthdate.isoformat())
+    await state.set_state(TestStates.waiting_name)
+
+    name_prompt_template = await get_content(
+        "menu.test_name_prompt",
+        (
+            "Отлично! Как тебя записать в заявке?\n\n"
+            "Можно указать короткое имя или ник."
+        ),
+    )
+    formatted_birthdate = _format_birthdate(birthdate)
+    name_prompt = render_content(
+        name_prompt_template,
+        birthdate=formatted_birthdate,
+        BIRTHDATE=formatted_birthdate,
+    )
+    await message.answer(name_prompt, reply_markup=cancel_keyboard())
+
+    notify_admins = _get_notify_admins()
+    if notify_admins:
+        stage_label = "ожидание имени"
+        card_lines = [
+            "🧪 Заявка на тест: обновление",
+            f"tg-id: <code>{message.from_user.id}</code>",
+            f"Дата рождения: {_format_birthdate(birthdate)}",
+            f"Этап: {stage_label}",
+        ]
+        try:
+            await notify_admins("\n".join(card_lines))
+        except Exception as exc:
+            logger.warning(
+                "test_request: notify_admins birthdate failed tg_user_id=%s err=%s",
+                message.from_user.id,
+                exc,
+            )
+
+
+@router.message(TestStates.waiting_name, F.text.len() > 0)
+async def test_collect_name(message: types.Message, state: FSMContext):
+    text = (message.text or "").strip()
+    if text.lower() == CANCEL_TEXT.lower():
+        await cancel_handler(message, state)
+        return
+
+    name = text
+    if len(name) < 2:
+        invalid_name_template = await get_content(
+            "menu.test_name_invalid",
+            "Имя должно содержать хотя бы два символа. Попробуй снова.",
+        )
+        await message.answer(invalid_name_template, reply_markup=cancel_keyboard())
+        return
+
+    data = await state.get_data()
+    birthdate_raw = data.get("test_birthdate")
+    form_slug = data.get("test_form_slug") or FORM_SLUG_TEST
+    stored_user_id = data.get("test_user_id")
+    if not birthdate_raw:
+        await state.set_state(TestStates.waiting_birthdate)
+        await message.answer("Начнём с даты рождения. Напиши её ещё раз, пожалуйста.", reply_markup=cancel_keyboard())
+        return
+
+    birthdate = date.fromisoformat(birthdate_raw)
+
+    user, is_admin = await _get_user_and_admin(message)
+    if not user:
+        user = await ensure_user(message.from_user)
+    user_id = stored_user_id or (user or {}).get("id")
+
+    if user_id and form_slug:
+        try:
+            await mark_form_started(user_id, form_slug)
+        except Exception as exc:
+            logger.warning(
+                "test_request: mark start retry failed user_id=%s slug=%s err=%s",
+                user_id,
+                form_slug,
+                exc,
+            )
+
+    preferred_name = name
+    await upsert_test_request(
+        tg_user_id=message.from_user.id,
+        user_id=user_id,
+        birthdate=birthdate,
+        preferred_name=preferred_name,
+    )
+
+    await state.clear()
+
+    thanks_template = await get_content(
+        "menu.test_thanks",
+        (
+            "Спасибо, {name}! Мы записали тебя на тестирование.\n"
+            "Когда будет готов анализ, администратор напишет в Telegram."
+        ),
+    )
+    safe_name = html.escape(preferred_name)
+    if not safe_name:
+        safe_name = html.escape(
+            (user or {}).get("name")
+            or (user or {}).get("full_name")
+            or message.from_user.first_name
+            or "друг"
+        )
+    formatted_birthdate = _format_birthdate(birthdate)
+    thanks_text = render_content(
+        thanks_template,
+        name=safe_name,
+        NAME=safe_name,
+        birthdate=formatted_birthdate,
+        BIRTHDATE=formatted_birthdate,
+    )
+
+    keyboard = await build_menu_keyboard(user=user, is_admin=is_admin, section="learning")
+    await message.answer(thanks_text, reply_markup=keyboard)
+
+    notify_admins = _get_notify_admins()
+    if notify_admins:
+        card_lines = [
+            "🧪 Новая запись на тестирование",
+            f"tg-id: <code>{message.from_user.id}</code>",
+            f"Дата рождения: {_format_birthdate(birthdate)}",
+            f"Имя: {safe_name if safe_name else '—'}",
+        ]
+        try:
+            await notify_admins("\n".join(card_lines))
+        except Exception as exc:
+            logger.warning(
+                "test_request: notify_admins failed tg_user_id=%s err=%s",
+                message.from_user.id,
+                exc,
+            )
 
 
 @router.message(F.text == "⚙️ Админка")
@@ -3566,6 +4926,27 @@ async def menu_weekly_materials(message: types.Message, state: FSMContext):
     await _reset_state_if_needed(state)
     user, is_admin = await _get_user_and_admin(message)
     await send_weekly_materials_section(message, user, is_admin)
+
+
+@router.message(F.text == MATERIALS_CATALOG_BUTTON)
+async def menu_materials_catalog(message: types.Message, state: FSMContext):
+    await _reset_state_if_needed(state)
+    user, is_admin = await _get_user_and_admin(message)
+    await send_materials_catalog_section(message, user, is_admin)
+
+
+@router.message(F.text == MATERIALS_PRACTICES_BUTTON)
+async def menu_materials_practices(message: types.Message, state: FSMContext):
+    await _reset_state_if_needed(state)
+    user, is_admin = await _get_user_and_admin(message)
+    await send_materials_practices_section(message, user, is_admin)
+
+
+@router.message(F.text == MATERIALS_CHALLENGES_BUTTON)
+async def menu_materials_challenges(message: types.Message, state: FSMContext):
+    await _reset_state_if_needed(state)
+    user, is_admin = await _get_user_and_admin(message)
+    await send_materials_challenges_section(message, user, is_admin)
 
 
 @router.message(F.text.in_({"Расписание", "Расписание 🔒"}))
@@ -3780,6 +5161,46 @@ async def cancel_handler(message: types.Message, state: FSMContext):
     await state.clear()
     user, is_admin = await _get_user_and_admin(message)
 
+    if current_state in {
+        TestStates.waiting_birthdate.state,
+        TestStates.waiting_name.state,
+    }:
+        notify_admins = _get_notify_admins()
+        birthdate_raw = (data or {}).get("test_birthdate") if data else None
+        stored_user_id = (data or {}).get("test_user_id") if data else None
+        resolved_user_id = stored_user_id or ((user or {}).get("id") if user else None)
+        if notify_admins and (birthdate_raw or resolved_user_id):
+            stage_label = (
+                "ожидание даты рождения"
+                if current_state == TestStates.waiting_birthdate.state
+                else "ожидание имени"
+            )
+            formatted_birthdate = None
+            if birthdate_raw:
+                try:
+                    formatted_birthdate = _format_birthdate(
+                        date.fromisoformat(birthdate_raw)
+                    )
+                except Exception:
+                    formatted_birthdate = birthdate_raw
+            card_lines = [
+                "🧪 Заявка на тест отменена",
+                f"tg-id: <code>{message.from_user.id}</code>",
+            ]
+            if resolved_user_id:
+                card_lines.append(f"user-id: <code>{resolved_user_id}</code>")
+            if formatted_birthdate:
+                card_lines.append(f"Дата рождения: {formatted_birthdate}")
+            card_lines.append(f"Этап: {stage_label}")
+            try:
+                await notify_admins("\n".join(card_lines))
+            except Exception as exc:
+                logger.warning(
+                    "test_request: notify_admins cancel failed tg_user_id=%s err=%s",
+                    message.from_user.id,
+                    exc,
+                )
+
     if current_state == AdminContentStates.waiting_value.state and is_admin:
         group_title = (data or {}).get("content_group")
         if group_title and group_title in _ADMIN_TEXT_GROUPS:
@@ -3801,6 +5222,9 @@ async def cancel_handler(message: types.Message, state: FSMContext):
             AdminContentStates.waiting_custom_key.state,
             AdminContentStates.waiting_custom_value.state,
             AdminContentStates.waiting_view_key.state,
+            AdminContentStates.waiting_history_key.state,
+            AdminContentStates.waiting_history_choice.state,
+            AdminContentStates.waiting_import_file.state,
         }
         and is_admin
     ):
@@ -3882,6 +5306,18 @@ def _admin_toggle_key_from_text(text: str | None) -> str | None:
     return None
 
 
+def _admin_broadcast_toggle_key_from_text(text: str | None) -> str | None:
+    if not text:
+        return None
+    normalized = text.strip()
+    if normalized.startswith("✅") or normalized.startswith("❌"):
+        normalized = normalized[1:].strip()
+    for key, label in _ADMIN_BROADCAST_SETTINGS_LABELS.items():
+        if normalized == label:
+            return key
+    return None
+
+
 def _parse_onboarding_index(text: str | None, prefix: str) -> Optional[int]:
     if not text or not prefix:
         return None
@@ -3920,12 +5356,9 @@ async def admin_behavior_start_prompt(message: types.Message, state: FSMContext)
         "Добро пожаловать в CODE: Магнетизм, {name}!",
     )
     preview = _preview_text_for_admin(current)
-    placeholders = _ADMIN_TEXT_PLACEHOLDERS.get("menu.start", [])
-    placeholders_line = ""
-    if placeholders:
-        placeholders_line = "\nДоступные плейсхолдеры: " + ", ".join(
-            f"<code>{html.escape(token)}</code>" for token in placeholders
-        )
+    placeholders_line = _admin_placeholder_hint_line("menu.start")
+    if placeholders_line:
+        placeholders_line = "\n" + placeholders_line
 
     await state.set_state(AdminBehaviorStates.waiting_start_text)
     await message.answer(
@@ -3946,7 +5379,7 @@ async def admin_behavior_start_receive(message: types.Message, state: FSMContext
         return
 
     new_text = prepare_admin_text_input(message.text)
-    await set_content_value("menu.start", new_text)
+    await set_content_value("menu.start", new_text, updated_by=message.from_user.id)
     await log_admin_action(
         message.from_user.id,
         "behavior_start_update",
@@ -3994,12 +5427,9 @@ async def admin_behavior_registration_prompt(message: types.Message, state: FSMC
         "Регистрация завершена, {name}!",
     )
     preview = _preview_text_for_admin(current)
-    placeholders = _ADMIN_TEXT_PLACEHOLDERS.get("menu.registration_complete", [])
-    placeholders_line = ""
-    if placeholders:
-        placeholders_line = "\nДоступные плейсхолдеры: " + ", ".join(
-            f"<code>{html.escape(token)}</code>" for token in placeholders
-        )
+    placeholders_line = _admin_placeholder_hint_line("menu.registration_complete")
+    if placeholders_line:
+        placeholders_line = "\n" + placeholders_line
 
     await state.set_state(AdminBehaviorStates.waiting_registration_text)
     await message.answer(
@@ -4020,7 +5450,11 @@ async def admin_behavior_registration_receive(message: types.Message, state: FSM
         return
 
     new_text = prepare_admin_text_input(message.text)
-    await set_content_value("menu.registration_complete", new_text)
+    await set_content_value(
+        "menu.registration_complete",
+        new_text,
+        updated_by=message.from_user.id,
+    )
     await log_admin_action(
         message.from_user.id,
         "behavior_registration_update",
@@ -4126,7 +5560,7 @@ async def admin_onboarding_receive_text(message: types.Message, state: FSMContex
     else:
         steps[idx] = new_text
 
-    await save_onboarding_steps(steps)
+    await save_onboarding_steps(steps, updated_by=message.from_user.id)
     await log_admin_action(
         message.from_user.id,
         "behavior_onboarding_update",
@@ -4169,7 +5603,7 @@ async def admin_onboarding_delete_step(message: types.Message, state: FSMContext
         await send_admin_onboarding_menu(message)
         return
     removed = steps.pop(idx)
-    await save_onboarding_steps(steps)
+    await save_onboarding_steps(steps, updated_by=message.from_user.id)
     await log_admin_action(
         message.from_user.id,
         "behavior_onboarding_delete",
@@ -4426,6 +5860,65 @@ async def admin_broadcast_templates(message: types.Message, state: FSMContext):
     await send_admin_broadcast_templates(message)
 
 
+@router.message(F.text == ADMIN_BROADCAST_HISTORY_BUTTON)
+async def admin_broadcast_history(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+    await _reset_state_if_needed(state)
+    await state.update_data(broadcast_history_offset=0)
+    await _send_admin_broadcast_history(message, state, offset=0)
+
+
+@router.message(F.text == BROADCAST_HISTORY_MORE_BUTTON)
+async def admin_broadcast_history_more(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+    data = await state.get_data()
+    offset = int((data or {}).get("broadcast_history_offset", 0) or 0)
+    if offset <= 0:
+        await state.update_data(broadcast_history_offset=0)
+        await _send_admin_broadcast_history(message, state, offset=0)
+        return
+    await _send_admin_broadcast_history(message, state, offset=offset)
+
+
+@router.message(F.text == ADMIN_BROADCAST_REMINDER_TEXT)
+async def admin_broadcast_edit_reminder(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+
+    await prompt_content_edit(
+        message,
+        state,
+        key="forms.reminder_template",
+        label="Напоминание о незавершённой анкете",
+        group_title="📝 Анкеты",
+        return_to_broadcast=True,
+    )
+
+
+@router.message(F.text.func(lambda text: _admin_broadcast_toggle_key_from_text(text) is not None))
+async def admin_broadcast_toggle_setting(message: types.Message):
+    if not is_admin_id(message.from_user.id):
+        return
+
+    key = _admin_broadcast_toggle_key_from_text(message.text)
+    if not key:
+        return
+
+    current = await get_bool_setting(
+        key, _ADMIN_BROADCAST_SETTINGS_DEFAULTS.get(key, True)
+    )
+    new_value = not current
+    await set_bool_setting(key, new_value, updated_by=message.from_user.id)
+    await log_admin_action(
+        message.from_user.id,
+        "toggle_broadcast_setting",
+        {"key": key, "value": new_value},
+    )
+    await send_admin_broadcast_menu(message)
+
+
 @router.message(F.text == DELETE_BROADCAST_TEMPLATE_BUTTON)
 async def admin_broadcast_delete_prompt(message: types.Message, state: FSMContext):
     if not is_admin_id(message.from_user.id):
@@ -4434,7 +5927,7 @@ async def admin_broadcast_delete_prompt(message: types.Message, state: FSMContex
     if not templates:
         await message.answer(
             "Пока нет сохранённых шаблонов.",
-            reply_markup=admin_broadcast_keyboard(),
+            reply_markup=await build_admin_broadcast_keyboard(),
         )
         return
     titles = [tpl["title"] for tpl in templates]
@@ -4562,6 +6055,269 @@ async def admin_content_formatting_help(message: types.Message, state: FSMContex
         reply_markup=admin_content_keyboard(),
         parse_mode=ParseMode.HTML,
         disable_web_page_preview=True,
+    )
+
+
+@router.message(F.text == ADMIN_CONTENT_EXPORT)
+async def admin_content_export(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+
+    await _reset_state_if_needed(state)
+
+    export_data = await _collect_content_export_data()
+    total_keys = len(export_data)
+
+    if total_keys == 0:
+        await message.answer(
+            "Пока нечего экспортировать — нет ни одного ключа в базе или шаблоне.",
+            reply_markup=admin_content_keyboard(),
+        )
+        return
+
+    yaml_payload = yaml.safe_dump(
+        dict(export_data),
+        allow_unicode=True,
+        sort_keys=False,
+    )
+    json_payload = json.dumps(export_data, ensure_ascii=False, indent=2)
+
+    yaml_file = BufferedInputFile(
+        yaml_payload.encode("utf-8"),
+        filename="content-export.yaml",
+    )
+    json_file = BufferedInputFile(
+        json_payload.encode("utf-8"),
+        filename="content-export.json",
+    )
+
+    try:
+        await message.bot.send_document(
+            chat_id=message.chat.id,
+            document=yaml_file,
+            caption=f"Экспорт контента — YAML ({total_keys} ключей)",
+        )
+        await message.bot.send_document(
+            chat_id=message.chat.id,
+            document=json_file,
+            caption=f"Экспорт контента — JSON ({total_keys} ключей)",
+        )
+    except Exception as exc:
+        logger.exception("content export failed: %s", exc)
+        await message.answer(
+            "Не удалось отправить файлы экспорта. Попробуй ещё раз или свяжись с разработчиком.",
+            reply_markup=admin_content_keyboard(),
+        )
+        return
+
+    await log_admin_action(
+        message.from_user.id,
+        "content_export",
+        {"total": total_keys},
+    )
+
+    await message.answer(
+        "Готово! Отправила два файла с экспортом. Их можно загрузить обратно кнопкой «⬆️ Импорт».",
+        reply_markup=admin_content_keyboard(),
+        disable_web_page_preview=True,
+    )
+
+
+@router.message(F.text == ADMIN_CONTENT_IMPORT)
+async def admin_content_import_prompt(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+
+    await _reset_state_if_needed(state)
+    await state.set_state(AdminContentStates.waiting_import_file)
+
+    text = (
+        "<b>Импорт контента</b>\n\n"
+        "Пришли файл в формате YAML или JSON с парами <code>key: value</code>.\n"
+        "Можно взять свежий экспорт через кнопку «⬇️ Экспорт», внести правки и загрузить обратно.\n\n"
+        "Пока файл не отправлен, можно отменить действие кнопкой «Отмена»."
+    )
+
+    await message.answer(
+        text,
+        reply_markup=cancel_keyboard(),
+        parse_mode=ParseMode.HTML,
+        disable_web_page_preview=True,
+    )
+
+
+def _prepare_import_items(raw_mapping: dict) -> tuple[list[tuple[str, str]], list[str]]:
+    items: list[tuple[str, str]] = []
+    invalid: list[str] = []
+
+    for raw_key, raw_value in (raw_mapping or {}).items():
+        key = str(raw_key or "").strip()
+        if not key or not _CONTENT_KEY_PATTERN.match(key):
+            invalid.append(key or "(пусто)")
+            continue
+
+        value = "" if raw_value is None else str(raw_value)
+        items.append((key, value))
+
+    return items, invalid
+
+
+@router.message(AdminContentStates.waiting_import_file, F.document)
+async def admin_content_import_handle_document(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        await state.clear()
+        return
+
+    document = message.document
+    if not document:
+        await message.answer(
+            "Пришли файл в формате YAML или JSON.",
+            reply_markup=cancel_keyboard(),
+        )
+        return
+
+    buffer = io.BytesIO()
+    try:
+        await message.bot.download(document, destination=buffer)
+    except Exception as exc:
+        logger.exception("content import download failed: %s", exc)
+        await message.answer(
+            "Не удалось скачать файл. Попробуй ещё раз позже.",
+            reply_markup=cancel_keyboard(),
+        )
+        return
+
+    raw_bytes = buffer.getvalue()
+    try:
+        text_payload = raw_bytes.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        await message.answer(
+            "Не удалось прочитать файл как UTF-8. Убедись, что файл сохранён в кодировке UTF-8.",
+            reply_markup=cancel_keyboard(),
+        )
+        return
+
+    parsed: dict | None = None
+    data_format = "json"
+
+    try:
+        parsed_obj = json.loads(text_payload)
+        if isinstance(parsed_obj, dict):
+            parsed = parsed_obj
+        else:
+            parsed = None
+    except json.JSONDecodeError:
+        parsed = None
+
+    if parsed is None:
+        data_format = "yaml"
+        try:
+            yaml_obj = yaml.safe_load(text_payload) or {}
+            if isinstance(yaml_obj, dict):
+                parsed = yaml_obj
+        except yaml.YAMLError as exc:
+            logger.warning("content import yaml parse failed: %s", exc)
+            parsed = None
+
+    if parsed is None:
+        await message.answer(
+            "Не удалось распознать файл. Используй экспорт из меню или отправь корректный YAML/JSON.",
+            reply_markup=cancel_keyboard(),
+        )
+        return
+
+    items, invalid_keys = _prepare_import_items(parsed)
+    if invalid_keys:
+        sample = ", ".join(invalid_keys[:10])
+        if len(invalid_keys) > 10:
+            sample += " …"
+        await message.answer(
+            "Некоторые ключи имеют неверный формат: "
+            f"{sample}. Разрешены символы A-Z, a-z, 0-9, точка, дефис и подчёркивание.",
+            reply_markup=cancel_keyboard(),
+        )
+        return
+
+    if not items:
+        await message.answer(
+            "Файл не содержит пар ключ/значение. Добавь данные и попробуй снова.",
+            reply_markup=cancel_keyboard(),
+        )
+        return
+
+    sanitized_items = [(key, sanitize_html(value)) for key, value in items]
+    keys = [key for key, _ in sanitized_items]
+
+    created = 0
+    updated = 0
+
+    try:
+        async with transaction() as conn:
+            existing_rows = await conn.fetch(
+                "SELECT key FROM content WHERE key = ANY($1::text[])",
+                keys,
+            )
+            existing = {row["key"] for row in (existing_rows or [])}
+
+            for key, value in sanitized_items:
+                await _write_content_version(key, value, message.from_user.id, conn=conn)
+                if key in existing:
+                    await conn.execute(
+                        "UPDATE content SET value=$2, updated_at=NOW() WHERE key=$1",
+                        key,
+                        value,
+                    )
+                    updated += 1
+                else:
+                    await conn.execute(
+                        "INSERT INTO content(key, value, created_at, updated_at) VALUES ($1,$2,NOW(),NOW())",
+                        key,
+                        value,
+                    )
+                    created += 1
+    except Exception as exc:
+        logger.exception("content import failed: %s", exc)
+        await message.answer(
+            "Не удалось сохранить данные. Проверь файл и попробуй снова позже.",
+            reply_markup=cancel_keyboard(),
+        )
+        return
+
+    _CONTENT_DB_CACHE.clear()
+
+    await log_admin_action(
+        message.from_user.id,
+        "content_import",
+        {
+            "total": len(sanitized_items),
+            "created": created,
+            "updated": updated,
+            "format": data_format,
+        },
+    )
+
+    await state.clear()
+
+    await message.answer(
+        (
+            "Импорт завершён ✅\n"
+            f"Добавлено новых ключей: {created}.\n"
+            f"Обновлено существующих: {updated}."
+        ),
+        reply_markup=admin_content_keyboard(),
+        disable_web_page_preview=True,
+    )
+
+
+@router.message(AdminContentStates.waiting_import_file)
+async def admin_content_import_waiting(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        await state.clear()
+        return
+
+    await message.answer(
+        "Пришли файл с парами ключ/значение в формате YAML или JSON, либо нажми «Отмена».",
+        reply_markup=cancel_keyboard(),
     )
 
 
@@ -4693,17 +6449,50 @@ async def admin_content_view_value(message: types.Message, state: FSMContext):
         await message.answer(
             "Укажи ключ текста, чтобы я мог его показать.",
             reply_markup=cancel_keyboard(),
+            disable_web_page_preview=True,
         )
         return
 
     suggestions = await _collect_content_suggestions()
-    value = await get_content(key, default="")
+    if not _CONTENT_KEY_PATTERN.match(key):
+        await message.answer(
+            "Ключ может содержать только латинские буквы, цифры, точки, дефисы и подчёркивания."
+            "\nПримеры: <code>menu.support</code>, <code>weekly_materials</code>, <code>promo.welcome</code>.",
+            reply_markup=cancel_keyboard(),
+            disable_web_page_preview=True,
+        )
+        matches = _filter_suggestions(suggestions, key)
+        await _send_content_key_suggestions(message, key, matches)
+        return
+
+    value, source = await get_content_with_source(key, default="")
+    _, yaml_found = _get_yaml_value(key, default="")
+    last_update = await get_content_last_update(key)
     has_value = bool(value.strip())
     preview = _preview_text_for_admin(value)
 
     similar = [item for item in _filter_suggestions(suggestions, key, limit=5) if item != key]
 
-    lines = [f"<b>Ключ:</b> <code>{html.escape(key)}</code>"]
+    source_label = "БД" if source == "db" else "шаблон"
+    show_save_button = source == "yaml" and yaml_found
+
+    lines = [
+        f"<b>Ключ:</b> <code>{html.escape(key)}</code>",
+        f"<code>Источник: {source_label}</code>",
+    ]
+
+    if source == "yaml":
+        lines.extend([
+            "",
+            "⚠️ <i>Текст ещё не скопирован в таблицу — используется шаблон из content.yaml.</i>",
+        ])
+        if yaml_found:
+            lines.append(
+                "Нажми «📥 Сохранить шаблон», чтобы перенести текст в базу и редактировать его здесь."
+            )
+        else:
+            lines.append("Добавь текст вручную, чтобы он появился в таблице.")
+
     if has_value:
         lines.extend(["", "<b>Текущее значение:</b>", preview])
         lines.extend([
@@ -4729,18 +6518,300 @@ async def admin_content_view_value(message: types.Message, state: FSMContext):
             "Отправь текст ответом на это сообщение — и он сразу появится в боте.",
         ])
 
+    if last_update:
+        updated_at_text = _format_datetime_safe(last_update.get("updated_at"))
+        author_text = await _format_content_version_author(last_update.get("updated_by"))
+        lines.extend([
+            "",
+            "<b>Последнее обновление:</b>",
+            f"{updated_at_text} — {author_text}",
+        ])
+
+    history_hint = (
+        f"Чтобы посмотреть историю изменений, ответь «{ADMIN_CONTENT_HISTORY}» на это сообщение"
+        f" или выбери пункт «{ADMIN_CONTENT_HISTORY}» в меню."
+    )
+    lines.extend(["", history_hint])
+
+    await state.update_data(
+        content_current_key=key,
+        content_current_source=source,
+        content_current_has_yaml=yaml_found,
+    )
+
     await log_admin_action(
         message.from_user.id,
         "content_view_menu",
-        {"key": key, "has_value": has_value},
+        {"key": key, "has_value": has_value, "source": source},
     )
 
+    await message.answer(
+        "\n".join(lines),
+        reply_markup=admin_content_keyboard(include_save_template=show_save_button),
+        disable_web_page_preview=True,
+    )
+
+
+@router.message(F.text == ADMIN_CONTENT_HISTORY)
+async def admin_content_history_prompt(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+
+    await _reset_state_if_needed(state)
+    await state.set_state(AdminContentStates.waiting_history_key)
+
+    suggestions = await _collect_content_suggestions()
+    chunk, next_offset, total, _, _ = _suggestion_chunk(suggestions, 0)
+    show_more = total > len(chunk)
+
+    await state.update_data(
+        content_suggest={
+            "keys": suggestions,
+            "offset": next_offset,
+            "step": _CONTENT_SUGGESTION_STEP,
+            "context": "history",
+            "cycled": False,
+        }
+    )
+
+    lines = [
+        "<b>История изменений</b>",
+        "",
+        "Введи ключ вручную или выбери из списка, чтобы посмотреть последние сохранённые версии.",
+        "После выбора покажу последние изменения и предложу откатить текст к нужной версии.",
+    ]
+
+    if chunk:
+        lines.extend(["", "<b>Быстрый выбор:</b>"])
+        lines.extend(_format_suggestion_lines(chunk))
+        if show_more:
+            lines.extend([
+                "",
+                "Не нашёл нужный ключ — жми «🔁 Ещё варианты».",
+            ])
+    else:
+        lines.extend([
+            "",
+            "Пока нет сохранённых ключей — можно указать свой вручную.",
+        ])
+
+    lines.append("")
+    lines.append("Если передумал — нажми «Отмена».")
+
+    keyboard = admin_content_suggestions_keyboard(chunk, show_more=show_more)
+    await message.answer(
+        "\n".join(lines),
+        reply_markup=keyboard,
+        disable_web_page_preview=True,
+    )
+
+
+@router.message(AdminContentStates.waiting_history_key, F.text == ADMIN_CONTENT_SUGGEST_MORE)
+async def admin_content_history_more_options(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        await state.clear()
+        return
+
+    data = await state.get_data()
+    suggest_info = dict((data or {}).get("content_suggest") or {})
+    if suggest_info.get("context") != "history":
+        await message.answer(
+            "Используй команду «🕘 История версий», чтобы выбрать ключ и посмотреть прошлые значения.",
+            reply_markup=admin_content_keyboard(),
+        )
+        await state.clear()
+        return
+
+    suggestions = await _collect_content_suggestions()
+    step = int(suggest_info.get("step", _CONTENT_SUGGESTION_STEP) or _CONTENT_SUGGESTION_STEP)
+    prev_offset = int(suggest_info.get("offset", 0) or 0)
+    chunk, next_offset, total, reached_end, normalized = _suggestion_chunk(suggestions, prev_offset, step)
+    show_more = total > len(chunk)
+    cycled_flag = bool(suggest_info.get("cycled", False))
+    just_wrapped = show_more and (normalized or (cycled_flag and prev_offset == 0))
+
+    new_cycled = reached_end and show_more
+    if just_wrapped:
+        new_cycled = False
+
+    suggest_info.update(
+        {
+            "keys": suggestions,
+            "offset": next_offset,
+            "step": step,
+            "cycled": new_cycled,
+        }
+    )
+    await state.update_data(content_suggest=suggest_info)
+
+    if chunk:
+        lines = ["<b>Ещё ключи</b>", ""]
+        lines.extend(_format_suggestion_lines(chunk))
+        if show_more:
+            if reached_end:
+                lines.extend([
+                    "",
+                    "Это последние ключи. Кнопка «🔁 Ещё варианты» вернёт список к началу.",
+                ])
+            elif just_wrapped:
+                lines.extend([
+                    "",
+                    "Снова показываю ключи с начала — выбирай нужный или листай дальше.",
+                ])
+            else:
+                lines.extend([
+                    "",
+                    "Не подходит? Жми «🔁 Ещё варианты».",
+                ])
+    else:
+        lines = [
+            "<b>Ещё ключи</b>",
+            "",
+            "Сохранённых ключей пока нет — можно ввести свой вручную.",
+        ]
+
+    keyboard = admin_content_suggestions_keyboard(chunk, show_more=show_more)
+    await message.answer(
+        "\n".join(lines),
+        reply_markup=keyboard,
+        disable_web_page_preview=True,
+    )
+
+
+@router.message(AdminContentStates.waiting_history_key, F.text.len() > 0)
+async def admin_content_history_receive_key(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        await state.clear()
+        return
+
+    key = (message.text or "").strip()
+    if not key:
+        await message.answer(
+            "Укажи ключ текста, чтобы посмотреть историю изменений.",
+            reply_markup=cancel_keyboard(),
+        )
+        return
+
+    if not _CONTENT_KEY_PATTERN.match(key):
+        await message.answer(
+            "Ключ может содержать только латинские буквы, цифры, точки, дефисы и подчёркивания.",
+            reply_markup=cancel_keyboard(),
+        )
+        return
+
+    data = await state.get_data()
+    suggest_info = dict((data or {}).get("content_suggest") or {})
+    suggestions = suggest_info.get("keys") or await _collect_content_suggestions()
+
+    found = await _send_content_history(message, state, key, source="menu")
+    if found:
+        return
+
+    similar = [item for item in _filter_suggestions(suggestions or [], key, limit=5) if item != key]
+    lines = [
+        f"<b>Ключ:</b> <code>{html.escape(key)}</code>",
+        "",
+        "Для этого ключа пока нет сохранённых версий.",
+    ]
+    if similar:
+        lines.extend([
+            "",
+            "Возможно, подойдут другие ключи:",
+            *_format_suggestion_lines(similar),
+        ])
+    lines.extend([
+        "",
+        "Введи другой ключ или нажми «Отмена», чтобы вернуться назад.",
+    ])
+
+    keyboard = admin_content_suggestions_keyboard(similar, show_more=False)
+    await message.answer(
+        "\n".join(lines),
+        reply_markup=keyboard,
+        disable_web_page_preview=True,
+    )
+
+
+@router.message(AdminContentStates.waiting_history_choice, F.text.len() > 0)
+async def admin_content_history_choose_version(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        await state.clear()
+        return
+
+    text = (message.text or "").strip()
+    data = await state.get_data()
+    history = dict((data or {}).get("content_history") or {})
+    key = history.get("key")
+    choices = history.get("choices") or {}
+    options_count = len(choices)
+
+    if not text.startswith(ADMIN_CONTENT_ROLLBACK_PREFIX):
+        await message.answer(
+            "Выбери версию кнопкой «↩️ Откатить N» или нажми «Отмена».",
+            reply_markup=admin_content_versions_keyboard(options_count),
+        )
+        return
+
+    choice_raw = text[len(ADMIN_CONTENT_ROLLBACK_PREFIX):].strip()
+    if not choice_raw.isdigit():
+        await message.answer(
+            "Не удалось распознать номер версии. Попробуй выбрать кнопку ещё раз.",
+            reply_markup=admin_content_versions_keyboard(options_count),
+        )
+        return
+
+    version_id = choices.get(choice_raw)
+
+    if not key or not version_id:
+        await state.clear()
+        await message.answer(
+            "Не удалось определить выбранную версию. Начни заново через «🕘 История версий».",
+            reply_markup=admin_content_keyboard(),
+        )
+        return
+
+    version_row = await fetchrow(
+        "SELECT value, updated_at, updated_by FROM content_versions WHERE id=$1",
+        version_id,
+    )
+    if not version_row:
+        await state.clear()
+        await message.answer(
+            "Версия не найдена. Попробуй снова через «🕘 История версий».",
+            reply_markup=admin_content_keyboard(),
+        )
+        return
+
+    version_value = str(version_row.get("value") or "")
+    await set_content_value(key, version_value, updated_by=message.from_user.id)
+
+    await log_admin_action(
+        message.from_user.id,
+        "content_history_rollback",
+        {"key": key, "version_id": version_id},
+    )
+
+    timestamp_text = _format_datetime_safe(version_row.get("updated_at"))
+    author_text = await _format_content_version_author(version_row.get("updated_by"))
+    preview = _preview_text_for_admin(version_value)
+
+    lines = [
+        f"<b>Ключ:</b> <code>{html.escape(key)}</code>",
+        "",
+        f"Текст откатан к версии от {timestamp_text} ({author_text}).",
+        "",
+        "<b>Текущее значение:</b>",
+        preview,
+        "",
+        "Можно ответить на это сообщение, чтобы сохранить новый вариант.",
+    ]
+
+    await state.clear()
     await message.answer(
         "\n".join(lines),
         reply_markup=admin_content_keyboard(),
         disable_web_page_preview=True,
     )
-    await state.clear()
 
 
 @router.message(F.text == ADMIN_CONTENT_CREATE)
@@ -4877,27 +6948,56 @@ async def admin_content_receive_key(message: types.Message, state: FSMContext):
         await message.answer(
             "Ключ не может быть пустым. Попробуй ещё раз.",
             reply_markup=cancel_keyboard(),
+            disable_web_page_preview=True,
         )
         return
 
     if not _CONTENT_KEY_PATTERN.match(raw_key):
+        suggestions = await _collect_content_suggestions()
         await message.answer(
             "Ключ может содержать только латинские буквы, цифры, точки, дефисы и подчёркивания."
             "\nПримеры: <code>menu.support</code>, <code>weekly_materials</code>, <code>promo.welcome</code>.",
             reply_markup=cancel_keyboard(),
             disable_web_page_preview=True,
         )
+        matches = _filter_suggestions(suggestions, raw_key)
+        await _send_content_key_suggestions(message, raw_key, matches)
         return
 
     key = raw_key
-    current_value = await get_content(key, default="")
+    current_value, source = await get_content_with_source(key, default="")
+    _, yaml_found = _get_yaml_value(key, default="")
     has_value = bool(current_value.strip())
     preview = _preview_text_for_admin(current_value)
 
-    await state.update_data(custom_key=key)
+    await state.update_data(
+        custom_key=key,
+        content_current_key=key,
+        content_current_source=source,
+        content_current_has_yaml=yaml_found,
+    )
     await state.set_state(AdminContentStates.waiting_custom_value)
 
-    lines = [f"<b>Ключ:</b> <code>{html.escape(key)}</code>"]
+    source_label = "БД" if source == "db" else "шаблон"
+    show_save_button = source == "yaml" and yaml_found
+
+    lines = [
+        f"<b>Ключ:</b> <code>{html.escape(key)}</code>",
+        f"<code>Источник: {source_label}</code>",
+    ]
+
+    if source == "yaml":
+        lines.extend([
+            "",
+            "⚠️ <i>Текст ещё не скопирован в таблицу — используется шаблон из content.yaml.</i>",
+        ])
+        if yaml_found:
+            lines.append(
+                "Нажми «📥 Сохранить шаблон», чтобы скопировать текст в базу и редактировать его здесь."
+            )
+        else:
+            lines.append("Добавь текст вручную, чтобы он появился в таблице.")
+
     if has_value:
         lines.extend(["", "<b>Текущее значение:</b>", preview])
     else:
@@ -4915,7 +7015,85 @@ async def admin_content_receive_key(message: types.Message, state: FSMContext):
 
     await message.answer(
         "\n".join(lines),
-        reply_markup=cancel_keyboard(),
+        reply_markup=cancel_keyboard(
+            extra_buttons=[ADMIN_CONTENT_SAVE_TEMPLATE_BUTTON] if show_save_button else None
+        ),
+        disable_web_page_preview=True,
+    )
+
+
+@router.message(F.text == ADMIN_CONTENT_SAVE_TEMPLATE_BUTTON)
+async def admin_content_save_template(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        await state.clear()
+        return
+
+    data = await state.get_data() or {}
+    key = (data.get("content_current_key") or data.get("custom_key")) if data else None
+    if not key:
+        await message.answer(
+            "Сначала выбери ключ текста через меню — бот покажет источник и доступные действия.",
+            reply_markup=admin_content_keyboard(),
+            disable_web_page_preview=True,
+        )
+        return
+
+    yaml_value, yaml_found = _get_yaml_value(key, default="")
+    if not yaml_found:
+        current_state = await state.get_state()
+        keyboard = (
+            cancel_keyboard()
+            if current_state == AdminContentStates.waiting_custom_value.state
+            else admin_content_keyboard()
+        )
+        await message.answer(
+            "В content.yaml нет шаблона для этого ключа — добавь текст вручную и он сохранится в таблицу.",
+            reply_markup=keyboard,
+            disable_web_page_preview=True,
+        )
+        return
+
+    await set_content_value(key, yaml_value, updated_by=message.from_user.id)
+
+    saved_value, _ = await get_content_with_source(key, default="")
+    preview = _preview_text_for_admin(saved_value)
+
+    await state.update_data(content_current_source="db")
+
+    lines = [
+        f"<b>Ключ:</b> <code>{html.escape(key)}</code>",
+        "<code>Источник: БД</code>",
+    ]
+
+    if saved_value.strip():
+        lines.extend(["", "<b>Текст из шаблона сохранён:</b>", preview])
+    else:
+        lines.extend([
+            "",
+            "Шаблон был пустым — в таблицу сохранено пустое значение. Можешь отправить нужный текст ответом.",
+        ])
+
+    lines.extend([
+        "",
+        "Теперь текст хранится в базе. Ответь на сообщение новым вариантом или выбери другую команду.",
+    ])
+
+    current_state = await state.get_state()
+    keyboard = (
+        cancel_keyboard()
+        if current_state == AdminContentStates.waiting_custom_value.state
+        else admin_content_keyboard()
+    )
+
+    await log_admin_action(
+        message.from_user.id,
+        "content_save_template",
+        {"key": key, "length": len(saved_value)},
+    )
+
+    await message.answer(
+        "\n".join(lines),
+        reply_markup=keyboard,
         disable_web_page_preview=True,
     )
 
@@ -4937,7 +7115,22 @@ async def admin_content_receive_value(message: types.Message, state: FSMContext)
         return
 
     new_text = prepare_admin_text_input(message.text)
-    await set_content_value(key, new_text)
+
+    missing_placeholders = _admin_missing_required_placeholders(new_text, key)
+    if missing_placeholders:
+        missing_tokens = ", ".join(
+            f"<code>{html.escape(token)}</code>" for token in missing_placeholders
+        )
+        await message.answer(
+            "Не удалось сохранить текст — отсутствуют обязательные плейсхолдеры: "
+            f"{missing_tokens}. Добавь их и отправь текст ещё раз.",
+            reply_markup=cancel_keyboard(),
+            parse_mode=ParseMode.HTML,
+            disable_web_page_preview=True,
+        )
+        return
+
+    await set_content_value(key, new_text, updated_by=message.from_user.id)
     await log_admin_action(
         message.from_user.id,
         "content_set_custom_menu",
@@ -4953,6 +7146,24 @@ async def admin_content_receive_value(message: types.Message, state: FSMContext)
     await state.clear()
 
 
+def _extract_content_key_from_reply_message(reply: types.Message | None) -> Optional[str]:
+    if not reply or not reply.from_user or not reply.from_user.is_bot:
+        return None
+
+    preview_html = reply.html_text or ""
+    match = _CONTENT_PREVIEW_KEY_RE.search(preview_html)
+
+    if match:
+        return html.unescape(match.group(1) or "").strip()
+
+    plain = reply.text or ""
+    match_plain = _CONTENT_PREVIEW_KEY_PLAIN_RE.search(plain)
+    if match_plain:
+        return match_plain.group(1).strip()
+
+    return None
+
+
 @router.message(
     F.reply_to_message,
     F.reply_to_message.from_user.func(lambda user: user is not None and user.is_bot),
@@ -4961,24 +7172,24 @@ async def admin_content_quick_reply_update(message: types.Message, state: FSMCon
     if not is_admin_id(message.from_user.id):
         return
 
-    if await state.get_state():
+    current_state = await state.get_state()
+    allowed_states = {
+        AdminContentStates.waiting_view_key.state,
+        AdminContentStates.waiting_history_key.state,
+        AdminContentStates.waiting_history_choice.state,
+    }
+
+    if current_state and current_state not in allowed_states:
         return
+
+    if (message.text or "").strip() == ADMIN_CONTENT_HISTORY:
+        raise EventSkip()
 
     reply = message.reply_to_message
-    if not reply or not reply.from_user or reply.from_user.id != message.bot.id:
+    if not reply or reply.from_user.id != message.bot.id:
         return
 
-    preview_html = reply.html_text or ""
-    match = _CONTENT_PREVIEW_KEY_RE.search(preview_html)
-
-    key: Optional[str] = None
-    if match:
-        key = html.unescape(match.group(1) or "").strip()
-    else:
-        plain = reply.text or ""
-        match_plain = _CONTENT_PREVIEW_KEY_PLAIN_RE.search(plain)
-        if match_plain:
-            key = match_plain.group(1).strip()
+    key = _extract_content_key_from_reply_message(reply)
 
     if not key or not _CONTENT_KEY_PATTERN.match(key):
         return
@@ -4993,7 +7204,7 @@ async def admin_content_quick_reply_update(message: types.Message, state: FSMCon
         )
         return
 
-    await set_content_value(key, new_text)
+    await set_content_value(key, new_text, updated_by=message.from_user.id)
     await log_admin_action(
         message.from_user.id,
         "content_quick_reply",
@@ -5002,6 +7213,49 @@ async def admin_content_quick_reply_update(message: types.Message, state: FSMCon
 
     await message.answer(
         f"Текст для ключа <code>{html.escape(key)}</code> обновлён ✅",
+        reply_markup=admin_content_keyboard(),
+        disable_web_page_preview=True,
+    )
+
+    if current_state == AdminContentStates.waiting_view_key.state:
+        await state.set_state(AdminContentStates.waiting_view_key)
+    elif current_state in (
+        AdminContentStates.waiting_history_key.state,
+        AdminContentStates.waiting_history_choice.state,
+    ):
+        await state.clear()
+
+
+@router.message(
+    F.reply_to_message,
+    F.reply_to_message.from_user.func(lambda user: user is not None and user.is_bot),
+    F.text == ADMIN_CONTENT_HISTORY,
+)
+async def admin_content_history_reply(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+
+    if await state.get_state():
+        return
+
+    reply = message.reply_to_message
+    if not reply or reply.from_user.id != message.bot.id:
+        return
+
+    key = _extract_content_key_from_reply_message(reply)
+    if not key or not _CONTENT_KEY_PATTERN.match(key):
+        await message.answer(
+            "Не удалось определить ключ. Попробуй снова через меню или введи ключ вручную.",
+            reply_markup=admin_content_keyboard(),
+        )
+        return
+
+    found = await _send_content_history(message, state, key, source="reply")
+    if found:
+        return
+
+    await message.answer(
+        f"Для ключа <code>{html.escape(key)}</code> пока нет сохранённых версий.",
         reply_markup=admin_content_keyboard(),
         disable_web_page_preview=True,
     )
@@ -5087,6 +7341,22 @@ async def admin_stats_payments_breakdown(message: types.Message, state: FSMConte
     )
 
 
+@router.message(F.text == ADMIN_STATS_FORMS_BREAKDOWN)
+async def admin_stats_forms_breakdown(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+    await _reset_state_if_needed(state)
+
+    stats = await _collect_admin_stats_data()
+    text = _format_admin_stats_forms(stats)
+    await message.answer(
+        text,
+        reply_markup=admin_stats_keyboard(),
+        disable_web_page_preview=True,
+        parse_mode=ParseMode.HTML,
+    )
+
+
 @router.message(F.text == ADMIN_STATS_RECENT_PAYMENTS)
 async def admin_stats_recent_payments(message: types.Message, state: FSMContext):
     if not is_admin_id(message.from_user.id):
@@ -5161,7 +7431,7 @@ async def admin_payments_toggle_window(message: types.Message, state: FSMContext
     await _reset_state_if_needed(state)
 
     new_value = message.text == ADMIN_PAYMENTS_OPEN_WINDOW
-    await set_bool_setting("payments_open", new_value)
+    await set_bool_setting("payments_open", new_value, updated_by=message.from_user.id)
     await log_admin_action(
         message.from_user.id,
         "payments_toggle_window",
@@ -5384,39 +7654,35 @@ async def admin_texts_back_to_groups(message: types.Message, state: FSMContext):
     await send_admin_text_groups(message)
 
 
-@router.message(F.text.func(lambda text: text in _ADMIN_TEXT_GROUPS))
-async def admin_texts_open_group(message: types.Message, state: FSMContext):
-    if not is_admin_id(message.from_user.id):
-        return
-    await _reset_state_if_needed(state)
-    await send_admin_text_items(message, message.text)
-
-
-@router.message(F.text.func(lambda text: _admin_find_text_entry(text or "")[1] is not None))
-async def admin_texts_edit_prompt(message: types.Message, state: FSMContext):
-    if not is_admin_id(message.from_user.id):
-        return
-
-    group_title, key = _admin_find_text_entry(message.text or "")
-    if not key:
-        return
-
+async def prompt_content_edit(
+    message: types.Message,
+    state: FSMContext,
+    *,
+    key: str,
+    label: str | None = None,
+    group_title: str | None = None,
+    return_to_broadcast: bool = False,
+) -> None:
     await _reset_state_if_needed(state)
     await state.set_state(AdminContentStates.waiting_value)
-    await state.update_data(content_key=key, content_group=group_title, content_label=message.text)
 
     current_text = await get_content(key, default="")
-    preview = _preview_text_for_admin(current_text)
 
-    placeholders = _ADMIN_TEXT_PLACEHOLDERS.get(key, [])
-    placeholders_line = ""
-    if placeholders:
-        placeholders_line = "Можно использовать плейсхолдеры: " + ", ".join(
-            f"<code>{html.escape(token)}</code>" for token in placeholders
-        )
+    label_text = label or key or ""
+
+    await state.update_data(
+        content_key=key,
+        content_group=group_title,
+        content_label=label_text,
+        content_preview_text=current_text,
+        return_to_broadcast_menu=return_to_broadcast,
+    )
+
+    preview = _preview_text_for_admin(current_text)
+    placeholders_line = _admin_placeholder_hint_line(key)
 
     text_lines = [
-        f"<b>Редактирование текста:</b> {html.escape(message.text or key)}",
+        f"<b>Редактирование текста:</b> {html.escape(label_text)}",
         "",
         "<b>Текущий текст:</b>",
         preview,
@@ -5436,8 +7702,69 @@ async def admin_texts_edit_prompt(message: types.Message, state: FSMContext):
 
     await message.answer(
         "\n".join(text_lines),
-        reply_markup=cancel_keyboard(),
+        reply_markup=cancel_keyboard(extra_buttons=[ADMIN_TEXTS_PREVIEW_BUTTON]),
         parse_mode="HTML",
+        disable_web_page_preview=True,
+    )
+
+
+@router.message(F.text.func(lambda text: text in _ADMIN_TEXT_GROUPS))
+async def admin_texts_open_group(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+    await _reset_state_if_needed(state)
+    await send_admin_text_items(message, message.text)
+
+
+@router.message(F.text.func(lambda text: _admin_find_text_entry(text or "")[1] is not None))
+async def admin_texts_edit_prompt(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+
+    group_title, key = _admin_find_text_entry(message.text or "")
+    if not key:
+        return
+
+    await prompt_content_edit(
+        message,
+        state,
+        key=key,
+        label=message.text,
+        group_title=group_title,
+    )
+
+
+@router.message(AdminContentStates.waiting_value, F.text == ADMIN_TEXTS_PREVIEW_BUTTON)
+async def admin_texts_preview(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        await state.clear()
+        return
+
+    data = await state.get_data() or {}
+    preview_text = (data.get("content_preview_text") or "").strip()
+
+    if not preview_text:
+        await message.answer(
+            "Предпросмотр недоступен — текст пустой. Отправь новый текст и попробуй ещё раз.",
+            reply_markup=cancel_keyboard(extra_buttons=[ADMIN_TEXTS_PREVIEW_BUTTON]),
+            disable_web_page_preview=True,
+        )
+        return
+
+    rendered = render_content(preview_text, **_ADMIN_TEXT_PREVIEW_SAMPLE_DATA)
+    rendered = rendered.strip()
+
+    if not rendered:
+        response_text = "<b>Предпросмотр пустой.</b>"
+    else:
+        label = data.get("content_label") or data.get("content_key")
+        label_text = f"<b>Предпросмотр: {html.escape(label or '')}</b>" if label else "<b>Предпросмотр:</b>"
+        response_text = f"{label_text}\n\n{rendered}"
+
+    await message.answer(
+        response_text,
+        reply_markup=cancel_keyboard(),
+        parse_mode=ParseMode.HTML,
         disable_web_page_preview=True,
     )
 
@@ -5452,6 +7779,7 @@ async def admin_texts_receive_value(message: types.Message, state: FSMContext):
     key = data.get("content_key")
     label = data.get("content_label") or key
     group_title = data.get("content_group")
+    return_to_broadcast = bool(data.get("return_to_broadcast_menu"))
 
     if not key:
         await state.clear()
@@ -5459,12 +7787,34 @@ async def admin_texts_receive_value(message: types.Message, state: FSMContext):
         return
 
     new_text = prepare_admin_text_input(message.text)
-    await set_content_value(key, new_text)
+    await state.update_data(content_preview_text=new_text)
+
+    missing_placeholders = _admin_missing_required_placeholders(new_text, key)
+    if missing_placeholders:
+        missing_tokens = ", ".join(
+            f"<code>{html.escape(token)}</code>" for token in missing_placeholders
+        )
+        await message.answer(
+            "Не удалось сохранить текст — отсутствуют обязательные плейсхолдеры: "
+            f"{missing_tokens}. Добавь их и отправь текст ещё раз.",
+            reply_markup=cancel_keyboard(extra_buttons=[ADMIN_TEXTS_PREVIEW_BUTTON]),
+            parse_mode=ParseMode.HTML,
+            disable_web_page_preview=True,
+        )
+        return
+
+    await set_content_value(key, new_text, updated_by=message.from_user.id)
     await log_admin_action(
         message.from_user.id,
         "content_set_menu",
         {"key": key, "length": len(new_text)},
     )
+
+    if return_to_broadcast:
+        await message.answer(f"Текст «{label}» обновлён ✅")
+        await state.clear()
+        await send_admin_broadcast_menu(message)
+        return
 
     await message.answer(
         f"Текст «{label}» обновлён ✅",
@@ -5496,7 +7846,7 @@ async def admin_toggle_settings(message: types.Message):
         return
     current = await get_bool_setting(key, _ADMIN_SETTINGS_DEFAULTS[key])
     new_value = not current
-    await set_bool_setting(key, new_value)
+    await set_bool_setting(key, new_value, updated_by=message.from_user.id)
     await log_admin_action(message.from_user.id, "toggle_setting", {"key": key, "value": new_value})
     await send_admin_settings(message)
 
@@ -5804,7 +8154,7 @@ async def cmd_content_set(message: types.Message, command: CommandObject):
     
     source_text = message.reply_to_message.text or message.reply_to_message.caption or ""
     new_text = prepare_admin_text_input(source_text)
-    await set_content_value(key, new_text)
+    await set_content_value(key, new_text, updated_by=message.from_user.id)
     
     await log_admin_action(
         message.from_user.id,
@@ -6176,7 +8526,7 @@ async def admin_broadcast_change_segment(message: types.Message, state: FSMConte
     await state.update_data(change_segment=True)
     await message.answer(
         "Выбери новый сегмент для рассылки.",
-        reply_markup=admin_broadcast_keyboard(),
+        reply_markup=await build_admin_broadcast_keyboard(),
     )
 
 
@@ -6295,6 +8645,9 @@ async def fallback(message: types.Message, state: FSMContext):
         AdminContentStates.waiting_custom_key,
         AdminContentStates.waiting_custom_value,
         AdminContentStates.waiting_view_key,
+        AdminContentStates.waiting_history_key,
+        AdminContentStates.waiting_history_choice,
+        AdminContentStates.waiting_import_file,
     ):
         return
 

@@ -65,6 +65,8 @@
 | `SUPPORT_CONTACT` | Контакт службы поддержки |
 | `CLUB_CHAT_ID` | Числовой chat_id клубного чата (бот должен быть админом) |
 | `AT_WEBHOOK_SHARED_SECRET` | Секрет для вебхуков Anti-training (опционально) |
+| `YOOMONEY_CHECKOUT_URL` | Ссылка на страницу оплаты YooMoney |
+| `YOOMONEY_WEBHOOK_SECRET` | Секрет для подписи вебхука YooMoney |
 
 ## Разработка без Docker
 
@@ -84,6 +86,30 @@
    uvicorn app:app --reload
    ```
 
+## Ручное применение миграции напоминаний
+
+Для продакшн-базы важно убедиться, что у таблицы `form_sessions` есть поля
+`last_reminder_at` и `reminder_count`. Их добавляет скрипт
+`migrations/20240703_form_sessions_form_slug.sql`. Минимальный набор команд для
+ручного прогона:
+
+```sql
+ALTER TABLE form_sessions
+    ADD COLUMN IF NOT EXISTS last_reminder_at TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS reminder_count INT DEFAULT 0;
+
+UPDATE form_sessions
+SET reminder_count = COALESCE(reminder_count, 0);
+```
+
+Проверить наличие колонок можно запросом:
+
+```sql
+SELECT column_name
+FROM information_schema.columns
+WHERE table_name = 'form_sessions';
+```
+
 ## Обновление и деплой
 
 ```bash
@@ -93,6 +119,19 @@ docker compose up -d --build
 ```
 
 Docker перезапустит сервисы с обновлённым кодом. Логи приложения доступны через `docker compose logs -f bot`.
+
+## Настройка YooMoney
+
+- Укажите `YOOMONEY_CHECKOUT_URL` в `.env`, чтобы раздел оплаты в боте показывал актуальную ссылку на форму YooMoney.
+- Секрет `YOOMONEY_WEBHOOK_SECRET` (если задан) используется для проверки подписи вебхука. YooMoney должна отправлять заголовок `X-YooMoney-Signature` с HMAC-SHA256 тела запроса.
+- Адрес обработчика: `POST <PUBLIC_BASE_URL>/webhooks/yoomoney`. Убедитесь, что в личном кабинете YooMoney настроен этот URL.
+- После успешной оплаты бот активирует доступ пользователю, отправляет подтверждение и уведомляет администраторов. При отказе платежа доступ блокируется и админы получают предупреждение.
+
+## Управление окном оплаты и текстами раздела «Пройти тест»
+
+- Статус «Окно оплаты открыто/закрыто» хранится в записи `settings.payments_open` таблицы `content`. Бот сначала читает это значение из базы, а при отсутствии — использует дефолт из `content.yaml` (`true`). Если в БД лежит `false`, бот показывает кнопку «🔒 Оплата» и текст о закрытом окне.【F:handlers.py†L646-L690】【F:handlers.py†L1875-L1894】
+- Переключить статус можно в админке: `⚙️ Админка → 💳 Оплаты → 🔓 Открыть окно оплат/🔒 Закрыть окно оплат`. Кнопка вызывает `set_bool_setting("payments_open", ...)`, которое обновляет запись в таблице `content` и сразу сбрасывает кеш — перезапуск бота не требуется.【F:handlers.py†L5620-L5628】【F:handlers.py†L688-L715】
+- Тексты цепочки «Пройти тест» читаются через ключи `menu.test`, `menu.test_intro`, `menu.test_birthdate_prompt`, `menu.test_birthdate_invalid`, `menu.test_name_prompt`, `menu.test_name_invalid`, `menu.test_thanks`. Для каждого ключа бот сначала пытается найти значение в таблице `content`, и только если его нет — берёт fallback из `content.yaml`. Поэтому, чтобы отображался текст, сохранённый через админку, убедитесь, что запись с нужным `key` есть в таблице `content` (её можно добавить/отредактировать через раздел «Контент» админки).【F:handlers.py†L646-L689】【F:handlers.py†L2110-L2144】【F:handlers.py†L3783-L3894】
 
 ## Резервное копирование данных
 

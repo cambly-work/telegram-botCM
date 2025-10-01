@@ -44,6 +44,14 @@ ALTER TABLE users
   ADD COLUMN IF NOT EXISTS created_at         TIMESTAMPTZ DEFAULT NOW(),
   ADD COLUMN IF NOT EXISTS updated_at         TIMESTAMPTZ DEFAULT NOW();
 
+ALTER TABLE users
+  ALTER COLUMN access_until TYPE TIMESTAMPTZ
+    USING CASE
+      WHEN pg_typeof(access_until) = 'timestamp without time zone'::regtype
+        THEN timezone('UTC', access_until)
+      ELSE access_until
+    END;
+
 DO $$
 BEGIN
   BEGIN
@@ -96,28 +104,6 @@ CREATE TABLE IF NOT EXISTS lesson_feedback (
 );
 CREATE INDEX IF NOT EXISTS idx_feedback_user ON lesson_feedback(user_id);
 
--- FORM_SESSIONS
-CREATE TABLE IF NOT EXISTS form_sessions (
-  id            SERIAL PRIMARY KEY,
-  user_id       INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  slug          TEXT NOT NULL,
-  started_at    TIMESTAMPTZ,
-  completed_at  TIMESTAMPTZ,
-  created_at    TIMESTAMPTZ DEFAULT NOW(),
-  updated_at    TIMESTAMPTZ DEFAULT NOW()
-);
-
-CREATE UNIQUE INDEX IF NOT EXISTS ux_form_sessions_user_slug
-  ON form_sessions(user_id, slug);
-CREATE INDEX IF NOT EXISTS idx_form_sessions_completed
-  ON form_sessions(completed_at);
-
-ALTER TABLE form_sessions
-  ADD COLUMN IF NOT EXISTS started_at   TIMESTAMPTZ,
-  ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ,
-  ADD COLUMN IF NOT EXISTS created_at   TIMESTAMPTZ DEFAULT NOW(),
-  ADD COLUMN IF NOT EXISTS updated_at   TIMESTAMPTZ DEFAULT NOW();
-
 -- PAYMENTS (опционально, совместимость)
 CREATE TABLE IF NOT EXISTS payments (
   id            SERIAL PRIMARY KEY,
@@ -132,6 +118,13 @@ CREATE TABLE IF NOT EXISTS payments (
   raw_payload   JSONB,
   created_at    TIMESTAMPTZ DEFAULT NOW()
 );
+ALTER TABLE payments
+  ALTER COLUMN access_until TYPE TIMESTAMPTZ
+    USING CASE
+      WHEN pg_typeof(access_until) = 'timestamp without time zone'::regtype
+        THEN timezone('UTC', access_until)
+      ELSE access_until
+    END;
 CREATE UNIQUE INDEX IF NOT EXISTS ux_payments_order_id ON payments(order_id);
 CREATE INDEX IF NOT EXISTS idx_payments_status         ON payments(status);
 CREATE INDEX IF NOT EXISTS idx_payments_email          ON payments(LOWER(email));
@@ -147,6 +140,17 @@ CREATE TABLE IF NOT EXISTS content (
 );
 CREATE INDEX IF NOT EXISTS idx_content_key ON content(key);
 
+-- CONTENT_VERSIONS
+CREATE TABLE IF NOT EXISTS content_versions (
+  id         SERIAL PRIMARY KEY,
+  key        TEXT NOT NULL,
+  value      TEXT,
+  updated_by BIGINT,
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_content_versions_key_updated
+  ON content_versions(key, updated_at DESC);
+
 -- FORM_SESSIONS
 CREATE TABLE IF NOT EXISTS form_sessions (
   id               SERIAL PRIMARY KEY,
@@ -155,14 +159,81 @@ CREATE TABLE IF NOT EXISTS form_sessions (
   started_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   completed_at     TIMESTAMPTZ,
   last_reminder_at TIMESTAMPTZ,
-  reminder_count   INT NOT NULL DEFAULT 0,
-  UNIQUE (user_id, form_slug)
+  reminder_count   INT NOT NULL DEFAULT 0
 );
 
+ALTER TABLE form_sessions
+  ADD COLUMN IF NOT EXISTS last_reminder_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS reminder_count INT;
+
+UPDATE form_sessions
+SET reminder_count = 0
+WHERE reminder_count IS NULL;
+
+ALTER TABLE form_sessions
+  ALTER COLUMN reminder_count SET DEFAULT 0;
+
+DO $$
+BEGIN
+  IF EXISTS (
+      SELECT 1
+      FROM information_schema.columns
+      WHERE table_schema = 'public'
+        AND table_name = 'form_sessions'
+        AND column_name = 'reminder_count'
+  ) THEN
+      BEGIN
+          EXECUTE 'ALTER TABLE form_sessions ALTER COLUMN reminder_count SET NOT NULL';
+      EXCEPTION WHEN others THEN
+          NULL;
+      END;
+  END IF;
+END
+$$;
+
+-- Legacy compatibility: remove the old index and rename slug → form_slug when needed.
+DROP INDEX IF EXISTS ux_form_sessions_user_slug;
+
+DO $$
+BEGIN
+  IF EXISTS (
+      SELECT 1
+      FROM information_schema.columns
+      WHERE table_schema = 'public'
+        AND table_name = 'form_sessions'
+        AND column_name = 'slug'
+  ) THEN
+      EXECUTE 'ALTER TABLE form_sessions RENAME COLUMN slug TO form_slug';
+  END IF;
+END
+$$;
+
+CREATE UNIQUE INDEX IF NOT EXISTS ux_form_sessions_user_form_slug
+  ON form_sessions(user_id, form_slug);
+CREATE INDEX IF NOT EXISTS idx_form_sessions_completed
+  ON form_sessions(completed_at);
 CREATE INDEX IF NOT EXISTS idx_form_sessions_user_started
   ON form_sessions(user_id, started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_form_sessions_incomplete
   ON form_sessions(completed_at, started_at);
+CREATE INDEX IF NOT EXISTS idx_form_sessions_slug
+  ON form_sessions(form_slug);
+CREATE INDEX IF NOT EXISTS idx_form_sessions_slug_completed
+  ON form_sessions(form_slug, completed_at);
+
+-- TEST_REQUESTS
+CREATE TABLE IF NOT EXISTS test_requests (
+  id             SERIAL PRIMARY KEY,
+  tg_user_id     BIGINT NOT NULL UNIQUE,
+  user_id        INT REFERENCES users(id) ON DELETE SET NULL,
+  birthdate      DATE NOT NULL,
+  preferred_name TEXT,
+  status         TEXT NOT NULL DEFAULT 'waiting',
+  created_at     TIMESTAMPTZ DEFAULT NOW(),
+  updated_at     TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_test_requests_status ON test_requests(status);
 
 -- BROADCAST_TEMPLATES
 CREATE TABLE IF NOT EXISTS broadcast_templates (

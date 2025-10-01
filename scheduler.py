@@ -10,10 +10,26 @@ from apscheduler.triggers.cron import CronTrigger
 
 from aiogram import Bot, exceptions as tg_exc
 
+RetryAfterTypes = tuple(
+    exc
+    for exc in (
+        getattr(tg_exc, "TelegramRetryAfter", None),
+        getattr(tg_exc, "RetryAfter", None),
+    )
+    if exc is not None
+) or (Exception,)
+
 from db import fetch, fetchrow, execute
 from keyboards import lesson_keyboard
 # переиспользуем минимум логики из handlers, чтобы не дублировать
-from handlers import _load_yaml_content, upsert_funnel_delivery, FORM_LABELS
+from handlers import (
+    _ADMIN_BROADCAST_SETTINGS_DEFAULTS,
+    _load_yaml_content,
+    upsert_funnel_delivery,
+    FORM_LABELS,
+    get_content,
+    get_bool_setting,
+)
 
 logger = logging.getLogger("scheduler")
 
@@ -62,7 +78,7 @@ async def _send_with_retries(bot: Bot, chat_id: int, text: str, reply_markup=Non
         try:
             await bot.send_message(chat_id, text, reply_markup=reply_markup)
             return True
-        except tg_exc.RetryAfter as e:
+        except RetryAfterTypes as e:
             # Telegram просит подождать (Flood control)
             wait_for = getattr(e, "timeout", delay)
             logger.warning("Flood control: waiting %.2fs (attempt %s/%s)", wait_for, attempt, max_attempts)
@@ -175,6 +191,14 @@ async def job_soft_reminders(bot: Bot):
     hw_status='pending'. После напоминания не меняем статус, но ограничиваем коридором [24h, 48h],
     чтобы не спамить.
     """
+    enabled = await get_bool_setting(
+        "broadcast_soft_reminders_enabled",
+        _ADMIN_BROADCAST_SETTINGS_DEFAULTS.get("broadcast_soft_reminders_enabled", True),
+    )
+    if not enabled:
+        logger.info("[job_soft_reminders] disabled via admin settings")
+        return
+
     rows = await fetch(
         """
         SELECT fp.id, fp.user_id, u.tg_user_id, fp.lesson_num, fp.delivered_at
@@ -211,6 +235,14 @@ async def job_soft_reminders(bot: Bot):
 
 async def job_form_reminders(bot: Bot):
     """Раз в час напоминаем о незавершённых анкетах."""
+    enabled = await get_bool_setting(
+        "broadcast_form_reminders_enabled",
+        _ADMIN_BROADCAST_SETTINGS_DEFAULTS.get("broadcast_form_reminders_enabled", True),
+    )
+    if not enabled:
+        logger.info("[job_form_reminders] disabled via admin settings")
+        return
+
     rows = await fetch(
         """
         SELECT fs.id, fs.user_id, u.tg_user_id, fs.form_slug, fs.started_at, fs.last_reminder_at, fs.reminder_count
@@ -226,14 +258,19 @@ async def job_form_reminders(bot: Bot):
         logger.info("[job_form_reminders] nothing to remind")
         return
 
+    template = await get_content(
+        "forms.reminder_template",
+        (
+            "Напоминание: анкета «{form_label}» ждёт завершения.\n"
+            "Если уже отправила форму, просто игнорируй это сообщение.\n"
+        ),
+    )
+
     sent, errors = 0, 0
     for r in rows:
         try:
             label = FORM_LABELS.get(r["form_slug"], r["form_slug"])
-            reminder_text = (
-                f"Напоминание: анкета «{label}» ждёт завершения.\n"
-                "Если уже отправила форму, просто игнорируй это сообщение."
-            )
+            reminder_text = template.format(form_label=label)
             ok = await _send_with_retries(bot, r["tg_user_id"], reminder_text)
             if ok:
                 await execute(
@@ -260,6 +297,14 @@ async def job_access_expiry_reminders(bot: Bot):
     Напоминания об окончании доступа: -7 / -3 / 0 дней.
     Если клуб бесплатный (нет product_id) — только мягкое напоминание в день окончания (если дата задана).
     """
+    enabled = await get_bool_setting(
+        "broadcast_access_expiry_enabled",
+        _ADMIN_BROADCAST_SETTINGS_DEFAULTS.get("broadcast_access_expiry_enabled", True),
+    )
+    if not enabled:
+        logger.info("[job_access_expiry_reminders] disabled via admin settings")
+        return
+
     if not AT_PRODUCT_ID_CLUB:
         rows = await fetch(
             """

@@ -30,8 +30,13 @@ ADMIN_TEXTS_ENTRY = "📄 Тексты экранов"
 ADMIN_CONTENT_MENU = "🧾 Контент и тексты"
 ADMIN_CONTENT_VIEW = "🔍 Посмотреть текст"
 ADMIN_CONTENT_CREATE = "➕ Добавить или обновить текст"
+ADMIN_CONTENT_HISTORY = "🕘 История версий"
 ADMIN_CONTENT_TAGS_HELP = "ℹ️ Форматирование текста"
+ADMIN_CONTENT_SAVE_TEMPLATE_BUTTON = "📥 Сохранить шаблон"
 ADMIN_CONTENT_SUGGEST_MORE = "🔁 Ещё варианты"
+ADMIN_CONTENT_ROLLBACK_PREFIX = "↩️ Откатить"
+ADMIN_CONTENT_EXPORT = "⬇️ Экспорт"
+ADMIN_CONTENT_IMPORT = "⬆️ Импорт"
 ADMIN_USERS_BUTTON = "👥 Пользователи"
 ADMIN_USERS_SEGMENT_LEADS = "🎯 Лиды"
 ADMIN_USERS_SEGMENT_ACTIVE = "🔥 Активные"
@@ -50,10 +55,14 @@ ADMIN_STATS_USERS_BREAKDOWN = "📋 Статусы пользователей"
 ADMIN_STATS_LESSON_PROGRESS = "🎯 Прогресс уроков"
 ADMIN_STATS_PAYMENTS_BREAKDOWN = "💰 Статистика оплат"
 ADMIN_STATS_RECENT_PAYMENTS = "🧾 Последние оплаты"
+ADMIN_STATS_FORMS_BREAKDOWN = "🗂 Формы и консультации"
 ADMIN_DEBUG_BUTTON = "🛠️ Диагностика"
 ADMIN_SETTINGS_BUTTON = "⚙️ Настройки"
 ADMIN_PAYMENTS_BUTTON = "💳 Оплаты"
 ADMIN_BEHAVIOR_BUTTON = "🎛 Логика бота"
+ADMIN_BROADCAST_REMINDER_TEXT = "✏️ Текст напоминаний"
+ADMIN_BROADCAST_HISTORY_BUTTON = "📜 История рассылок"
+BROADCAST_HISTORY_MORE_BUTTON = "➕ Ещё"
 
 ADMIN_BEHAVIOR_START = "✉️ Приветствие /start"
 ADMIN_BEHAVIOR_REGISTRATION = "✅ Сообщение после регистрации"
@@ -82,6 +91,11 @@ FEEDBACK_OPTIONS: dict[str, str] = {
     "Нормально": "average",
     "Плохо": "poor",
 }
+
+LEARNING_PROGRESS_BUTTON = "Мой прогресс"
+MATERIALS_CATALOG_BUTTON = "Каталог материалов"
+MATERIALS_PRACTICES_BUTTON = "Практики"
+MATERIALS_CHALLENGES_BUTTON = "Челленджи"
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Главное меню и разделы
@@ -133,9 +147,13 @@ def learning_menu_keyboard() -> ReplyKeyboardMarkup:
     rows = [
         [
             KeyboardButton(text="Бесплатные уроки"),
-            KeyboardButton(text="Окно в Магнетизм"),
+            KeyboardButton(text=LEARNING_PROGRESS_BUTTON),
         ],
-        [KeyboardButton(text="Записаться на разбор"), KeyboardButton(text="Пройти тест")],
+        [
+            KeyboardButton(text="Окно в Магнетизм"),
+            KeyboardButton(text="Записаться на разбор"),
+        ],
+        [KeyboardButton(text="Пройти тест")],
         [KeyboardButton(text=BACK_TO_MAIN)],
     ]
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
@@ -149,7 +167,14 @@ def materials_menu_keyboard(
     weekly_text = "Материалы недели" if weekly_enabled else "Материалы недели 🔒"
     schedule_text = "Расписание" if schedule_enabled else "Расписание 🔒"
     rows = [
-        [KeyboardButton(text=weekly_text)],
+        [
+            KeyboardButton(text=weekly_text),
+            KeyboardButton(text=MATERIALS_CATALOG_BUTTON),
+        ],
+        [
+            KeyboardButton(text=MATERIALS_PRACTICES_BUTTON),
+            KeyboardButton(text=MATERIALS_CHALLENGES_BUTTON),
+        ],
         [KeyboardButton(text=schedule_text)],
         [KeyboardButton(text=BACK_TO_MAIN)],
     ]
@@ -236,9 +261,13 @@ def feedback_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
 
-def cancel_keyboard() -> ReplyKeyboardMarkup:
+def cancel_keyboard(*, extra_buttons: list[str] | None = None) -> ReplyKeyboardMarkup:
+    rows: list[list[KeyboardButton]] = []
+    if extra_buttons:
+        rows.append([KeyboardButton(text=btn) for btn in extra_buttons])
+    rows.append([KeyboardButton(text=CANCEL_TEXT)])
     return ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text=CANCEL_TEXT)]],
+        keyboard=rows,
         resize_keyboard=True,
     )
 
@@ -260,9 +289,8 @@ def admin_main_keyboard() -> ReplyKeyboardMarkup:
     rows = [
         [KeyboardButton(text=ADMIN_USERS_BUTTON)],
         [KeyboardButton(text=ADMIN_BROADCAST_BUTTON), KeyboardButton(text=ADMIN_CONTENT_MENU)],
-        [KeyboardButton(text=ADMIN_BEHAVIOR_BUTTON)],
+        [KeyboardButton(text=ADMIN_BEHAVIOR_BUTTON), KeyboardButton(text=ADMIN_SETTINGS_BUTTON)],
         [KeyboardButton(text=ADMIN_STATS_BUTTON), KeyboardButton(text=ADMIN_DEBUG_BUTTON)],
-        [KeyboardButton(text=ADMIN_SETTINGS_BUTTON), KeyboardButton(text=ADMIN_PAYMENTS_BUTTON)],
         [KeyboardButton(text=BACK_TO_MAIN)],
     ]
     return ReplyKeyboardMarkup(
@@ -279,6 +307,7 @@ def admin_stats_keyboard() -> ReplyKeyboardMarkup:
         [KeyboardButton(text=ADMIN_STATS_LESSON_PROGRESS)],
         [KeyboardButton(text=ADMIN_STATS_PAYMENTS_BREAKDOWN)],
         [KeyboardButton(text=ADMIN_STATS_RECENT_PAYMENTS)],
+        [KeyboardButton(text=ADMIN_STATS_FORMS_BREAKDOWN)],
         [KeyboardButton(text=BACK_TO_ADMIN), KeyboardButton(text=BACK_TO_MAIN)],
     ]
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
@@ -334,6 +363,7 @@ def admin_behavior_keyboard() -> ReplyKeyboardMarkup:
         [KeyboardButton(text=ADMIN_BEHAVIOR_START)],
         [KeyboardButton(text=ADMIN_BEHAVIOR_REGISTRATION)],
         [KeyboardButton(text=ADMIN_BEHAVIOR_ONBOARDING)],
+        [KeyboardButton(text=ADMIN_PAYMENTS_BUTTON)],
         [KeyboardButton(text=BACK_TO_ADMIN), KeyboardButton(text=BACK_TO_MAIN)],
     ]
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
@@ -361,13 +391,27 @@ def admin_onboarding_delete_keyboard(steps: list[str]) -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
 
-def admin_broadcast_keyboard() -> ReplyKeyboardMarkup:
+def admin_broadcast_keyboard(status_flags: dict[str, bool]) -> ReplyKeyboardMarkup:
     rows = [
         [KeyboardButton(text=BROADCAST_ALL_BUTTON), KeyboardButton(text=BROADCAST_LEADS_BUTTON)],
         [KeyboardButton(text=BROADCAST_MEMBERS_BUTTON), KeyboardButton(text=BROADCAST_EXPIRED_BUTTON)],
-        [KeyboardButton(text=BROADCAST_TEMPLATES_BUTTON)],
-        [KeyboardButton(text=BACK_TO_ADMIN), KeyboardButton(text=BACK_TO_MAIN)],
+        [KeyboardButton(text=BROADCAST_TEMPLATES_BUTTON), KeyboardButton(text=ADMIN_BROADCAST_HISTORY_BUTTON)],
+        [KeyboardButton(text=BROADCAST_HISTORY_MORE_BUTTON)],
+        [KeyboardButton(text=ADMIN_BROADCAST_REMINDER_TEXT)],
     ]
+    for label, enabled in status_flags.items():
+        status = "✅" if enabled else "❌"
+        rows.append([KeyboardButton(text=f"{status} {label}")])
+    rows.append([KeyboardButton(text=BACK_TO_ADMIN), KeyboardButton(text=BACK_TO_MAIN)])
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
+
+
+def admin_broadcast_history_keyboard(*, has_more: bool) -> ReplyKeyboardMarkup:
+    rows: list[list[KeyboardButton]] = []
+    if has_more:
+        rows.append([KeyboardButton(text=BROADCAST_HISTORY_MORE_BUTTON)])
+    rows.append([KeyboardButton(text=BACK_TO_BROADCAST), KeyboardButton(text=BACK_TO_ADMIN)])
+    rows.append([KeyboardButton(text=BACK_TO_MAIN)])
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
 
@@ -411,10 +455,6 @@ def admin_settings_keyboard(
     for key, label in labels.items():
         status = "✅" if flags.get(key, True) else "❌"
         rows.append([KeyboardButton(text=f"{status} {label}")])
-    rows.append([
-        KeyboardButton(text=ADMIN_CONTENT_MENU),
-        KeyboardButton(text=ADMIN_TEXTS_ENTRY),
-    ])
     rows.append([KeyboardButton(text=BACK_TO_ADMIN), KeyboardButton(text=BACK_TO_MAIN)])
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
@@ -434,21 +474,33 @@ def admin_payments_keyboard(*, payments_open: bool) -> ReplyKeyboardMarkup:
             KeyboardButton(text=ADMIN_PAYMENTS_MARK_PAID),
             KeyboardButton(text=ADMIN_PAYMENTS_MARK_FAILED),
         ],
-        [KeyboardButton(text=BACK_TO_ADMIN), KeyboardButton(text=BACK_TO_MAIN)],
+        [KeyboardButton(text=BACK_TO_BEHAVIOR), KeyboardButton(text=BACK_TO_ADMIN)],
+        [KeyboardButton(text=BACK_TO_MAIN)],
     ]
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
 
-def admin_content_keyboard() -> ReplyKeyboardMarkup:
+def admin_content_keyboard(*, include_save_template: bool = False) -> ReplyKeyboardMarkup:
     rows = [
         [KeyboardButton(text=ADMIN_TEXTS_ENTRY)],
+    ]
+
+    if include_save_template:
+        rows.append([KeyboardButton(text=ADMIN_CONTENT_SAVE_TEMPLATE_BUTTON)])
+
+    rows.extend([
         [
             KeyboardButton(text=ADMIN_CONTENT_VIEW),
             KeyboardButton(text=ADMIN_CONTENT_CREATE),
         ],
+        [KeyboardButton(text=ADMIN_CONTENT_HISTORY)],
+        [
+            KeyboardButton(text=ADMIN_CONTENT_EXPORT),
+            KeyboardButton(text=ADMIN_CONTENT_IMPORT),
+        ],
         [KeyboardButton(text=ADMIN_CONTENT_TAGS_HELP)],
         [KeyboardButton(text=BACK_TO_ADMIN), KeyboardButton(text=BACK_TO_MAIN)],
-    ]
+    ])
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
 
@@ -484,6 +536,17 @@ def admin_content_suggestions_keyboard(
 
     if show_more:
         rows.append([KeyboardButton(text=ADMIN_CONTENT_SUGGEST_MORE)])
+
+    rows.append([KeyboardButton(text=CANCEL_TEXT)])
+
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
+
+
+def admin_content_versions_keyboard(options_count: int) -> ReplyKeyboardMarkup:
+    rows: list[list[KeyboardButton]] = []
+
+    for idx in range(1, options_count + 1):
+        rows.append([KeyboardButton(text=f"{ADMIN_CONTENT_ROLLBACK_PREFIX} {idx}")])
 
     rows.append([KeyboardButton(text=CANCEL_TEXT)])
 
