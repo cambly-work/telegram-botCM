@@ -4,6 +4,7 @@ from keyboards import (
     ADMIN_BEHAVIOR_REGISTRATION,
     ADMIN_BEHAVIOR_START,
     ADMIN_BROADCAST_BUTTON,
+    ADMIN_BROADCAST_HISTORY_BUTTON,
     ADMIN_BROADCAST_REMINDER_TEXT,
     ADMIN_CONTENT_MENU,
     ADMIN_TEXTS_ENTRY,
@@ -25,6 +26,7 @@ from keyboards import (
     BROADCAST_ALL_BUTTON,
     BROADCAST_EXPIRED_BUTTON,
     BROADCAST_LEADS_BUTTON,
+    BROADCAST_HISTORY_MORE_BUTTON,
     BROADCAST_MEMBERS_BUTTON,
     BROADCAST_TEMPLATES_BUTTON,
     materials_menu_keyboard,
@@ -51,12 +53,13 @@ def test_admin_broadcast_keyboard_includes_status_flags():
 
     assert rows[0] == [BROADCAST_ALL_BUTTON, BROADCAST_LEADS_BUTTON]
     assert rows[1] == [BROADCAST_MEMBERS_BUTTON, BROADCAST_EXPIRED_BUTTON]
-    assert rows[2] == [BROADCAST_TEMPLATES_BUTTON]
-    assert rows[3] == [ADMIN_BROADCAST_REMINDER_TEXT]
-    assert rows[4] == ["✅ Напоминания анкет"]
-    assert rows[5] == ["❌ Напоминания уроков"]
-    assert rows[6] == ["✅ Напоминания об окончании доступа"]
-    assert rows[7] == [BACK_TO_ADMIN, BACK_TO_MAIN]
+    assert rows[2] == [BROADCAST_TEMPLATES_BUTTON, ADMIN_BROADCAST_HISTORY_BUTTON]
+    assert rows[3] == [BROADCAST_HISTORY_MORE_BUTTON]
+    assert rows[4] == [ADMIN_BROADCAST_REMINDER_TEXT]
+    assert rows[5] == ["✅ Напоминания анкет"]
+    assert rows[6] == ["❌ Напоминания уроков"]
+    assert rows[7] == ["✅ Напоминания об окончании доступа"]
+    assert rows[8] == [BACK_TO_ADMIN, BACK_TO_MAIN]
 
 
 def test_admin_main_keyboard_layout():
