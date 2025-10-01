@@ -67,8 +67,9 @@ ADMIN_STATS_FORMS_BREAKDOWN = "🗂 Формы и консультации"
 ADMIN_DEBUG_BUTTON = "🛠️ Диагностика"
 ADMIN_SETTINGS_BUTTON = "⚙️ Настройки"
 ADMIN_PAYMENTS_BUTTON = "💳 Оплаты"
-ADMIN_BEHAVIOR_BUTTON = "🎮 Геймификация"
-ADMIN_BROADCAST_NEW_BUTTON = "🚀 Новая рассылка"
+ADMIN_MATERIALS_BUTTON = "📚 Материалы"
+ADMIN_KEYS_BUTTON = "🔑 Ключи"
+ADMIN_BEHAVIOR_BUTTON = "🎛 Логика бота"
 ADMIN_BROADCAST_REMINDER_TEXT = "✏️ Текст напоминаний"
 ADMIN_BROADCAST_HISTORY_BUTTON = "📜 История рассылок"
 BROADCAST_HISTORY_MORE_BUTTON = "➕ Ещё"
@@ -79,6 +80,10 @@ ADMIN_MATERIALS_UPDATE = "✏️ Изменить категорию"
 ADMIN_MATERIALS_DELETE = "🗑️ Удалить категорию"
 ADMIN_MATERIALS_GRANT = "✅ Выдать доступ"
 ADMIN_MATERIALS_REVOKE = "🚫 Отозвать доступ"
+
+ADMIN_KEYS_BULK_GRANT = "🎁 Массовая выдача"
+ADMIN_KEYS_REVOKE = "🔄 Отозвать ключ"
+ADMIN_KEYS_UPLOAD = "⬆️ Загрузить описания"
 
 ADMIN_BEHAVIOR_START = "✉️ Приветствие /start"
 ADMIN_BEHAVIOR_REGISTRATION = "✅ Сообщение после регистрации"
@@ -340,8 +345,11 @@ ADMIN_PAYMENTS_MARK_FAILED = "❗ Пометить как ошибку"
 
 def admin_main_keyboard() -> ReplyKeyboardMarkup:
     rows = [
-        [KeyboardButton(text=ADMIN_USERS_BUTTON), KeyboardButton(text=ADMIN_MATERIALS_BUTTON)],
-        [KeyboardButton(text=ADMIN_BROADCAST_BUTTON), KeyboardButton(text=ADMIN_BEHAVIOR_BUTTON)],
+        [KeyboardButton(text=ADMIN_USERS_BUTTON)],
+        [KeyboardButton(text=ADMIN_SCHEDULE_BUTTON)],
+        [KeyboardButton(text=ADMIN_BROADCAST_BUTTON), KeyboardButton(text=ADMIN_CONTENT_MENU)],
+        [KeyboardButton(text=ADMIN_MATERIALS_BUTTON), KeyboardButton(text=ADMIN_BEHAVIOR_BUTTON)],
+        [KeyboardButton(text=ADMIN_KEYS_BUTTON)],
         [KeyboardButton(text=ADMIN_SETTINGS_BUTTON), KeyboardButton(text=ADMIN_STATS_BUTTON)],
         [KeyboardButton(text=ADMIN_DEBUG_BUTTON)],
         [KeyboardButton(text=BACK_TO_MAIN)],
@@ -364,8 +372,21 @@ def admin_materials_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
 
-def admin_materials_categories_keyboard(slugs: list[str]) -> ReplyKeyboardMarkup:
-    rows: list[list[KeyboardButton]] = [[KeyboardButton(text=slug)] for slug in slugs]
+def admin_keys_keyboard() -> ReplyKeyboardMarkup:
+    rows = [
+        [KeyboardButton(text=ADMIN_KEYS_BULK_GRANT)],
+        [KeyboardButton(text=ADMIN_KEYS_REVOKE)],
+        [KeyboardButton(text=ADMIN_KEYS_UPLOAD)],
+        [KeyboardButton(text=BACK_TO_ADMIN), KeyboardButton(text=BACK_TO_MAIN)],
+    ]
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
+
+
+def admin_materials_categories_keyboard(categories: list[str]) -> ReplyKeyboardMarkup:
+    rows: list[list[KeyboardButton]] = [
+        [KeyboardButton(text=slug)] for slug in categories
+    ]
+
     rows.append([KeyboardButton(text=BACK_TO_ADMIN), KeyboardButton(text=BACK_TO_MAIN)])
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
