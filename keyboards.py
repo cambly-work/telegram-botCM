@@ -91,6 +91,8 @@ BROADCAST_ALL_BUTTON = "📣 Всем"
 BROADCAST_LEADS_BUTTON = "🎯 Лиды"
 BROADCAST_MEMBERS_BUTTON = "🔥 Активные"
 BROADCAST_EXPIRED_BUTTON = "🧊 Завершившие"
+BROADCAST_KEYS_BUTTON = "🔑 Ключи"
+BROADCAST_PRACTICE_BUTTON = "🧘 Практика"
 BROADCAST_TEMPLATES_BUTTON = "🗂 Шаблоны рассылок"
 BROADCAST_TEMPLATE_PREFIX = "🗂 Шаблон: "
 
@@ -353,14 +355,19 @@ def admin_main_keyboard() -> ReplyKeyboardMarkup:
 
 def admin_materials_keyboard() -> ReplyKeyboardMarkup:
     rows = [
-        [KeyboardButton(text=ADMIN_CONTENT_MENU)],
+        [KeyboardButton(text=ADMIN_MATERIALS_LIST)],
+        [KeyboardButton(text=ADMIN_MATERIALS_CREATE), KeyboardButton(text=ADMIN_MATERIALS_UPDATE)],
+        [KeyboardButton(text=ADMIN_MATERIALS_DELETE)],
+        [KeyboardButton(text=ADMIN_MATERIALS_GRANT), KeyboardButton(text=ADMIN_MATERIALS_REVOKE)],
         [KeyboardButton(text=BACK_TO_ADMIN), KeyboardButton(text=BACK_TO_MAIN)],
     ]
-    return ReplyKeyboardMarkup(
-        keyboard=rows,
-        resize_keyboard=True,
-        input_field_placeholder="Материалы — выберите инструмент",
-    )
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
+
+
+def admin_materials_categories_keyboard(slugs: list[str]) -> ReplyKeyboardMarkup:
+    rows: list[list[KeyboardButton]] = [[KeyboardButton(text=slug)] for slug in slugs]
+    rows.append([KeyboardButton(text=BACK_TO_ADMIN), KeyboardButton(text=BACK_TO_MAIN)])
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
 
 def admin_stats_keyboard() -> ReplyKeyboardMarkup:
@@ -490,6 +497,7 @@ def admin_broadcast_segments_keyboard() -> ReplyKeyboardMarkup:
     rows = [
         [KeyboardButton(text=BROADCAST_ALL_BUTTON), KeyboardButton(text=BROADCAST_LEADS_BUTTON)],
         [KeyboardButton(text=BROADCAST_MEMBERS_BUTTON), KeyboardButton(text=BROADCAST_EXPIRED_BUTTON)],
+        [KeyboardButton(text=BROADCAST_KEYS_BUTTON), KeyboardButton(text=BROADCAST_PRACTICE_BUTTON)],
         [KeyboardButton(text=BACK_TO_BROADCAST), KeyboardButton(text=BACK_TO_ADMIN)],
         [KeyboardButton(text=BACK_TO_MAIN)],
     ]

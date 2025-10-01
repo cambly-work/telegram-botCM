@@ -334,10 +334,26 @@ CREATE TABLE IF NOT EXISTS broadcast_templates (
   title      TEXT UNIQUE NOT NULL,
   segment    TEXT NOT NULL DEFAULT 'all',
   body       TEXT NOT NULL,
+  placeholders JSONB NOT NULL DEFAULT '[]'::jsonb,
+  cta_description TEXT,
+  cta_buttons JSONB,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_broadcast_templates_segment ON broadcast_templates(segment);
+
+ALTER TABLE broadcast_templates
+  ADD COLUMN IF NOT EXISTS placeholders JSONB DEFAULT '[]'::jsonb,
+  ADD COLUMN IF NOT EXISTS cta_description TEXT,
+  ADD COLUMN IF NOT EXISTS cta_buttons JSONB;
+
+UPDATE broadcast_templates
+  SET placeholders = '[]'::jsonb
+  WHERE placeholders IS NULL;
+
+ALTER TABLE broadcast_templates
+  ALTER COLUMN placeholders SET DEFAULT '[]'::jsonb,
+  ALTER COLUMN placeholders SET NOT NULL;
 
 -- ADMIN_LOG (совместимость с v2 → v3)
 
