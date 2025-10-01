@@ -13,7 +13,7 @@ import html
 from collections import OrderedDict
 from datetime import datetime, date, timedelta, timezone
 from zoneinfo import ZoneInfo
-from typing import Optional, Iterable, Dict, List, Callable, Awaitable, Any
+from typing import Optional, Iterable, Dict, List, Callable, Awaitable, Any, Sequence
 from aiogram import Router, F, types
 from aiogram.enums import ParseMode
 from aiogram.types import (
@@ -32,7 +32,7 @@ try:
     from aiogram.exceptions import EventSkip
 except ImportError:  # aiogram < 3.13.1 compatibility
     from aiogram.dispatcher.event.bases import SkipHandler as EventSkip
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, urlparse, quote_plus, urlencode
 from aiogram.dispatcher.middlewares.base import BaseMiddleware
 from db import fetchrow, fetch, execute, transaction
 from settings import ADMIN_IDS, YOOMONEY_CHECKOUT_URL
@@ -96,6 +96,13 @@ from keyboards import (
     ADMIN_CONTENT_IMPORT,
     ADMIN_USERS_BUTTON,
     ADMIN_MATERIALS_BUTTON,
+    ADMIN_SCHEDULE_BUTTON,
+    ADMIN_SCHEDULE_ADD_EVENT,
+    ADMIN_SCHEDULE_EDIT_EVENT,
+    ADMIN_SCHEDULE_ARCHIVE_EVENT,
+    ADMIN_SCHEDULE_RESTORE_EVENT,
+    ADMIN_SCHEDULE_SHOW_ARCHIVE,
+    ADMIN_SCHEDULE_SHOW_ACTIVE,
     ADMIN_BROADCAST_BUTTON,
     ADMIN_BROADCAST_HISTORY_BUTTON,
     ADMIN_BROADCAST_NEW_BUTTON,
@@ -104,6 +111,8 @@ from keyboards import (
     BROADCAST_LEADS_BUTTON,
     BROADCAST_MEMBERS_BUTTON,
     BROADCAST_EXPIRED_BUTTON,
+    BROADCAST_KEYS_BUTTON,
+    BROADCAST_PRACTICE_BUTTON,
     BROADCAST_TEMPLATES_BUTTON,
     SEND_BROADCAST_BUTTON,
     EDIT_BROADCAST_BUTTON,
@@ -171,6 +180,9 @@ logger = logging.getLogger("handlers")
 
 
 _notify_admins_cached: Optional[Callable[[str], Awaitable[None]]] = None
+
+_BOT_USERNAME_CACHE: Optional[str] = None
+_BOT_USERNAME_LOCK = asyncio.Lock()
 
 
 FORM_SLUG_ANALYSIS = "analysis"
@@ -991,7 +1003,209 @@ async def _generate_broadcast_slug(title: str) -> str:
     return candidate
 
 
-async def upsert_broadcast_template(title: str, segment: str, body: str) -> dict:
+_BROADCAST_PLACEHOLDER_RE = re.compile(r"\{+\s*([A-Za-z0-9_.-]+)\s*\}+")
+
+
+def _normalize_placeholder_name(raw: Any) -> Optional[str]:
+    if raw is None:
+        return None
+    token = str(raw).strip()
+    if not token:
+        return None
+    token = token.strip("{} ")
+    if not token:
+        return None
+    return token.lower()
+
+
+def _extract_broadcast_placeholders_from_text(text: str) -> list[str]:
+    found: set[str] = set()
+    if not text:
+        return []
+    for match in _BROADCAST_PLACEHOLDER_RE.finditer(text):
+        normalized = _normalize_placeholder_name(match.group(1))
+        if normalized:
+            found.add(normalized)
+    return sorted(found)
+
+
+def _normalize_broadcast_placeholders(
+    placeholders: Iterable[str] | None,
+    *,
+    text: str,
+) -> list[str]:
+    tokens: set[str] = set()
+    for token in placeholders or []:
+        normalized = _normalize_placeholder_name(token)
+        if normalized:
+            tokens.add(normalized)
+    for token in _extract_broadcast_placeholders_from_text(text):
+        tokens.add(token)
+    return sorted(tokens)
+
+
+def _normalize_cta_description(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _normalize_cta_buttons(buttons: Iterable[dict] | None) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
+    if not buttons:
+        return normalized
+
+    for button in buttons:
+        if not isinstance(button, dict):
+            continue
+        text = str(button.get("text") or "").strip()
+        if not text:
+            continue
+        button_type = str(button.get("type") or "url").strip().lower() or "url"
+        if button_type == "deep_link":
+            payload = button.get("payload")
+            if isinstance(payload, dict):
+                payload_dict = {
+                    str(k).strip(): str(v).strip()
+                    for k, v in payload.items()
+                    if str(k).strip() and str(v).strip()
+                }
+                if not payload_dict:
+                    continue
+                normalized.append({
+                    "text": text,
+                    "type": "deep_link",
+                    "payload": payload_dict,
+                })
+            elif isinstance(payload, str):
+                payload_value = payload.strip()
+                if not payload_value:
+                    continue
+                normalized.append({
+                    "text": text,
+                    "type": "deep_link",
+                    "payload": payload_value,
+                })
+            else:
+                continue
+        else:
+            url = str(button.get("url") or "").strip()
+            if not url:
+                continue
+            normalized.append({
+                "text": text,
+                "type": "url",
+                "url": url,
+            })
+    return normalized
+
+
+def _collect_broadcast_placeholder_examples(sample_name: str) -> dict[str, str]:
+    examples: dict[str, str] = {
+        "name": sample_name,
+        "support": SUPPORT_CONTACT,
+        "support_contact": SUPPORT_CONTACT,
+    }
+    return examples
+
+
+def _format_placeholder_status(placeholders: Iterable[str], examples: dict[str, str]) -> list[str]:
+    lines: list[str] = []
+    seen: set[str] = set()
+    for placeholder in sorted({(p or "").strip().lower() for p in placeholders if p}):
+        if not placeholder or placeholder in seen:
+            continue
+        seen.add(placeholder)
+        token_display = f"{{{placeholder}}}"
+        example = examples.get(placeholder)
+        if example:
+            lines.append(
+                f"✅ <code>{html.escape(token_display)}</code> → {html.escape(example)}"
+            )
+        else:
+            lines.append(
+                f"⚠️ <code>{html.escape(token_display)}</code> — нет автоматического значения"
+            )
+    return lines
+
+
+async def _get_bot_username(bot) -> Optional[str]:
+    global _BOT_USERNAME_CACHE
+    if _BOT_USERNAME_CACHE:
+        return _BOT_USERNAME_CACHE
+    async with _BOT_USERNAME_LOCK:
+        if _BOT_USERNAME_CACHE:
+            return _BOT_USERNAME_CACHE
+        try:
+            me = getattr(bot, "me", None)
+            if not me or not getattr(me, "username", None):
+                me = await bot.get_me()
+            username = getattr(me, "username", None)
+            if username:
+                _BOT_USERNAME_CACHE = username
+        except Exception as exc:  # pragma: no cover - network errors
+            logger.warning("broadcast: failed to fetch bot username: %s", exc)
+            return _BOT_USERNAME_CACHE
+    return _BOT_USERNAME_CACHE
+
+
+async def _resolve_deep_link(bot, payload: Any) -> Optional[str]:
+    username = await _get_bot_username(bot)
+    if not username:
+        return None
+    if isinstance(payload, dict):
+        data = {
+            str(k).strip(): str(v).strip()
+            for k, v in payload.items()
+            if str(k).strip() and str(v).strip()
+        }
+        query = urlencode(data, doseq=True)
+    else:
+        query = str(payload or "").strip()
+    if not query:
+        return None
+    encoded = quote_plus(query)
+    return f"https://t.me/{username}?start={encoded}"
+
+
+async def _build_cta_markup(
+    bot,
+    buttons: Sequence[dict[str, Any]] | None,
+) -> Optional[InlineKeyboardMarkup]:
+    normalized = _normalize_cta_buttons(buttons)
+    if not normalized:
+        return None
+
+    inline_rows: list[list[InlineKeyboardButton]] = []
+    for button in normalized:
+        text = button.get("text") or ""
+        if not text:
+            continue
+        button_type = button.get("type") or "url"
+        url: Optional[str]
+        if button_type == "deep_link":
+            url = await _resolve_deep_link(bot, button.get("payload"))
+        else:
+            url = str(button.get("url") or "").strip()
+        if not url:
+            continue
+        inline_rows.append([InlineKeyboardButton(text=text, url=url)])
+
+    if not inline_rows:
+        return None
+    return InlineKeyboardMarkup(inline_keyboard=inline_rows)
+
+
+async def upsert_broadcast_template(
+    title: str,
+    segment: str,
+    body: str,
+    *,
+    placeholders: Iterable[str] | None = None,
+    cta_description: str | None = None,
+    cta_buttons: Iterable[dict] | None = None,
+) -> dict:
     sanitized_body = sanitize_html(body or "")
     existing = await fetchrow("SELECT slug FROM broadcast_templates WHERE title=$1", title)
     if existing:
@@ -999,21 +1213,34 @@ async def upsert_broadcast_template(title: str, segment: str, body: str) -> dict
     else:
         slug = await _generate_broadcast_slug(title)
 
+    normalized_placeholders = _normalize_broadcast_placeholders(
+        placeholders,
+        text=sanitized_body,
+    )
+    normalized_cta_description = _normalize_cta_description(cta_description)
+    normalized_cta_buttons = _normalize_cta_buttons(cta_buttons)
+
     await execute(
         """
-        INSERT INTO broadcast_templates (slug, title, segment, body, created_at, updated_at)
-        VALUES ($1, $2, $3, $4, NOW(), NOW())
+        INSERT INTO broadcast_templates (slug, title, segment, body, placeholders, cta_description, cta_buttons, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW())
         ON CONFLICT(slug)
         DO UPDATE SET
             title = EXCLUDED.title,
             segment = EXCLUDED.segment,
             body = EXCLUDED.body,
+            placeholders = EXCLUDED.placeholders,
+            cta_description = EXCLUDED.cta_description,
+            cta_buttons = EXCLUDED.cta_buttons,
             updated_at = NOW()
         """,
         slug,
         title,
         segment,
         sanitized_body,
+        normalized_placeholders,
+        normalized_cta_description,
+        normalized_cta_buttons,
     )
 
     return {
@@ -1021,26 +1248,68 @@ async def upsert_broadcast_template(title: str, segment: str, body: str) -> dict
         "title": title,
         "segment": segment,
         "body": sanitized_body,
+        "placeholders": normalized_placeholders,
+        "cta_description": normalized_cta_description,
+        "cta_buttons": normalized_cta_buttons,
     }
 
 
 async def list_broadcast_templates() -> list[dict]:
     rows = await fetch(
         """
-        SELECT slug, title, segment, body
+        SELECT slug, title, segment, body, placeholders, cta_description, cta_buttons
         FROM broadcast_templates
         ORDER BY created_at ASC, title ASC
         """
     )
-    return [dict(row) for row in rows] if rows else []
+    templates: list[dict] = []
+    for row in rows or []:
+        entry = dict(row)
+        body_text = entry.get("body") or ""
+        raw_placeholders = entry.get("placeholders")
+        if isinstance(raw_placeholders, (list, tuple, set)):
+            placeholder_iterable: Iterable[str] = list(raw_placeholders)
+        elif raw_placeholders in (None, ""):
+            placeholder_iterable = []
+        else:
+            placeholder_iterable = [raw_placeholders]
+        entry["placeholders"] = _normalize_broadcast_placeholders(
+            placeholder_iterable,
+            text=body_text,
+        )
+        entry["cta_description"] = _normalize_cta_description(entry.get("cta_description"))
+        entry["cta_buttons"] = _normalize_cta_buttons(entry.get("cta_buttons"))
+        templates.append(entry)
+    return templates
 
 
 async def get_broadcast_template_by_title(title: str) -> Optional[dict]:
     row = await fetchrow(
-        "SELECT slug, title, segment, body FROM broadcast_templates WHERE title=$1",
+        """
+        SELECT slug, title, segment, body, placeholders, cta_description, cta_buttons
+        FROM broadcast_templates
+        WHERE title=$1
+        """,
         title,
     )
-    return dict(row) if row else None
+    if not row:
+        return None
+    entry = dict(row)
+    body_text = entry.get("body") or ""
+    raw_placeholders = entry.get("placeholders")
+    if isinstance(raw_placeholders, (list, tuple, set)):
+        placeholder_iterable: Iterable[str] = list(raw_placeholders)
+    elif raw_placeholders in (None, ""):
+        placeholder_iterable = []
+    else:
+        placeholder_iterable = [raw_placeholders]
+    entry["placeholders"] = _normalize_broadcast_placeholders(
+        placeholder_iterable,
+        text=body_text,
+    )
+    entry["cta_description"] = _normalize_cta_description(entry.get("cta_description"))
+    entry["cta_buttons"] = _normalize_cta_buttons(entry.get("cta_buttons"))
+    return entry
 
 
 async def delete_broadcast_template(title: str) -> bool:
@@ -1456,6 +1725,10 @@ _BROADCAST_SEGMENT_LABELS: dict[str, str] = {
     "lead_funnel": "Лиды без доступа",
     "member_active": "Активные участницы",
     "member_expired": "Доступ истёк",
+    "keys_waiting": "Ожидают ключи",
+    "keys_delivered": "Ключи выданы",
+    "practice_upcoming": "Записаны на практику",
+    "practice_completed": "Практика завершена",
 }
 
 _BROADCAST_BUTTON_SEGMENTS: dict[str, str] = {
@@ -1463,6 +1736,8 @@ _BROADCAST_BUTTON_SEGMENTS: dict[str, str] = {
     BROADCAST_LEADS_BUTTON: "lead_funnel",
     BROADCAST_MEMBERS_BUTTON: "member_active",
     BROADCAST_EXPIRED_BUTTON: "member_expired",
+    BROADCAST_KEYS_BUTTON: "keys_waiting",
+    BROADCAST_PRACTICE_BUTTON: "practice_upcoming",
 }
 
 _ADMIN_USER_SEGMENT_CONDITIONS: dict[str, str] = {
@@ -4961,6 +5236,81 @@ async def send_admin_broadcast_menu(message: types.Message) -> None:
     )
 
 
+_DEFAULT_BROADCAST_TEMPLATES: list[dict[str, Any]] = [
+    {
+        "slug": "diagnostic-test",
+        "title": "Диагностический тест",
+        "segment": "lead_funnel",
+        "body": (
+            "<b>Диагностический тест CODE: Магнетизм</b>\n\n"
+            "Привет, {name}! За 7 минут поймём, на каком этапе трансформации ты сейчас и куда лучше направить энергию."
+            "\n\nЖми на кнопку ниже, проходи тест и пиши, если нужна помощь: {support_contact}."
+        ),
+        "placeholders": ["name", "support_contact"],
+        "cta_description": "Deep-link открывает диагностический тест с UTM-меткой.",
+        "cta_buttons": [
+            {
+                "text": "Пройти тест",
+                "type": "deep_link",
+                "payload": {"utm_source": "diagnostic_test", "utm_medium": "broadcast"},
+            }
+        ],
+    },
+    {
+        "slug": "consultation",
+        "title": "Консультация",
+        "segment": "member_active",
+        "body": (
+            "<b>Индивидуальная консультация CODE: Магнетизм</b>\n\n"
+            "{name}, готова обсудить твою ситуацию и подобрать решения? Забронируй консультацию со специалистом клуба — это 30 "
+            "минут фокуса на тебе."
+            "\n\nСвободные слоты быстро разбирают, поэтому резервируй время заранее. По вопросам — {support_contact}."
+        ),
+        "placeholders": ["name", "support_contact"],
+        "cta_description": "Кнопка ведёт к записи на консультацию через deep-link.",
+        "cta_buttons": [
+            {
+                "text": "Записаться",
+                "type": "deep_link",
+                "payload": {"utm_source": "consultation", "utm_medium": "broadcast"},
+            }
+        ],
+    },
+]
+
+
+async def ensure_default_broadcast_templates() -> None:
+    for tpl in _DEFAULT_BROADCAST_TEMPLATES:
+        slug = tpl.get("slug")
+        if not slug:
+            continue
+        existing = await fetchrow("SELECT slug FROM broadcast_templates WHERE slug=$1", slug)
+        if existing:
+            continue
+        body_text = tpl.get("body") or ""
+        sanitized_body = sanitize_html(body_text)
+        normalized_placeholders = _normalize_broadcast_placeholders(
+            tpl.get("placeholders"),
+            text=sanitized_body,
+        )
+        normalized_cta_description = _normalize_cta_description(tpl.get("cta_description"))
+        normalized_cta_buttons = _normalize_cta_buttons(tpl.get("cta_buttons"))
+        await execute(
+            """
+            INSERT INTO broadcast_templates (slug, title, segment, body, placeholders, cta_description, cta_buttons, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW())
+            ON CONFLICT(slug) DO NOTHING
+            """,
+            slug,
+            tpl.get("title"),
+            tpl.get("segment", "all"),
+            sanitized_body,
+            normalized_placeholders,
+            normalized_cta_description,
+            normalized_cta_buttons,
+        )
+
+
 async def send_admin_broadcast_segment_prompt(message: types.Message) -> None:
     default_text = (
         "<b>Новая рассылка</b>\n\n"
@@ -4976,6 +5326,7 @@ async def send_admin_broadcast_segment_prompt(message: types.Message) -> None:
 
 
 async def send_admin_broadcast_templates(message: types.Message) -> None:
+    await ensure_default_broadcast_templates()
     templates = await list_broadcast_templates()
     titles = [tpl["title"] for tpl in templates]
     if not templates:
@@ -4993,6 +5344,37 @@ async def send_admin_broadcast_templates(message: types.Message) -> None:
             segment_label = _BROADCAST_SEGMENT_LABELS.get(segment, segment)
             preview = _preview_text_for_admin(tpl.get("body", ""), limit=200)
             lines.append(f"• <b>{html.escape(tpl['title'])}</b> — {segment_label}\n{preview}")
+            placeholders = tpl.get("placeholders") or []
+            if placeholders:
+                placeholder_tokens = ", ".join(
+                    f"<code>{{{html.escape(str(token))}}}</code>" for token in placeholders
+                )
+                lines.append(f"  Плейсхолдеры: {placeholder_tokens}")
+            else:
+                lines.append("  Плейсхолдеры: —")
+            cta_description = tpl.get("cta_description")
+            cta_buttons = tpl.get("cta_buttons") or []
+            if cta_description or cta_buttons:
+                if cta_description:
+                    lines.append(f"  CTA: {html.escape(cta_description)}")
+                for button in cta_buttons:
+                    button_text = html.escape(str(button.get("text") or ""))
+                    if not button_text:
+                        continue
+                    if button.get("type") == "deep_link":
+                        payload = button.get("payload")
+                        if isinstance(payload, dict):
+                            payload_info = ", ".join(
+                                f"{html.escape(str(k))}={html.escape(str(v))}"
+                                for k, v in payload.items()
+                            )
+                        else:
+                            payload_info = html.escape(str(payload))
+                        lines.append(f"    • {button_text} — deep-link ({payload_info})")
+                else:
+                    url = html.escape(str(button.get("url") or ""))
+                    lines.append(f"    • {button_text} — {url}")
+            lines.append("")
         text = "\n".join(lines)
 
     await message.answer(
@@ -7108,6 +7490,7 @@ async def admin_behavior_start_receive(message: types.Message, state: FSMContext
         preview,
         parse_mode=ParseMode.HTML,
         disable_web_page_preview=True,
+        reply_markup=markup,
     )
     await state.clear()
     await message.answer(
@@ -8135,6 +8518,9 @@ async def admin_broadcast_choose_segment(message: types.Message, state: FSMConte
                 segment=segment,
                 body=body,
                 template_title=template_title,
+                placeholders=(data or {}).get("placeholders"),
+                cta_description=(data or {}).get("cta_description"),
+                cta_buttons=(data or {}).get("cta_buttons"),
             )
             await state.set_state(BroadcastStates.waiting_confirm)
         else:
@@ -8150,7 +8536,7 @@ async def admin_broadcast_choose_segment(message: types.Message, state: FSMConte
     await state.update_data(segment=segment, interactive=True, template_title=None)
     segment_label = _BROADCAST_SEGMENT_LABELS.get(segment, segment)
     await message.answer(
-        f"Сегмент: {segment_label}.\n\nПришли текст рассылки одним сообщением. Можно использовать плейсхолдер <code>{{name}}</code> для имени участницы.",
+        f"Сегмент: {segment_label}.\n\nПришли текст рассылки одним сообщением. Можно использовать плейсхолдеры <code>{{name}}</code> и <code>{{support_contact}}</code>.",
         reply_markup=cancel_keyboard(),
         disable_web_page_preview=True,
     )
@@ -8177,6 +8563,9 @@ async def admin_broadcast_use_template(message: types.Message, state: FSMContext
         segment=segment,
         body=body,
         template_title=template.get("title"),
+        placeholders=template.get("placeholders"),
+        cta_description=template.get("cta_description"),
+        cta_buttons=template.get("cta_buttons"),
     )
 
 
@@ -11107,6 +11496,10 @@ async def _select_segment_users(segment: str) -> list[dict]:
         rows = await fetch(
             f"{base_query} WHERE status='member_expired' OR (access_until IS NOT NULL AND access_until <= NOW())"
         )
+    elif segment in {"keys_waiting", "keys_delivered"}:
+        rows = []  # TODO: заполнить данными о выдаче ключей
+    elif segment in {"practice_upcoming", "practice_completed"}:
+        rows = []  # TODO: заполнить данными о практике
     else:
         rows = []
     return [dict(row) for row in rows] if rows else []
@@ -11120,11 +11513,13 @@ async def _broadcast(
     chunk: int = 25,
     pause: float = 0.06,
     parse_mode: ParseMode | None = ParseMode.HTML,
+    cta_buttons: Sequence[dict[str, Any]] | None = None,
 ) -> tuple[int, int]:
     ok = fail = 0
     backoff = 1
 
     safe_text = text or ""
+    reply_markup = await _build_cta_markup(bot, cta_buttons)
 
     for i in range(0, len(users), chunk):
         for user in users[i:i + chunk]:
@@ -11151,6 +11546,7 @@ async def _broadcast(
                     message_text,
                     parse_mode=parse_mode if parse_mode else None,
                     disable_web_page_preview=True,
+                    reply_markup=reply_markup,
                 )
                 ok += 1
             except TelegramRetryAfter as e:
@@ -11162,6 +11558,7 @@ async def _broadcast(
                         message_text,
                         parse_mode=parse_mode if parse_mode else None,
                         disable_web_page_preview=True,
+                        reply_markup=reply_markup,
                     )
                     ok += 1
                 except Exception as e:
@@ -11184,6 +11581,9 @@ async def _broadcast_preview(
     segment: str,
     body: str,
     template_title: str | None = None,
+    placeholders: Iterable[str] | None = None,
+    cta_description: str | None = None,
+    cta_buttons: Sequence[dict[str, Any]] | None = None,
 ) -> None:
     users = await _select_segment_users(segment)
     recipients = [u for u in users if u.get("tg_user_id")]
@@ -11192,6 +11592,15 @@ async def _broadcast_preview(
         or message.from_user.first_name
         or "подруга"
     )
+    normalized_placeholders = _normalize_broadcast_placeholders(
+        placeholders,
+        text=body,
+    )
+    normalized_cta_description = _normalize_cta_description(cta_description)
+    normalized_cta_buttons = _normalize_cta_buttons(cta_buttons)
+    markup = await _build_cta_markup(message.bot, normalized_cta_buttons)
+    placeholder_examples = _collect_broadcast_placeholder_examples(sample_name)
+    placeholder_lines = _format_placeholder_status(normalized_placeholders, placeholder_examples)
     preview = render_content(
         body,
         name=sample_name,
@@ -11216,6 +11625,47 @@ async def _broadcast_preview(
             "",
             f"Сегмент: <code>{segment_label}</code>",
             f"Получателей сейчас: {len(recipients)}",
+        ]
+    )
+
+    lines.append("")
+    lines.append("<b>Плейсхолдеры:</b>")
+    if placeholder_lines:
+        lines.extend(placeholder_lines)
+    else:
+        lines.append("Не используются.")
+
+    if normalized_cta_description or normalized_cta_buttons:
+        lines.append("")
+        lines.append("<b>CTA:</b>")
+        if normalized_cta_description:
+            lines.append(html.escape(normalized_cta_description))
+        for button in normalized_cta_buttons:
+            text = html.escape(str(button.get("text") or ""))
+            if not text:
+                continue
+            if button.get("type") == "deep_link":
+                payload = button.get("payload")
+                if isinstance(payload, dict):
+                    payload_text = ", ".join(
+                        f"{html.escape(str(k))}={html.escape(str(v))}"
+                        for k, v in payload.items()
+                    )
+                else:
+                    payload_text = html.escape(str(payload))
+                lines.append(f"• <code>{text}</code> — deep-link ({payload_text})")
+            else:
+                url = html.escape(str(button.get("url") or ""))
+                lines.append(f"• <code>{text}</code> — {url}")
+
+    lines.extend(
+        [
+            "",
+            "<b>Чек-лист перед отправкой:</b>",
+            "▫️ Цель рассылки сформулирована?",
+            "▫️ Указан дедлайн или ограничение по времени?",
+            "▫️ Добавлен канал связи для вопросов?",
+            "▫️ Подтверждено, что запись или бронь проходит корректно?",
             "",
             "Если всё верно — нажми «🚀 Отправить». Можно изменить текст, сегмент или сохранить шаблон.",
         ]
@@ -11234,6 +11684,9 @@ async def _broadcast_preview(
         interactive=True,
         template_title=template_title,
         change_segment=False,
+        placeholders=normalized_placeholders,
+        cta_description=normalized_cta_description,
+        cta_buttons=normalized_cta_buttons,
     )
 
 @router.message(Command("broadcast"))
@@ -11245,7 +11698,7 @@ async def cmd_broadcast(message: types.Message, command: CommandObject, state: F
         await message.answer(
             "Рассылка пользователям\n\n"
             "Использование: /broadcast <code>segment</code> [--html]\n\n"
-            "Сегменты: all, lead_funnel, member_active, member_expired, expired\n\n"
+            "Сегменты: all, lead_funnel, member_active, member_expired, expired, keys_waiting, keys_delivered, practice_upcoming, practice_completed\n\n"
             "Текст пришли ответом (reply) на эту команду.\n"
             "Подсказка: в админке есть кнопка «📢 Рассылка» с мастером и шаблонами."
         )
@@ -11255,8 +11708,22 @@ async def cmd_broadcast(message: types.Message, command: CommandObject, state: F
     segment = args[0].lower()
     use_html = "--html" in args
 
-    if segment not in {"all", "lead_funnel", "member_active", "member_expired", "expired"}:
-        await message.answer("Неизвестный сегмент. Разрешены: all, lead_funnel, member_active, member_expired, expired")
+    allowed_segments = {
+        "all",
+        "lead_funnel",
+        "member_active",
+        "member_expired",
+        "expired",
+        "keys_waiting",
+        "keys_delivered",
+        "practice_upcoming",
+        "practice_completed",
+    }
+
+    if segment not in allowed_segments:
+        await message.answer(
+            "Неизвестный сегмент. Разрешены: " + ", ".join(sorted(allowed_segments))
+        )
         return
 
     if not message.reply_to_message or not (message.reply_to_message.text or message.reply_to_message.caption):
@@ -11283,6 +11750,7 @@ async def cmd_broadcast(message: types.Message, command: CommandObject, state: F
         users,
         body,
         parse_mode=ParseMode.HTML,
+        cta_buttons=data.get("cta_buttons"),
     )
 
     await log_admin_action(
@@ -11323,6 +11791,9 @@ async def broadcast_receive_body(message: types.Message, state: FSMContext):
             segment=segment,
             body=sanitized,
             template_title=template_title,
+            placeholders=data.get("placeholders"),
+            cta_description=data.get("cta_description"),
+            cta_buttons=data.get("cta_buttons"),
         )
         await state.set_state(BroadcastStates.waiting_confirm)
         return
@@ -11398,6 +11869,8 @@ async def admin_broadcast_send(message: types.Message, state: FSMContext):
             "ok": ok,
             "fail": fail,
             "template": data.get("template_title"),
+            "cta_description": data.get("cta_description"),
+            "cta_buttons": data.get("cta_buttons"),
         },
     )
 
@@ -11467,7 +11940,14 @@ async def admin_broadcast_save_template(message: types.Message, state: FSMContex
     data = await state.get_data()
     segment = data.get("segment", "all")
     body = data.get("body", "")
-    template = await upsert_broadcast_template(title, segment, body)
+    template = await upsert_broadcast_template(
+        title,
+        segment,
+        body,
+        placeholders=data.get("placeholders"),
+        cta_description=data.get("cta_description"),
+        cta_buttons=data.get("cta_buttons"),
+    )
     await log_admin_action(
         message.from_user.id,
         "broadcast_template_save",
@@ -11475,7 +11955,12 @@ async def admin_broadcast_save_template(message: types.Message, state: FSMContex
     )
 
     await state.set_state(BroadcastStates.waiting_confirm)
-    await state.update_data(template_title=template["title"])
+    await state.update_data(
+        template_title=template["title"],
+        placeholders=template.get("placeholders"),
+        cta_description=template.get("cta_description"),
+        cta_buttons=template.get("cta_buttons"),
+    )
     await message.answer(
         "Шаблон сохранён ✅",
         reply_markup=admin_broadcast_confirm_keyboard(include_change_segment=True),
