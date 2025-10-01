@@ -8,7 +8,7 @@ import os
 import re
 import urllib.error
 import urllib.request
-from typing import Optional, Any, Dict, List
+from typing import Optional, Any, Dict, List, Literal
 from contextlib import asynccontextmanager
 from pprint import pformat
 from datetime import datetime, timedelta, timezone
@@ -228,7 +228,12 @@ from db import (
     execute,
     is_db_connected,
 )  # базовые хелперы БД
-from handlers import router as bot_router, tz_aware_msk
+from handlers import (
+    router as bot_router,
+    tz_aware_msk,
+    get_user_progress,
+    sync_user_progress,
+)
 from scheduler import setup_scheduler, shutdown_scheduler, get_scheduler_status
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -531,12 +536,95 @@ async def admin_test_message(
 class BroadcastBody(BaseModel):
     segment: str = Field(..., description="all | lead_funnel | member_active | member_expired")
     text: str
-    
+
     @field_validator('segment')
     def validate_segment(cls, v):
         if v not in {"all", "lead_funnel", "member_active", "member_expired"}:
             raise ValueError("invalid segment")
         return v
+
+
+class ProgressLessonUpdate(BaseModel):
+    lesson: int = Field(..., ge=1, le=4)
+    status: Optional[str] = Field(
+        default=None,
+        description="submitted | pending | skipped",
+    )
+    delivered_at: Optional[datetime] = None
+    opened_at: Optional[datetime] = None
+    hw_answer: Optional[str] = None
+    feedback: Optional[List[str]] = None
+    reset: bool = False
+
+    @field_validator("status")
+    def validate_status(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        normalized = value.strip().lower()
+        if normalized not in {"submitted", "pending", "skipped"}:
+            raise ValueError("invalid status")
+        return normalized
+
+
+class ProgressSyncBody(BaseModel):
+    user_id: Optional[int] = Field(default=None, description="internal user id")
+    tg_user_id: Optional[int] = Field(default=None, description="telegram user id")
+    lessons: List[ProgressLessonUpdate] = Field(default_factory=list)
+    actor_id: Optional[int] = Field(default=None, description="admin id for logging")
+
+
+async def _resolve_progress_user(
+    user_id: Optional[int],
+    tg_user_id: Optional[int],
+) -> tuple[int, Dict[str, Any]]:
+    if user_id:
+        user_row = await fetchrow(
+            "SELECT id, status, access_until FROM users WHERE id=$1",
+            user_id,
+        )
+        if not user_row:
+            raise HTTPException(status_code=404, detail="user not found")
+        if tg_user_id:
+            tg_row = await fetchrow(
+                "SELECT id FROM users WHERE tg_user_id=$1",
+                tg_user_id,
+            )
+            if not tg_row or tg_row["id"] != user_row["id"]:
+                raise HTTPException(
+                    status_code=400,
+                    detail="user_id and tg_user_id refer to different users",
+                )
+        return user_row["id"], dict(user_row)
+
+    if tg_user_id:
+        user_row = await fetchrow(
+            "SELECT id, status, access_until FROM users WHERE tg_user_id=$1",
+            tg_user_id,
+        )
+        if not user_row:
+            raise HTTPException(status_code=404, detail="user not found")
+        return user_row["id"], dict(user_row)
+
+    raise HTTPException(status_code=400, detail="user_id or tg_user_id required")
+
+
+def _progress_to_payload(progress: Dict[int, Dict[str, Any]]) -> List[Dict[str, Any]]:
+    lessons: List[Dict[str, Any]] = []
+    for lesson_num in sorted(progress.keys()):
+        info = progress.get(lesson_num) or {}
+        lessons.append(
+            {
+                "lesson": lesson_num,
+                "hw_status": info.get("hw_status"),
+                "delivered": bool(info.get("delivered")),
+                "delivered_at": info.get("delivered_at"),
+                "opened_at": info.get("opened_at"),
+                "hw_answer": info.get("hw_answer"),
+                "feedback_count": info.get("feedback_count"),
+                "feedback_types": info.get("feedback_types"),
+            }
+        )
+    return lessons
 
 
 @app.post("/admin/broadcast")
@@ -635,6 +723,66 @@ async def admin_stats(secret: str = Query(...)):
 # ──────────────────────────────────────────────────────────────────────────────
 # Telegram webhook
 # ──────────────────────────────────────────────────────────────────────────────
+@app.get("/admin/progress")
+async def admin_progress_get(
+    secret: str = Query(...),
+    user_id: Optional[int] = Query(None),
+    tg_user_id: Optional[int] = Query(None),
+):
+    if secret != WEBHOOK_SECRET:
+        raise HTTPException(status_code=403, detail="forbidden")
+
+    resolved_id, user_row = await _resolve_progress_user(user_id, tg_user_id)
+    progress = await get_user_progress(resolved_id)
+
+    return {
+        "user_id": resolved_id,
+        "status": user_row.get("status"),
+        "access_until": user_row.get("access_until"),
+        "progress": _progress_to_payload(progress),
+    }
+
+
+@app.post("/admin/progress/sync")
+async def admin_progress_sync(
+    body: ProgressSyncBody,
+    secret: str = Query(...),
+):
+    if secret != WEBHOOK_SECRET:
+        raise HTTPException(status_code=403, detail="forbidden")
+
+    resolved_id, user_row = await _resolve_progress_user(body.user_id, body.tg_user_id)
+    if not body.lessons:
+        raise HTTPException(status_code=400, detail="lessons payload is empty")
+
+    updates: List[Dict[str, Any]] = []
+    for lesson in body.lessons:
+        updates.append(
+            {
+                "lesson": lesson.lesson,
+                "status": lesson.status,
+                "delivered_at": lesson.delivered_at,
+                "opened_at": lesson.opened_at,
+                "hw_answer": lesson.hw_answer,
+                "feedback": lesson.feedback,
+                "reset": lesson.reset,
+            }
+        )
+
+    try:
+        await sync_user_progress(resolved_id, updates, actor_id=body.actor_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    progress = await get_user_progress(resolved_id)
+    return {
+        "user_id": resolved_id,
+        "status": user_row.get("status"),
+        "access_until": user_row.get("access_until"),
+        "progress": _progress_to_payload(progress),
+    }
+
+
 @app.post(TELEGRAM_WEBHOOK_PATH)
 async def telegram_webhook(request: Request, secret: Optional[str] = None):
     if secret != WEBHOOK_SECRET:

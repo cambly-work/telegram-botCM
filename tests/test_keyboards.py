@@ -27,6 +27,7 @@ from keyboards import (
     ADMIN_SETTINGS_BUTTON,
     ADMIN_STATS_BUTTON,
     ADMIN_USERS_BUTTON,
+    ADMIN_USERS_EDIT_PROGRESS,
     BACK_TO_ADMIN,
     BACK_TO_BEHAVIOR,
     BACK_TO_MAIN,
@@ -41,6 +42,7 @@ from keyboards import (
     MATERIALS_CATALOG_BUTTON,
     materials_menu_keyboard,
     learning_menu_keyboard,
+    profile_menu_keyboard,
     admin_behavior_keyboard,
     admin_broadcast_keyboard,
     admin_main_keyboard,
@@ -48,6 +50,7 @@ from keyboards import (
     admin_materials_categories_keyboard,
     admin_payments_keyboard,
     admin_settings_keyboard,
+    admin_user_card_keyboard,
 )
 
 
@@ -210,3 +213,15 @@ def test_admin_settings_keyboard_no_content_shortcuts():
     assert flattened[1] == "❌ Ручная проверка оплат"
     assert flattened[2] == "✅ Материалы недели"
     assert flattened[3] == "❌ Расписание"
+
+
+def test_profile_menu_keyboard_adds_progress_button():
+    rows = _keyboard_texts(
+        profile_menu_keyboard(has_pay=True, payments_open=True)
+    )
+    assert rows[0] == ["Мой профиль", LEARNING_PROGRESS_BUTTON]
+
+
+def test_admin_user_card_keyboard_contains_progress_control():
+    rows = _keyboard_texts(admin_user_card_keyboard())
+    assert ADMIN_USERS_EDIT_PROGRESS in rows[1]
