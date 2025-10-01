@@ -14,7 +14,12 @@ from datetime import datetime, date, timedelta, timezone
 from typing import Optional, Iterable, Dict, List, Callable, Awaitable, Any
 from aiogram import Router, F, types
 from aiogram.enums import ParseMode
-from aiogram.types import ReplyKeyboardMarkup, BufferedInputFile
+from aiogram.types import (
+    ReplyKeyboardMarkup,
+    BufferedInputFile,
+    InlineKeyboardMarkup,
+    InlineKeyboardButton,
+)
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.filters import Command, CommandObject, CommandStart
@@ -1135,6 +1140,7 @@ class RegistrationStates(StatesGroup):
 class HWStates(StatesGroup):
     waiting_answer = State()  # ждём текстовый ответ на ДЗ ({"lesson_num": int})
     waiting_feedback = State() # ждём обратную связь после урока
+    waiting_question = State() # ждём уточнение вопроса для поддержки
 class BroadcastStates(StatesGroup):
     waiting_segment = State()   # ждём выбор сегмента в мастере
     waiting_body = State()      # ждём текст рассылки ({"segment": str})
@@ -3636,6 +3642,13 @@ async def send_magnetism_window_section(
         await mark_form_started(user.get("id"), slug)
 
 
+def _resolve_checkout_url() -> str:
+    checkout_url = (YOOMONEY_CHECKOUT_URL or "").strip()
+    if not checkout_url and AT_PRODUCT_ID_CLUB:
+        checkout_url = f"https://antitraining.example/checkout/{AT_PRODUCT_ID_CLUB}"
+    return checkout_url
+
+
 async def send_pay_section(
     message: types.Message,
     user: Optional[dict],
@@ -3643,9 +3656,7 @@ async def send_pay_section(
     *,
     from_callback: bool = False,
 ) -> None:
-    checkout_url = (YOOMONEY_CHECKOUT_URL or "").strip()
-    if not checkout_url and AT_PRODUCT_ID_CLUB:
-        checkout_url = f"https://antitraining.example/checkout/{AT_PRODUCT_ID_CLUB}"
+    checkout_url = _resolve_checkout_url()
 
     if not checkout_url:
         await answer_with_main_menu(
@@ -3711,6 +3722,53 @@ async def send_pay_section(
     )
 
 
+_LESSON_PROGRESS_TOTAL = 4
+
+
+def _build_lesson_progress_bar(status_map: dict[int, str]) -> tuple[str, int]:
+    completed = 0
+    for lesson, status in status_map.items():
+        if 1 <= int(lesson) <= _LESSON_PROGRESS_TOTAL and status == "submitted":
+            completed += 1
+    completed = min(completed, _LESSON_PROGRESS_TOTAL)
+    filled = "▰" * completed
+    empty = "▱" * (_LESSON_PROGRESS_TOTAL - completed)
+    return filled + empty, completed
+
+
+def _build_lesson_cta(next_lesson: int) -> str:
+    if next_lesson >= _LESSON_PROGRESS_TOTAL + 1:
+        return "Все уроки пройдены — переходи к материалам клуба или окну в Магнетизм."
+    return f"Следующий шаг: открой урок {next_lesson} через меню ниже."
+
+
+async def _send_offer_after_lesson_four(message: types.Message) -> None:
+    checkout_url = _resolve_checkout_url()
+    if not checkout_url:
+        return
+
+    default_text = (
+        "Ты прошла 4 шага 🙌\n"
+        "Готова зайти глубже? В клубе ждут система и поддержка изнутри.\n"
+        "Оформить доступ: {checkout_url}"
+    )
+    template = await get_content("offer_after_lesson_4", default_text)
+    offer_text = render_content(
+        template,
+        checkout_url=checkout_url,
+        CHECKOUT_URL=checkout_url,
+    ).strip()
+    if not offer_text:
+        return
+
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="Оплатить доступ", url=checkout_url)]
+        ]
+    )
+    await message.answer(offer_text, reply_markup=keyboard, disable_web_page_preview=False)
+
+
 async def send_funnel_section(
     message: types.Message,
     user: dict,
@@ -3737,6 +3795,12 @@ async def send_funnel_section(
         )
         return
 
+    rows = await fetch(
+        "SELECT lesson_num, hw_status FROM funnel_progress WHERE user_id=$1 ORDER BY lesson_num",
+        user["id"],
+    )
+    status_map = {int(row["lesson_num"]): row["hw_status"] for row in rows or []}
+
     lesson_titles = {
         1: "Внимание",
         2: "Мысли",
@@ -3744,13 +3808,26 @@ async def send_funnel_section(
         4: "Эмоции",
     }
 
+    progress_bar, completed_count = _build_lesson_progress_bar(status_map)
+    cta_text = _build_lesson_cta(n)
+
     lines = [
         "Бесплатные уроки\n",
+        f"Прогресс: {progress_bar} {completed_count}/{_LESSON_PROGRESS_TOTAL}\n",
+        f"{cta_text}\n\n",
         "Доступные уроки отмечены галочкой. Урок откроется после завершения предыдущего.\n",
     ]
 
-    for i in range(1, 5):
-        status = "✅" if i < n else ("⏳" if i == n else "🔒")
+    for i in range(1, _LESSON_PROGRESS_TOTAL + 1):
+        lesson_status = status_map.get(i)
+        if lesson_status == "submitted":
+            status = "✅"
+        elif lesson_status == "skipped":
+            status = "⏭️"
+        elif lesson_status == "pending" and i < n:
+            status = "⏳"
+        else:
+            status = "⏳" if i == n else ("✅" if i < n else "🔒")
         lines.append(f"{status} Урок {i}: {lesson_titles.get(i, f'Урок {i}')}\n")
 
     keyboard = lessons_overview_keyboard(n)
@@ -4147,6 +4224,20 @@ async def upsert_funnel_delivery(user_id: int, lesson_num: int) -> None:
         user_id, lesson_num
     )
     logger.info("funnel: delivered user_id=%s lesson=%s", user_id, lesson_num)
+
+
+async def mark_lesson_in_progress(user_id: int, lesson_num: int) -> None:
+    await execute(
+        """UPDATE funnel_progress
+           SET opened_at=COALESCE(opened_at, NOW()),
+               hw_status='pending'
+           WHERE user_id=$1 AND lesson_num=$2""",
+        user_id,
+        lesson_num,
+    )
+    logger.info("funnel: in-progress user_id=%s lesson=%s", user_id, lesson_num)
+
+
 async def mark_lesson_done(user_id: int, lesson_num: int, hw_answer: Optional[str] = None) -> None:
     await execute(
         """UPDATE funnel_progress
@@ -4281,7 +4372,21 @@ async def deliver_lesson(
     try:
         await upsert_funnel_delivery(user["id"], lesson_num)
     except Exception as e:
-        logger.warning("deliver_lesson: upsert failed for user=%s lesson=%s: %s", user.get("id"), lesson_num, e)
+        logger.warning(
+            "deliver_lesson: upsert failed for user=%s lesson=%s: %s",
+            user.get("id"),
+            lesson_num,
+            e,
+        )
+    try:
+        await mark_lesson_in_progress(user["id"], lesson_num)
+    except Exception as e:
+        logger.warning(
+            "deliver_lesson: mark pending failed for user=%s lesson=%s: %s",
+            user.get("id"),
+            lesson_num,
+            e,
+        )
 
     funnel_cfg = (_load_yaml_content() or {}).get("funnel") or {}
     lesson_urls = funnel_cfg.get("lesson_urls") or {}
@@ -4610,6 +4715,8 @@ async def feedback_receive_text(message: types.Message, state: FSMContext):
         f"Твой отзыв по уроку «{lesson_titles.get(lesson_num, f'Урок {lesson_num}')}» сохранен.",
         reply_markup=after_lesson_keyboard()
     )
+    if lesson_num == 4:
+        await _send_offer_after_lesson_four(message)
 
 
 @router.message(
@@ -5457,6 +5564,11 @@ async def lesson_mark_done(message: types.Message, state: FSMContext):
     if lesson_num not in (1, 2, 3, 4):
         await message.answer("Сначала выбери урок в разделе «Бесплатные уроки»." )
         return
+    user = await get_user_with_id(message.from_user.id)
+    if not user:
+        await message.answer("Перезапусти /start, чтобы загрузить профиль.")
+        return
+    await mark_lesson_in_progress(user["id"], lesson_num)
     await state.set_state(HWStates.waiting_answer)
     await state.update_data(lesson_num=lesson_num)
     await message.answer(
@@ -5502,12 +5614,67 @@ async def lesson_question(message: types.Message, state: FSMContext):
     if lesson_num not in (1, 2, 3, 4):
         await message.answer("Сначала открой урок из раздела «Бесплатные уроки»." )
         return
+    user = await get_user_with_id(message.from_user.id)
+    if not user:
+        await message.answer("Перезапусти /start, чтобы загрузить профиль.")
+        return
+    await mark_lesson_in_progress(user["id"], lesson_num)
+    await state.set_state(HWStates.waiting_question)
+    await state.update_data(lesson_num=lesson_num)
     await message.answer(
         f"Задай вопрос по уроку {lesson_num}\n\n"
         f"Напиши одним сообщением или обратись в поддержку: {SUPPORT_CONTACT}",
         reply_markup=cancel_keyboard(),
     )
 
+
+@router.message(HWStates.waiting_question, F.text.len() > 0)
+async def lesson_receive_question(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    lesson_num = int(data.get("lesson_num", 0) or 0)
+    if lesson_num not in (1, 2, 3, 4):
+        await state.clear()
+        await message.answer("Сначала выбери урок в разделе «Бесплатные уроки»." )
+        return
+
+    user = await get_user_with_id(message.from_user.id)
+    if not user:
+        await state.clear()
+        await message.answer("Перезапусти /start, чтобы загрузить профиль.")
+        return
+
+    question_text = message.text.strip()
+    notify_admins = _get_notify_admins()
+    card_lines = [
+        f"❓ Вопрос по уроку {lesson_num}",
+        f"tg-id: <code>{message.from_user.id}</code>",
+        f"user-id: <code>{user['id']}</code>",
+    ]
+    if user.get("full_name"):
+        card_lines.append(f"Имя: {html.escape(user['full_name'])}")
+    if message.from_user.username:
+        card_lines.append(f"Username: @{message.from_user.username}")
+    card_lines.append(f"Вопрос: {html.escape(question_text)}")
+
+    if notify_admins:
+        try:
+            await notify_admins("\n".join(card_lines))
+        except Exception as exc:
+            logger.warning(
+                "lesson_question: notify_admins failed tg_user_id=%s err=%s",
+                message.from_user.id,
+                exc,
+            )
+
+    await state.set_state(None)
+    await state.update_data(last_lesson=lesson_num)
+
+    reply = lesson_actions_keyboard()
+    confirm_text = (
+        "Передала вопрос кураторам. "
+        f"Ответ придёт в поддержку: {SUPPORT_CONTACT}."
+    )
+    await message.answer(confirm_text, reply_markup=reply)
 
 @router.message(F.text == NEXT_LESSON)
 async def lesson_next(message: types.Message, state: FSMContext):
@@ -5551,6 +5718,8 @@ async def feedback_skip(message: types.Message, state: FSMContext):
         reply_markup=after_lesson_keyboard(),
     )
     await state.update_data(last_lesson=lesson_num)
+    if lesson_num == 4:
+        await _send_offer_after_lesson_four(message)
 
 
 @router.message(HWStates.waiting_feedback, F.text.in_(list(FEEDBACK_OPTIONS.keys())))
@@ -5580,6 +5749,8 @@ async def feedback_quick_choice(message: types.Message, state: FSMContext):
         reply_markup=after_lesson_keyboard(),
     )
     await state.update_data(last_lesson=lesson_num)
+    if lesson_num == 4:
+        await _send_offer_after_lesson_four(message)
 # ──────────────────────────────────────────────────────────────────────────────
 # Обработка отмены для всех состояний
 # ──────────────────────────────────────────────────────────────────────────────
@@ -5591,6 +5762,15 @@ async def cancel_handler(message: types.Message, state: FSMContext):
     data = await state.get_data()
     await state.clear()
     user, is_admin = await _get_user_and_admin(message)
+
+    if current_state == HWStates.waiting_question.state:
+        lesson_num = int((data or {}).get("lesson_num", 0) or 0)
+        await state.update_data(active_lesson=lesson_num)
+        await message.answer(
+            "Вопрос не отправлен. Можно вернуться к уроку или задать его позже.",
+            reply_markup=lesson_actions_keyboard(),
+        )
+        return
 
     if current_state in {
         TestStates.waiting_birthdate.state,
@@ -9793,6 +9973,7 @@ async def fallback(message: types.Message, state: FSMContext):
     if cur in (
         HWStates.waiting_answer,
         HWStates.waiting_feedback,
+        HWStates.waiting_question,
         RegistrationStates.waiting_name,
         RegistrationStates.waiting_email,
         RegistrationStates.waiting_phone,
