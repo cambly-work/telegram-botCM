@@ -214,12 +214,10 @@ ALTER TABLE schedule_cycle_weeks
 
 DO $$
 BEGIN
-  BEGIN
+  IF to_regclass('public.schedule_cycle_weeks_week_number_unique') IS NULL THEN
     ALTER TABLE schedule_cycle_weeks
       ADD CONSTRAINT schedule_cycle_weeks_week_number_unique UNIQUE (week_number);
-  EXCEPTION WHEN duplicate_object THEN
-    NULL;
-  END;
+  END IF;
 END$$;
 
 CREATE INDEX IF NOT EXISTS idx_schedule_cycle_weeks_active
