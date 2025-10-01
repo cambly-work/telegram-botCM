@@ -1,7 +1,9 @@
 # app.py
 import asyncio
+import csv
 import hmac
 import hashlib
+import io
 import json
 import logging
 import os
@@ -14,7 +16,7 @@ from pprint import pformat
 from datetime import datetime, timedelta, timezone
 from throttling_mw import ThrottleMiddleware
 from fastapi import FastAPI, Request, HTTPException, Header, Body, Query, status
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel, Field, field_validator
 from dotenv import load_dotenv
 
@@ -573,6 +575,21 @@ class ProgressSyncBody(BaseModel):
     actor_id: Optional[int] = Field(default=None, description="admin id for logging")
 
 
+class HomeworkImportBody(BaseModel):
+    csv: str = Field(..., description="CSV payload exported from /admin/homework/export")
+    delimiter: Optional[str] = Field(default=None, description="Custom CSV delimiter")
+    actor_id: Optional[int] = Field(default=None, description="Admin performing the import")
+    dry_run: bool = Field(default=False, description="Skip applying changes, only validate")
+
+    @field_validator("delimiter")
+    def validate_delimiter(cls, value: Optional[str]) -> Optional[str]:
+        if value is None or value == "":
+            return None
+        if len(value) != 1:
+            raise ValueError("delimiter must be a single character")
+        return value
+
+
 async def _resolve_progress_user(
     user_id: Optional[int],
     tg_user_id: Optional[int],
@@ -719,6 +736,249 @@ async def admin_stats(secret: str = Query(...)):
     except Exception as e:
         logger.error("Error getting stats: %s", e)
         raise HTTPException(status_code=500, detail=f"Error getting statistics: {e}")
+
+
+@app.get("/admin/homework/export")
+async def admin_homework_export(
+    secret: str = Query(...),
+    segment: Optional[str] = Query(default="all"),
+) -> PlainTextResponse:
+    if secret != WEBHOOK_SECRET:
+        raise HTTPException(status_code=403, detail="forbidden")
+
+    raw_segment = segment if isinstance(segment, str) else "all"
+    segment_normalized = (raw_segment or "all").strip().lower()
+    allowed_segments = {"all", "lead_funnel", "member_active", "member_expired"}
+    if segment_normalized not in allowed_segments:
+        raise HTTPException(status_code=400, detail="invalid segment")
+
+    params: List[Any] = []
+    query = (
+        "SELECT id, tg_user_id, email, phone, status, access_until, funnel_complete "
+        "FROM users"
+    )
+    if segment_normalized != "all":
+        query += " WHERE status=$1"
+        params.append(segment_normalized)
+    query += " ORDER BY id"
+
+    users_rows = await fetch(query, *params)
+    user_ids = [row["id"] for row in users_rows or []]
+
+    progress_rows: List[Dict[str, Any]] = []
+    if user_ids:
+        progress_rows = await fetch(
+            """
+            SELECT user_id, lesson_num, delivered_at, opened_at, hw_status, hw_answer
+            FROM funnel_progress
+            WHERE user_id = ANY($1::int[])
+            """,
+            user_ids,
+        )
+
+    progress_map: Dict[tuple[int, int], Dict[str, Any]] = {}
+    for row in progress_rows or []:
+        key = (row["user_id"], row["lesson_num"])
+        progress_map[key] = row
+
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow(
+        [
+            "user_id",
+            "tg_user_id",
+            "email",
+            "phone",
+            "status",
+            "access_until",
+            "funnel_complete",
+            "lesson",
+            "hw_status",
+            "delivered_at",
+            "opened_at",
+            "hw_answer",
+        ]
+    )
+
+    for user in users_rows or []:
+        for lesson in range(1, 5):
+            progress = progress_map.get((user["id"], lesson)) or {}
+            writer.writerow(
+                [
+                    user["id"],
+                    user.get("tg_user_id") or "",
+                    (user.get("email") or "").strip(),
+                    (user.get("phone") or "").strip(),
+                    user.get("status") or "",
+                    user.get("access_until").isoformat() if user.get("access_until") else "",
+                    "1" if user.get("funnel_complete") else "0",
+                    lesson,
+                    progress.get("hw_status") or "",
+                    progress.get("delivered_at").isoformat() if progress.get("delivered_at") else "",
+                    progress.get("opened_at").isoformat() if progress.get("opened_at") else "",
+                    (progress.get("hw_answer") or "").replace("\n", " "),
+                ]
+            )
+
+    content = buffer.getvalue()
+    headers = {
+        "Content-Disposition": "attachment; filename=homework-export.csv",
+    }
+    return PlainTextResponse(content, media_type="text/csv", headers=headers)
+
+
+@app.post("/admin/homework/import")
+async def admin_homework_import(
+    body: HomeworkImportBody,
+    secret: str = Query(...),
+):
+    if secret != WEBHOOK_SECRET:
+        raise HTTPException(status_code=403, detail="forbidden")
+
+    csv_text = (body.csv or "").strip()
+    if not csv_text:
+        raise HTTPException(status_code=400, detail="csv payload is empty")
+
+    reader = csv.DictReader(io.StringIO(csv_text), delimiter=body.delimiter or ",")
+    if not reader.fieldnames:
+        raise HTTPException(status_code=400, detail="csv header is empty")
+
+    errors: List[str] = []
+    updates_by_user: Dict[int, List[Dict[str, Any]]] = {}
+    resolved_cache: Dict[str, int] = {}
+
+    async def _resolve_user_id(row: Dict[str, Any], line_no: int) -> Optional[int]:
+        user_id_raw = str(row.get("user_id") or row.get("id") or "").strip()
+        if user_id_raw:
+            try:
+                return int(user_id_raw)
+            except ValueError:
+                errors.append(f"line {line_no}: invalid user_id '{user_id_raw}'")
+                return None
+
+        tg_raw = str(row.get("tg_user_id") or row.get("telegram_id") or "").strip()
+        if tg_raw:
+            cache_key = f"tg:{tg_raw}"
+            if cache_key in resolved_cache:
+                return resolved_cache[cache_key]
+            try:
+                tg_id = int(tg_raw)
+            except ValueError:
+                errors.append(f"line {line_no}: invalid tg_user_id '{tg_raw}'")
+                return None
+            user_row = await fetchrow("SELECT id FROM users WHERE tg_user_id=$1", tg_id)
+            if not user_row:
+                errors.append(f"line {line_no}: user with tg_user_id={tg_id} not found")
+                return None
+            resolved_cache[cache_key] = user_row["id"]
+            return user_row["id"]
+
+        email = str(row.get("email") or "").strip().lower()
+        phone = str(row.get("phone") or "").strip()
+        if email or phone:
+            cache_key = f"contact:{email}:{phone}"
+            if cache_key in resolved_cache:
+                return resolved_cache[cache_key]
+            user_row = await _find_user_by_contacts(email, phone)
+            if not user_row:
+                errors.append(
+                    f"line {line_no}: user not found by contacts email={email or '—'}, phone={phone or '—'}"
+                )
+                return None
+            resolved_cache[cache_key] = user_row["id"]
+            return user_row["id"]
+
+        errors.append(f"line {line_no}: missing user reference (user_id, tg_user_id or contacts)")
+        return None
+
+    for idx, row in enumerate(reader, start=2):
+        user_id = await _resolve_user_id(row, idx)
+        if not user_id:
+            continue
+
+        lesson_raw = str(row.get("lesson") or row.get("lesson_num") or "").strip()
+        if not lesson_raw:
+            errors.append(f"line {idx}: lesson is required")
+            continue
+        try:
+            lesson = int(lesson_raw)
+        except ValueError:
+            errors.append(f"line {idx}: invalid lesson '{lesson_raw}'")
+            continue
+        if lesson not in (1, 2, 3, 4):
+            errors.append(f"line {idx}: lesson must be between 1 and 4")
+            continue
+
+        status_raw = str(row.get("hw_status") or row.get("status") or "").strip().lower()
+        status_value = status_raw or None
+        if status_value and status_value not in {"submitted", "pending", "skipped"}:
+            errors.append(f"line {idx}: invalid hw_status '{status_value}'")
+            continue
+
+        delivered_raw = row.get("delivered_at") or row.get("delivered")
+        opened_raw = row.get("opened_at") or row.get("opened")
+        delivered_dt = _parse_datetime(delivered_raw) if delivered_raw else None
+        opened_dt = _parse_datetime(opened_raw) if opened_raw else None
+        if delivered_raw and delivered_dt is None:
+            errors.append(f"line {idx}: invalid delivered_at '{delivered_raw}'")
+            continue
+        if opened_raw and opened_dt is None:
+            errors.append(f"line {idx}: invalid opened_at '{opened_raw}'")
+            continue
+
+        answer = row.get("hw_answer") or row.get("answer")
+        if isinstance(answer, str):
+            answer_value = answer.strip()
+        else:
+            answer_value = answer
+
+        reset_raw = str(row.get("reset") or row.get("clear") or "").strip().lower()
+        reset_flag = reset_raw in {"1", "true", "yes", "y"}
+
+        updates_by_user.setdefault(user_id, []).append(
+            {
+                "lesson": lesson,
+                "status": status_value,
+                "delivered_at": delivered_dt,
+                "opened_at": opened_dt,
+                "hw_answer": answer_value,
+                "reset": reset_flag,
+            }
+        )
+
+    if errors:
+        raise HTTPException(status_code=400, detail={"message": "import has errors", "errors": errors})
+
+    applied_users: List[int] = []
+    if not body.dry_run:
+        for user_id, updates in updates_by_user.items():
+            try:
+                await sync_user_progress(user_id, updates, actor_id=body.actor_id)
+                applied_users.append(user_id)
+            except ValueError as exc:
+                logger.error("Homework import validation failed for user %s: %s", user_id, exc)
+                await notify_admins(
+                    f"❌ Импорт ДЗ: ошибка валидации для пользователя {user_id}: {exc}"
+                )
+                errors.append(f"user {user_id}: {exc}")
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("Homework import failed for user %s: %s", user_id, exc)
+                await notify_admins(
+                    f"❌ Импорт ДЗ: неожиданная ошибка для пользователя {user_id}: {exc}"
+                )
+                errors.append(f"user {user_id}: unexpected error {exc}")
+
+    if errors:
+        raise HTTPException(status_code=500, detail={"message": "failed to apply homework", "errors": errors})
+
+    total_rows = sum(len(rows) for rows in updates_by_user.values())
+    return {
+        "ok": True,
+        "dry_run": body.dry_run,
+        "processed_rows": total_rows,
+        "affected_users": len(updates_by_user),
+        "applied_users": applied_users,
+    }
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Telegram webhook
@@ -1091,6 +1351,7 @@ async def _set_member_active(user_id: int, access_until: Optional[datetime]) -> 
            SET status='member_active',
                access_until=$2,
                joined_club_at=COALESCE(joined_club_at, NOW()),
+               funnel_complete=TRUE,
                updated_at=NOW()
            WHERE id=$1""",
         user_id, access_until
@@ -1101,10 +1362,37 @@ async def _set_member_active(user_id: int, access_until: Optional[datetime]) -> 
 async def _set_member_expired(user_id: int) -> None:
     """Деактивация статуса участника"""
     await execute(
-        "UPDATE users SET status='member_expired', updated_at=NOW() WHERE id=$1",
+        "UPDATE users SET status='member_expired', funnel_complete=FALSE, updated_at=NOW() WHERE id=$1",
         user_id
     )
     logger.info("User %s set as expired member", user_id)
+
+
+async def _mark_funnel_complete(user_id: int) -> None:
+    """Отметить, что пользователь завершил бесплатную воронку."""
+    try:
+        await execute(
+            """
+            INSERT INTO funnel_progress (user_id, lesson_num, delivered_at, opened_at, hw_status)
+            SELECT $1, lesson_num, NOW(), NOW(), 'submitted'
+            FROM generate_series(1, 4) AS lesson_num
+            ON CONFLICT (user_id, lesson_num) DO UPDATE
+                SET hw_status='submitted',
+                    delivered_at=COALESCE(funnel_progress.delivered_at, EXCLUDED.delivered_at),
+                    opened_at=COALESCE(funnel_progress.opened_at, EXCLUDED.opened_at)
+            """,
+            user_id,
+        )
+        await execute(
+            "UPDATE users SET funnel_complete=TRUE, updated_at=NOW() WHERE id=$1",
+            user_id,
+        )
+        logger.info("Funnel marked complete for user %s", user_id)
+    except Exception as exc:  # noqa: BLE001 — логируем любые ошибки
+        logger.exception("Failed to mark funnel complete for user %s: %s", user_id, exc)
+        await notify_admins(
+            f"⚠️ Не удалось отметить завершение воронки для пользователя {user_id}: {exc}"
+        )
 
 
 @app.post("/webhooks/antitraining")
@@ -1173,18 +1461,27 @@ async def antitraining_webhook(
     logger.info("Processing AT event %s for user %s (TG: %s)", event, user_id, tg_user_id)
 
     # Обработка различных событий
+    response_payload: Dict[str, Any] = {"ok": True, "handled_event": event, "user_found": True}
+
     if event in ("paid", "renew"):
         try:
             await _set_member_active(user_id, norm["access_until"])
-            
+            await _mark_funnel_complete(user_id)
+
             # Отправка инвайта и приветствия
             invite = await gen_invite_link()
+            access_label = tz_aware_msk(norm["access_until"]) if norm.get("access_until") else "—"
             welcome = (
-                f"🎉 Поздравляем! Тебе открыт доступ в клуб до {tz_aware_msk(norm['access_until'])}.\n\n"
+                f"🎉 Поздравляем! Тебе открыт доступ в клуб до {access_label}.\n\n"
                 f"Твой инвайт (активен 24ч): {invite}\n\n"
                 f"Начни отсюда: {WELCOME_POST_URL}"
             )
-            
+
+            response_payload["invite_link"] = invite
+            if norm.get("access_until"):
+                response_payload["access_until"] = tz_aware_msk(norm["access_until"])
+            response_payload["member_status"] = "member_active"
+
             for attempt in range(MAX_RETRIES):
                 try:
                     await bot.send_message(tg_user_id, welcome)
@@ -1203,13 +1500,14 @@ async def antitraining_webhook(
             await notify_admins(
                 f"❌ Ошибка обработки оплаты для пользователя {user_id}: {e}"
             )
-            
-        return {"ok": True, "handled_event": event, "user_found": True}
+
+        return response_payload
 
     elif event in ("refund", "failed"):
         try:
             await _set_member_expired(user_id)
-            
+            response_payload["member_status"] = "member_expired"
+
             # Уведомление пользователя
             for attempt in range(MAX_RETRIES):
                 try:
@@ -1229,12 +1527,12 @@ async def antitraining_webhook(
             await notify_admins(
                 f"❌ Ошибка обработки возврата для пользователя {user_id}: {e}"
             )
-            
-        return {"ok": True, "handled_event": event, "user_found": True}
+
+        return response_payload
 
     # Прочие события
     logger.info("Unhandled AT event: %s for order %s", event, order_id)
-    return {"ok": True, "handled_event": event, "user_found": True}
+    return response_payload
 
 
 @app.post("/webhooks/yoomoney")
@@ -1308,7 +1606,9 @@ async def yoomoney_webhook(
     if normalized_status in success_statuses:
         try:
             await _set_member_active(user_id, access_until)
+            await _mark_funnel_complete(user_id)
             invite = await gen_invite_link()
+            access_label: Optional[str] = None
             if access_until:
                 access_label = tz_aware_msk(access_until)
                 confirmation = (
@@ -1349,7 +1649,14 @@ async def yoomoney_webhook(
                 f"❌ YooMoney: ошибка обработки успешной оплаты для пользователя {user_id}: {exc}"
             )
 
-        return {"ok": True, "status": normalized_status, "user_found": True}
+        return {
+            "ok": True,
+            "status": normalized_status,
+            "user_found": True,
+            "member_status": "member_active",
+            "invite_link": invite,
+            "access_until": access_label if access_until else None,
+        }
 
     if normalized_status in failure_statuses:
         try:
@@ -1381,7 +1688,12 @@ async def yoomoney_webhook(
                 f"❌ YooMoney: ошибка обработки неуспешной оплаты для пользователя {user_id}: {exc}"
             )
 
-        return {"ok": True, "status": normalized_status, "user_found": True}
+        return {
+            "ok": True,
+            "status": normalized_status,
+            "user_found": True,
+            "member_status": "member_expired",
+        }
 
     await notify_admins(
         (

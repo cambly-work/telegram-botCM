@@ -58,6 +58,7 @@ async def _run_test(monkeypatch):
             "phone": "+79998887766",
             "at_user_id": "at-1",
             "access_until": None,
+            "funnel_complete": False,
         }
     }
 
@@ -128,11 +129,23 @@ async def _run_test(monkeypatch):
             user_id = args[0]
             users[user_id]["status"] = "member_active"
             users[user_id]["access_until"] = args[1]
+            users[user_id]["funnel_complete"] = True
             return "UPDATE 1"
         if "set status='member_expired'" in lowered:
             user_id = args[0]
             users[user_id]["status"] = "member_expired"
+            users[user_id]["funnel_complete"] = False
             return "UPDATE 1"
+        if "update users set funnel_complete=true" in lowered:
+            user_id = args[0]
+            users[user_id]["funnel_complete"] = True
+            return "UPDATE 1"
+        if "update users set funnel_complete=false" in lowered:
+            user_id = args[0]
+            users[user_id]["funnel_complete"] = False
+            return "UPDATE 1"
+        if "insert into funnel_progress" in lowered:
+            return "INSERT 0 4"
         return "OK"
 
     monkeypatch.setattr(app_module, "fetchrow", fake_fetchrow)
@@ -141,6 +154,7 @@ async def _run_test(monkeypatch):
     monkeypatch.setattr(app_module, "notify_admins", AsyncMock())
     monkeypatch.setattr(app_module, "gen_invite_link", AsyncMock(return_value="https://invite"))
     monkeypatch.setattr(app_module.bot, "send_message", AsyncMock(return_value=None))
+    monkeypatch.setattr(app_module, "AT_WEBHOOK_SHARED_SECRET", "")
 
     payload = {
         "event": "renew",
@@ -172,6 +186,8 @@ async def _run_test(monkeypatch):
     assert response["ok"] is True
     assert response["handled_event"] == "renew"
     assert response["user_found"] is True
+    assert response.get("invite_link") == "https://invite"
+    assert response.get("member_status") == "member_active"
 
     stored_payment = payments.get("ord-123")
     assert stored_payment is not None
@@ -182,3 +198,6 @@ async def _run_test(monkeypatch):
     renew_entry = next((item for item in payment_stats if item["status"] == "renew"), None)
     assert renew_entry is not None
     assert renew_entry["count"] == 1
+
+    assert users[1]["status"] == "member_active"
+    assert users[1]["funnel_complete"] is True

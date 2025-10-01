@@ -30,6 +30,7 @@ from handlers import (
     FORM_LABELS,
     get_content,
     get_bool_setting,
+    _resolve_checkout_links,
 )
 
 logger = logging.getLogger("scheduler")
@@ -135,10 +136,15 @@ async def send_lesson(bot: Bot, tg_user_id: int, user_row: dict, lesson_num: int
 
     await upsert_funnel_delivery(user_row["id"], lesson_num)
 
+    links = await _resolve_checkout_links(bot)
+    checkout_url = links["display"]
+
     text = f"<b>Урок {lesson_num}/4</b>\n"
     if url:
         text += f"Смотри на платформе: {url}\n\n"
     text += f"{hw_q}"
+    if checkout_url:
+        text += f"\n\nОформить доступ: {checkout_url}"
 
     ok = await _send_with_retries(bot, tg_user_id, text, reply_markup=lesson_keyboard(lesson_num))
     return ok
