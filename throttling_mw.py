@@ -1,7 +1,14 @@
 # throttling_mw.py
+import logging
 import time
 from aiogram.dispatcher.middlewares.base import BaseMiddleware
 from aiogram import types
+
+import settings
+
+
+logger = logging.getLogger(__name__)
+
 
 class ThrottleMiddleware(BaseMiddleware):
     def __init__(self, limit=3, window=5.0):
@@ -19,8 +26,28 @@ class ThrottleMiddleware(BaseMiddleware):
             q = self.bucket.get(uid, [])
             q = [t for t in q if now - t <= self.window]
             if len(q) >= self.limit:
-                # тихо игнорим; можно отправить мягкое сообщение
-                return
+                is_admin = (
+                    hasattr(event, "from_user")
+                    and event.from_user
+                    and event.from_user.id in settings.ADMIN_IDS
+                )
+                if not is_admin:
+                    warning_text = (
+                        "Пожалуйста, не так быстро. Попробуйте ещё раз через несколько секунд."
+                    )
+                    if isinstance(event, types.CallbackQuery):
+                        await event.answer(warning_text)
+                    elif isinstance(event, types.Message):
+                        await event.answer(warning_text)
+                    elif hasattr(event, "answer"):
+                        await event.answer(warning_text)
+                    logger.info(
+                        "Throttle limit reached for user %s (limit=%s, window=%s)",
+                        uid,
+                        self.limit,
+                        self.window,
+                    )
+                    return
             q.append(now)
             self.bucket[uid] = q
         return await handler(event, data)
