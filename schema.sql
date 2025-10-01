@@ -191,6 +191,98 @@ BEGIN
 END
 $$;
 
+-- SCHEDULE CYCLE WEEKS
+CREATE TABLE IF NOT EXISTS schedule_cycle_weeks (
+  id           SERIAL PRIMARY KEY,
+  week_number  INT NOT NULL,
+  title        TEXT NOT NULL,
+  start_date   DATE,
+  end_date     DATE,
+  is_archived  BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at   TIMESTAMPTZ DEFAULT NOW(),
+  updated_at   TIMESTAMPTZ DEFAULT NOW()
+);
+
+ALTER TABLE schedule_cycle_weeks
+  ADD COLUMN IF NOT EXISTS week_number INT,
+  ADD COLUMN IF NOT EXISTS title TEXT,
+  ADD COLUMN IF NOT EXISTS start_date DATE,
+  ADD COLUMN IF NOT EXISTS end_date DATE,
+  ADD COLUMN IF NOT EXISTS is_archived BOOLEAN NOT NULL DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW(),
+  ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
+
+DO $$
+BEGIN
+  BEGIN
+    ALTER TABLE schedule_cycle_weeks
+      ADD CONSTRAINT schedule_cycle_weeks_week_number_unique UNIQUE (week_number);
+  EXCEPTION WHEN duplicate_object THEN
+    NULL;
+  END;
+END$$;
+
+CREATE INDEX IF NOT EXISTS idx_schedule_cycle_weeks_active
+  ON schedule_cycle_weeks(is_archived, start_date NULLS LAST);
+
+CREATE INDEX IF NOT EXISTS idx_schedule_cycle_weeks_dates
+  ON schedule_cycle_weeks(start_date, end_date);
+
+-- SCHEDULE EVENTS
+CREATE TABLE IF NOT EXISTS schedule_events (
+  id           SERIAL PRIMARY KEY,
+  week_id      INT REFERENCES schedule_cycle_weeks(id) ON DELETE SET NULL,
+  scheduled_at TIMESTAMPTZ NOT NULL,
+  event_type   TEXT NOT NULL,
+  description  TEXT,
+  link         TEXT,
+  is_archived  BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at   TIMESTAMPTZ DEFAULT NOW(),
+  updated_at   TIMESTAMPTZ DEFAULT NOW()
+);
+
+ALTER TABLE schedule_events
+  ADD COLUMN IF NOT EXISTS week_id INT,
+  ADD COLUMN IF NOT EXISTS scheduled_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS event_type TEXT,
+  ADD COLUMN IF NOT EXISTS description TEXT,
+  ADD COLUMN IF NOT EXISTS link TEXT,
+  ADD COLUMN IF NOT EXISTS is_archived BOOLEAN NOT NULL DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW(),
+  ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
+
+CREATE INDEX IF NOT EXISTS idx_schedule_events_active
+  ON schedule_events(is_archived, scheduled_at);
+
+CREATE INDEX IF NOT EXISTS idx_schedule_events_week
+  ON schedule_events(week_id);
+
+-- SCHEDULE EVENT REMINDERS
+CREATE TABLE IF NOT EXISTS schedule_event_reminders (
+  id           SERIAL PRIMARY KEY,
+  event_id     INT NOT NULL REFERENCES schedule_events(id) ON DELETE CASCADE,
+  user_id      INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  remind_at    TIMESTAMPTZ NOT NULL,
+  notified_at  TIMESTAMPTZ,
+  is_cancelled BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at   TIMESTAMPTZ DEFAULT NOW(),
+  updated_at   TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(event_id, user_id)
+);
+
+ALTER TABLE schedule_event_reminders
+  ADD COLUMN IF NOT EXISTS event_id INT,
+  ADD COLUMN IF NOT EXISTS user_id INT,
+  ADD COLUMN IF NOT EXISTS remind_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS notified_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS is_cancelled BOOLEAN NOT NULL DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW(),
+  ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
+
+CREATE INDEX IF NOT EXISTS idx_schedule_event_reminders_due
+  ON schedule_event_reminders(remind_at)
+  WHERE is_cancelled = FALSE AND notified_at IS NULL;
+
 -- Legacy compatibility: remove the old index and rename slug → form_slug when needed.
 DROP INDEX IF EXISTS ux_form_sessions_user_slug;
 

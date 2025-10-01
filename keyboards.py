@@ -38,6 +38,13 @@ ADMIN_CONTENT_ROLLBACK_PREFIX = "↩️ Откатить"
 ADMIN_CONTENT_EXPORT = "⬇️ Экспорт"
 ADMIN_CONTENT_IMPORT = "⬆️ Импорт"
 ADMIN_USERS_BUTTON = "👥 Пользователи"
+ADMIN_SCHEDULE_BUTTON = "📆 Расписание"
+ADMIN_SCHEDULE_ADD_EVENT = "➕ Добавить событие"
+ADMIN_SCHEDULE_EDIT_EVENT = "✏️ Изменить событие"
+ADMIN_SCHEDULE_ARCHIVE_EVENT = "🗄️ Архивировать событие"
+ADMIN_SCHEDULE_RESTORE_EVENT = "♻️ Восстановить событие"
+ADMIN_SCHEDULE_SHOW_ARCHIVE = "📂 Архив событий"
+ADMIN_SCHEDULE_SHOW_ACTIVE = "📅 Активные события"
 ADMIN_USERS_SEGMENT_LEADS = "🎯 Лиды"
 ADMIN_USERS_SEGMENT_ACTIVE = "🔥 Активные"
 ADMIN_USERS_SEGMENT_EXPIRED = "🧊 Завершившие"
@@ -288,6 +295,7 @@ ADMIN_PAYMENTS_MARK_FAILED = "❗ Пометить как ошибку"
 def admin_main_keyboard() -> ReplyKeyboardMarkup:
     rows = [
         [KeyboardButton(text=ADMIN_USERS_BUTTON)],
+        [KeyboardButton(text=ADMIN_SCHEDULE_BUTTON)],
         [KeyboardButton(text=ADMIN_BROADCAST_BUTTON), KeyboardButton(text=ADMIN_CONTENT_MENU)],
         [KeyboardButton(text=ADMIN_BEHAVIOR_BUTTON), KeyboardButton(text=ADMIN_SETTINGS_BUTTON)],
         [KeyboardButton(text=ADMIN_STATS_BUTTON), KeyboardButton(text=ADMIN_DEBUG_BUTTON)],
@@ -355,6 +363,22 @@ def admin_user_card_keyboard() -> ReplyKeyboardMarkup:
         [KeyboardButton(text=ADMIN_USERS_BACK_TO_SEGMENTS)],
         [KeyboardButton(text=BACK_TO_ADMIN), KeyboardButton(text=BACK_TO_MAIN)],
     ]
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
+
+
+def admin_schedule_keyboard(*, archive_mode: bool = False) -> ReplyKeyboardMarkup:
+    rows: list[list[KeyboardButton]] = []
+    if not archive_mode:
+        rows.append([KeyboardButton(text=ADMIN_SCHEDULE_ADD_EVENT)])
+        rows.append([
+            KeyboardButton(text=ADMIN_SCHEDULE_EDIT_EVENT),
+            KeyboardButton(text=ADMIN_SCHEDULE_ARCHIVE_EVENT),
+        ])
+        rows.append([KeyboardButton(text=ADMIN_SCHEDULE_SHOW_ARCHIVE)])
+    else:
+        rows.append([KeyboardButton(text=ADMIN_SCHEDULE_RESTORE_EVENT)])
+        rows.append([KeyboardButton(text=ADMIN_SCHEDULE_SHOW_ACTIVE)])
+    rows.append([KeyboardButton(text=BACK_TO_ADMIN), KeyboardButton(text=BACK_TO_MAIN)])
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
 

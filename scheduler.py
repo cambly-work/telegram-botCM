@@ -3,6 +3,7 @@ import os
 import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from typing import Optional
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -38,6 +39,12 @@ scheduler: Optional[AsyncIOScheduler] = None
 # ──────────────────────────────────────────────────────────────────────────────
 # ENV
 # ──────────────────────────────────────────────────────────────────────────────
+BOT_TIMEZONE = os.getenv("BOT_TIMEZONE", "Europe/Moscow")
+try:
+    BOT_ZONE = ZoneInfo(BOT_TIMEZONE)
+except Exception:  # pragma: no cover - fallback for misconfiguration
+    logger.warning("Invalid BOT_TIMEZONE=%s, falling back to Europe/Moscow", BOT_TIMEZONE)
+    BOT_ZONE = ZoneInfo("Europe/Moscow")
 AT_PRODUCT_ID_CLUB = os.getenv("AT_PRODUCT_ID_CLUB", "")
 WELCOME_POST_URL = os.getenv("WELCOME_POST_URL", "https://t.me/")
 CLUB_CHAT_ID = os.getenv("CLUB_CHAT_ID", "")  # если захочешь автогенерацию инвайтов из планировщика
@@ -64,7 +71,9 @@ def get_scheduler_status() -> dict:
         return {"status": "unknown", "jobs": 0}
 
 def _msk_str(dt: datetime) -> str:
-    return dt.astimezone(timezone(timedelta(hours=3))).strftime("%d.%m.%Y %H:%M MSK")
+    local = dt.astimezone(BOT_ZONE)
+    label = local.tzname() or BOT_TIMEZONE
+    return local.strftime("%d.%m.%Y %H:%M ") + label
 
 
 async def _send_with_retries(bot: Bot, chat_id: int, text: str, reply_markup=None, max_attempts: int = 3) -> bool:
@@ -292,6 +301,97 @@ async def job_form_reminders(bot: Bot):
     logger.info("[job_form_reminders] sent=%s errors=%s", sent, errors)
 
 
+async def job_schedule_event_reminders(bot: Bot):
+    """Напоминания за час до события из расписания."""
+    rows = await fetch(
+        """
+        SELECT
+            r.id,
+            r.user_id,
+            u.tg_user_id,
+            r.remind_at,
+            e.id AS event_id,
+            e.scheduled_at,
+            e.event_type,
+            e.description,
+            e.link
+        FROM schedule_event_reminders r
+        JOIN users u ON u.id = r.user_id
+        JOIN schedule_events e ON e.id = r.event_id
+        WHERE r.is_cancelled = FALSE
+          AND r.notified_at IS NULL
+          AND e.is_archived = FALSE
+          AND e.scheduled_at >= NOW()
+          AND r.remind_at <= NOW()
+        ORDER BY r.remind_at
+        """
+    )
+
+    if not rows:
+        logger.debug("[job_schedule_event_reminders] nothing to notify")
+        return
+
+    sent, errors = 0, 0
+
+    for row in rows:
+        tg_user_id = row["tg_user_id"]
+        event_dt = row["scheduled_at"].astimezone(BOT_ZONE)
+        tz_label = event_dt.tzname() or BOT_TIMEZONE
+        message_lines = [
+            "Напоминание: событие начнётся через час.",
+            f"{row['event_type']} — {event_dt.strftime('%d.%m %H:%M')} {tz_label}.",
+        ]
+
+        description = row.get("description")
+        if description:
+            message_lines.append(description.strip())
+
+        link = row.get("link")
+        if link:
+            message_lines.append(f"Ссылка: {link}")
+
+        try:
+            ok = await _send_with_retries(bot, tg_user_id, "\n".join(message_lines))
+        except Exception as exc:  # pragma: no cover - defensive log
+            logger.warning(
+                "[job_schedule_event_reminders] send exception user_id=%s event_id=%s err=%s",
+                row["user_id"],
+                row["event_id"],
+                exc,
+            )
+            ok = False
+
+        if ok:
+            await execute(
+                """
+                UPDATE schedule_event_reminders
+                SET notified_at = NOW(),
+                    updated_at = NOW()
+                WHERE id = $1
+                """,
+                row["id"],
+            )
+            sent += 1
+            logger.info(
+                "[job_schedule_event_reminders] sent user_id=%s event_id=%s",
+                row["user_id"],
+                row["event_id"],
+            )
+        else:
+            errors += 1
+            logger.warning(
+                "[job_schedule_event_reminders] failed user_id=%s event_id=%s",
+                row["user_id"],
+                row["event_id"],
+            )
+
+    logger.info(
+        "[job_schedule_event_reminders] completed sent=%s errors=%s",
+        sent,
+        errors,
+    )
+
+
 async def job_access_expiry_reminders(bot: Bot):
     """
     Напоминания об окончании доступа: -7 / -3 / 0 дней.
@@ -448,6 +548,18 @@ async def setup_scheduler(bot: Bot, timezone_name: str, time_send_lessons: str):
         max_instances=1,
         coalesce=True,
         misfire_grace_time=60 * 5,
+    )
+
+    # Напоминания о событиях расписания — каждую минуту
+    scheduler.add_job(
+        job_schedule_event_reminders,
+        trigger=CronTrigger(minute="*"),
+        kwargs={"bot": bot},
+        id="schedule_event_reminders",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=60 * 2,
     )
 
     # Напоминания об окончании доступа — каждый день в 11:00 по таймзоне
