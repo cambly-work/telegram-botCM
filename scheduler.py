@@ -22,14 +22,7 @@ RetryAfterTypes = tuple(
 from db import fetch, fetchrow, execute
 from keyboards import lesson_keyboard
 # переиспользуем минимум логики из handlers, чтобы не дублировать
-from handlers import (
-    _load_yaml_content,
-    upsert_funnel_delivery,
-    FORM_LABELS,
-    get_content,
-    get_bool_setting,
-    FORM_REMINDERS_ENABLED_KEY,
-)
+from handlers import _load_yaml_content, upsert_funnel_delivery, FORM_LABELS, get_content
 
 logger = logging.getLogger("scheduler")
 
@@ -227,13 +220,6 @@ async def job_soft_reminders(bot: Bot):
 
 async def job_form_reminders(bot: Bot):
     """Раз в час напоминаем о незавершённых анкетах."""
-    reminders_enabled = await get_bool_setting(
-        FORM_REMINDERS_ENABLED_KEY, True
-    )
-    if not reminders_enabled:
-        logger.info("[job_form_reminders] skipped: disabled via settings")
-        return
-
     rows = await fetch(
         """
         SELECT fs.id, fs.user_id, u.tg_user_id, fs.form_slug, fs.started_at, fs.last_reminder_at, fs.reminder_count

@@ -60,6 +60,7 @@ ADMIN_DEBUG_BUTTON = "🛠️ Диагностика"
 ADMIN_SETTINGS_BUTTON = "⚙️ Настройки"
 ADMIN_PAYMENTS_BUTTON = "💳 Оплаты"
 ADMIN_BEHAVIOR_BUTTON = "🎛 Логика бота"
+ADMIN_BROADCAST_REMINDER_TEXT = "✏️ Текст напоминаний"
 
 ADMIN_BEHAVIOR_START = "✉️ Приветствие /start"
 ADMIN_BEHAVIOR_REGISTRATION = "✅ Сообщение после регистрации"
@@ -73,7 +74,6 @@ BROADCAST_LEADS_BUTTON = "🎯 Лиды"
 BROADCAST_MEMBERS_BUTTON = "🔥 Активные"
 BROADCAST_EXPIRED_BUTTON = "🧊 Завершившие"
 BROADCAST_TEMPLATES_BUTTON = "🗂 Шаблоны рассылок"
-BROADCAST_FORM_REMINDERS_BUTTON = "Напоминания анкет"
 BROADCAST_TEMPLATE_PREFIX = "🗂 Шаблон: "
 
 SEND_BROADCAST_BUTTON = "🚀 Отправить"
@@ -373,14 +373,12 @@ def admin_onboarding_delete_keyboard(steps: list[str]) -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
 
-def admin_broadcast_keyboard(*, reminders_enabled: bool) -> ReplyKeyboardMarkup:
-    toggle_prefix = "✅" if reminders_enabled else "❌"
-    toggle_button = KeyboardButton(text=f"{toggle_prefix} {BROADCAST_FORM_REMINDERS_BUTTON}")
+def admin_broadcast_keyboard() -> ReplyKeyboardMarkup:
     rows = [
         [KeyboardButton(text=BROADCAST_ALL_BUTTON), KeyboardButton(text=BROADCAST_LEADS_BUTTON)],
         [KeyboardButton(text=BROADCAST_MEMBERS_BUTTON), KeyboardButton(text=BROADCAST_EXPIRED_BUTTON)],
         [KeyboardButton(text=BROADCAST_TEMPLATES_BUTTON)],
-        [toggle_button],
+        [KeyboardButton(text=ADMIN_BROADCAST_REMINDER_TEXT)],
         [KeyboardButton(text=BACK_TO_ADMIN), KeyboardButton(text=BACK_TO_MAIN)],
     ]
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
