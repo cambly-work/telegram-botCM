@@ -5022,6 +5022,18 @@ def _resolve_checkout_url() -> str:
     return checkout_url
 
 
+async def _resolve_checkout_links(bot) -> dict[str, str]:
+    """Возвращает ссылки для оплаты: deep-link и прямой checkout."""
+    checkout_url = _resolve_checkout_url()
+    deep_link = await _resolve_deep_link(bot, {"section": "pay"})
+    display_url = deep_link or checkout_url
+    return {
+        "display": display_url,
+        "deep_link": deep_link or "",
+        "external": checkout_url or "",
+    }
+
+
 async def send_pay_section(
     message: types.Message,
     user: Optional[dict],
@@ -5029,7 +5041,8 @@ async def send_pay_section(
     *,
     from_callback: bool = False,
 ) -> None:
-    checkout_url = _resolve_checkout_url()
+    links = await _resolve_checkout_links(message.bot)
+    checkout_url = links["display"]
 
     if not checkout_url:
         await answer_with_main_menu(
@@ -5072,6 +5085,8 @@ async def send_pay_section(
         pay_template,
         checkout_url=checkout_url,
         CHECKOUT_URL=checkout_url,
+        CHECKOUT_DEEP_LINK=links["deep_link"],
+        CHECKOUT_EXTERNAL_URL=links["external"],
     )
 
     if flags.get("payments_manual_review", False):
@@ -5116,7 +5131,8 @@ def _build_lesson_cta(next_lesson: int) -> str:
 
 
 async def _send_offer_after_lesson_four(message: types.Message) -> None:
-    checkout_url = _resolve_checkout_url()
+    links = await _resolve_checkout_links(message.bot)
+    checkout_url = links["display"]
     if not checkout_url:
         return
 
@@ -5130,6 +5146,8 @@ async def _send_offer_after_lesson_four(message: types.Message) -> None:
         template,
         checkout_url=checkout_url,
         CHECKOUT_URL=checkout_url,
+        CHECKOUT_DEEP_LINK=links["deep_link"],
+        CHECKOUT_EXTERNAL_URL=links["external"],
     ).strip()
     if not offer_text:
         return
@@ -6111,11 +6129,16 @@ async def deliver_lesson(
     }
     title = lesson_titles.get(lesson_num, f"Урок {lesson_num}")
 
+    links = await _resolve_checkout_links(message.bot)
+    checkout_url = links["display"]
+
     parts: list[str] = [f"<b>Урок {lesson_num}/4.</b> {title}"]
     if url:
         parts.append(f"Смотри урок: {url}")
     parts.append(hw_prompt)
     parts.append("Когда будешь готова, отметь урок через кнопки ниже.")
+    if checkout_url:
+        parts.append(f"Оформить доступ: {checkout_url}")
 
     text = "\n\n".join(parts)
 

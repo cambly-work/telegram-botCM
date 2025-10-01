@@ -59,6 +59,7 @@ async def _run_test(monkeypatch):
             "phone": "+79998887766",
             "at_user_id": "at-42",
             "access_until": None,
+            "funnel_complete": False,
         }
     }
 
@@ -107,11 +108,23 @@ async def _run_test(monkeypatch):
             user_id = args[0]
             users[user_id]["status"] = "member_active"
             users[user_id]["access_until"] = args[1]
+            users[user_id]["funnel_complete"] = True
             return "UPDATE 1"
         if "set status='member_expired'" in lowered:
             user_id = args[0]
             users[user_id]["status"] = "member_expired"
+            users[user_id]["funnel_complete"] = False
             return "UPDATE 1"
+        if "update users set funnel_complete=true" in lowered:
+            user_id = args[0]
+            users[user_id]["funnel_complete"] = True
+            return "UPDATE 1"
+        if "update users set funnel_complete=false" in lowered:
+            user_id = args[0]
+            users[user_id]["funnel_complete"] = False
+            return "UPDATE 1"
+        if "insert into funnel_progress" in lowered:
+            return "INSERT 0 4"
         return "OK"
 
     async def fake_fetch(query: str, *args: Any):
@@ -157,8 +170,11 @@ async def _run_test(monkeypatch):
 
     assert success_response["ok"] is True
     assert success_response["status"] == "succeeded" or success_response["status"] == "paid"
+    assert success_response.get("invite_link") == "https://invite"
+    assert success_response.get("member_status") == "member_active"
     assert users[1]["status"] == "member_active"
     assert users[1]["access_until"] is not None
+    assert users[1]["funnel_complete"] is True
     assert "pay-1" in payments
     assert payments["pay-1"]["status"] == "paid"
 
@@ -191,7 +207,9 @@ async def _run_test(monkeypatch):
 
     assert failure_response["ok"] is True
     assert failure_response["status"] in {"failed", "canceled"}
+    assert failure_response.get("member_status") == "member_expired"
     assert users[1]["status"] == "member_expired"
+    assert users[1]["funnel_complete"] is False
     assert payments["pay-1"]["status"] == "failed"
 
     # Notifications & messaging
