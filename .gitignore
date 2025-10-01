@@ -23,3 +23,9 @@ app.log
 __pycache__/
 *.pyc
 *.pyo
+
+app.log
+*.log
+__pycache__/
+*.pyc
+*.pyo
