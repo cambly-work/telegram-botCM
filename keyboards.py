@@ -108,6 +108,7 @@ FEEDBACK_OPTIONS: dict[str, str] = {
 }
 
 LEARNING_PROGRESS_BUTTON = "Мой прогресс"
+ADMIN_USERS_EDIT_PROGRESS = "📈 Обновить прогресс"
 MATERIALS_CATALOG_BUTTON = "Каталог материалов"
 MATERIALS_PODCASTS_BUTTON = "Подкасты"
 MATERIALS_PRACTICES_BUTTON = "Практики"
@@ -233,7 +234,10 @@ def profile_menu_keyboard(
     payments_open: bool,
 ) -> ReplyKeyboardMarkup:
     rows: list[list[KeyboardButton]] = [
-        [KeyboardButton(text="Мой профиль")],
+        [
+            KeyboardButton(text="Мой профиль"),
+            KeyboardButton(text=LEARNING_PROGRESS_BUTTON),
+        ],
         [KeyboardButton(text="Изменить email"), KeyboardButton(text="Изменить телефон")],
     ]
 
@@ -417,7 +421,10 @@ def admin_user_card_keyboard() -> ReplyKeyboardMarkup:
             KeyboardButton(text=ADMIN_USERS_GRANT_ACCESS),
             KeyboardButton(text=ADMIN_USERS_REVOKE_ACCESS),
         ],
-        [KeyboardButton(text=ADMIN_USERS_UPDATE_CONTACTS)],
+        [
+            KeyboardButton(text=ADMIN_USERS_UPDATE_CONTACTS),
+            KeyboardButton(text=ADMIN_USERS_EDIT_PROGRESS),
+        ],
         [KeyboardButton(text=ADMIN_USERS_BACK_TO_LIST)],
         [KeyboardButton(text=ADMIN_USERS_BACK_TO_SEGMENTS)],
         [KeyboardButton(text=BACK_TO_ADMIN), KeyboardButton(text=BACK_TO_MAIN)],

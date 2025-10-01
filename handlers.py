@@ -5,6 +5,7 @@ import json
 import math
 import os
 import re
+import shlex
 import yaml
 import logging
 import time
@@ -145,6 +146,7 @@ from keyboards import (
     ADMIN_USERS_GRANT_ACCESS,
     ADMIN_USERS_REVOKE_ACCESS,
     ADMIN_USERS_UPDATE_CONTACTS,
+    ADMIN_USERS_EDIT_PROGRESS,
     admin_stats_keyboard,
     admin_payments_keyboard,
     ADMIN_PAYMENTS_OPEN_WINDOW,
@@ -1200,6 +1202,7 @@ class AdminUserStates(StatesGroup):
     browsing_users = State()
     viewing_user = State()
     waiting_contacts = State()
+    waiting_progress = State()
 
 
 class AdminPaymentsStates(StatesGroup):
@@ -1277,6 +1280,26 @@ _PROFILE_STATUS_TITLES: dict[str, str] = {
     "member_active": "Активный доступ",
     "member_expired": "Доступ истёк",
 }
+
+_MEMBERSHIP_STATUS_LABELS: dict[str, str] = {
+    "lead_funnel": "Funnel",
+    "member_active": "Member Active",
+    "member_expired": "Member Expired",
+}
+
+_PROGRESS_STATUS_LABELS: dict[str, str] = {
+    "submitted": "завершён",
+    "pending": "в работе",
+    "skipped": "пропущен",
+}
+
+_PROGRESS_STATUS_ICONS: dict[str, str] = {
+    "submitted": "✅",
+    "pending": "⏳",
+    "skipped": "⏭️",
+}
+
+_MSK_TZ = timezone(timedelta(hours=3))
 
 _ADMIN_TEXT_GROUPS: dict[str, list[tuple[str, str]]] = {
     "🏠 Вход и меню": [
@@ -1582,18 +1605,21 @@ def _admin_user_progress_summary(progress: list[tuple[int, str]] | None) -> str:
 async def _collect_progress_map(user_ids: list[int]) -> dict[int, list[tuple[int, str]]]:
     if not user_ids:
         return {}
-    rows = await fetch(
-        """
-        SELECT user_id, lesson_num, hw_status
-        FROM funnel_progress
-        WHERE user_id = ANY($1::int[])
-        ORDER BY user_id, lesson_num
-        """,
-        user_ids,
-    )
+
+    details = await _collect_progress_details(user_ids)
     progress: dict[int, list[tuple[int, str]]] = {}
-    for row in rows or []:
-        progress.setdefault(row["user_id"], []).append((row["lesson_num"], row["hw_status"]))
+
+    for user_id, lessons in details.items():
+        lesson_entries: list[tuple[int, str]] = []
+        for lesson_num, info in sorted(lessons.items()):
+            status = info.get("hw_status")
+            if not status and info.get("delivered"):
+                status = "submitted"
+            if status:
+                lesson_entries.append((lesson_num, status))
+        if lesson_entries:
+            progress[user_id] = lesson_entries
+
     return progress
 
 
@@ -3159,6 +3185,376 @@ async def send_support_section(
     )
 
 
+def _coerce_datetime(value: Any) -> datetime | None:
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        dt = value
+    elif isinstance(value, str):
+        try:
+            dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    else:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def _format_access_date(value: Any) -> str:
+    dt = _coerce_datetime(value)
+    if not dt:
+        return ""
+    try:
+        return dt.astimezone(_MSK_TZ).strftime("%d.%m.%Y")
+    except Exception:
+        return ""
+
+
+def _membership_summary(user_row: dict | None) -> dict[str, str]:
+    user_row = user_row or {}
+    status_code = str(user_row.get("status") or "lead_funnel").lower()
+    status_label = _MEMBERSHIP_STATUS_LABELS.get(
+        status_code,
+        status_code.replace("_", " ").title(),
+    )
+    access_date = _format_access_date(user_row.get("access_until"))
+
+    if status_code == "member_active":
+        if access_date:
+            access_line = f"Доступ активен до {access_date}"
+            access_short = f"до {access_date}"
+        else:
+            access_line = "Доступ активен"
+            access_short = "активен"
+    elif status_code == "member_expired":
+        if access_date:
+            access_line = f"Доступ истёк {access_date}"
+            access_short = f"истёк {access_date}"
+        else:
+            access_line = "Доступ истёк"
+            access_short = "истёк"
+    else:
+        if access_date:
+            access_line = f"Доступ не активирован (ожидаем до {access_date})"
+            access_short = f"ожидает до {access_date}"
+        else:
+            access_line = "Доступ не активирован"
+            access_short = "не активирован"
+
+    return {
+        "status_code": status_code,
+        "status_label": status_label,
+        "access_date": access_date,
+        "access_line": access_line,
+        "status_line": f"Статус участия: {status_label}",
+        "summary": f"{status_label} · {access_short}" if access_short else status_label,
+        "access_short": access_short,
+    }
+
+
+def _feedback_suffix(count: int) -> str:
+    if count <= 0:
+        return ""
+    normalized = abs(count)
+    if 11 <= normalized % 100 <= 14:
+        word = "отзывов"
+    else:
+        last = normalized % 10
+        if last == 1:
+            word = "отзыв"
+        elif last in {2, 3, 4}:
+            word = "отзыва"
+        else:
+            word = "отзывов"
+    return f" ({count} {word})"
+
+
+async def _collect_progress_details(
+    user_ids: list[int],
+) -> dict[int, dict[int, dict[str, Any]]]:
+    if not user_ids:
+        return {}
+
+    rows = await fetch(
+        """
+        SELECT user_id, lesson_num, delivered_at, opened_at, hw_status, hw_answer
+        FROM funnel_progress
+        WHERE user_id = ANY($1::int[])
+        ORDER BY user_id, lesson_num
+        """,
+        user_ids,
+    )
+
+    details: dict[int, dict[int, dict[str, Any]]] = {}
+    for row in rows or []:
+        entry = details.setdefault(row["user_id"], {}).setdefault(
+            row["lesson_num"],
+            {
+                "lesson_num": row["lesson_num"],
+                "hw_status": row.get("hw_status") or None,
+                "delivered_at": row.get("delivered_at"),
+                "opened_at": row.get("opened_at"),
+                "hw_answer": row.get("hw_answer"),
+                "feedback_count": 0,
+                "feedback_types": [],
+                "delivered": True,
+            },
+        )
+        # ensure hw_status preserved even if None
+        entry["hw_status"] = row.get("hw_status") or entry.get("hw_status")
+
+    feedback_rows = await fetch(
+        """
+        SELECT user_id, lesson_num, COUNT(*) AS feedback_count,
+               array_agg(feedback_type ORDER BY created_at DESC) AS feedback_types
+        FROM lesson_feedback
+        WHERE user_id = ANY($1::int[])
+        GROUP BY user_id, lesson_num
+        """,
+        user_ids,
+    )
+
+    for row in feedback_rows or []:
+        entry = details.setdefault(row["user_id"], {}).setdefault(
+            row["lesson_num"],
+            {
+                "lesson_num": row["lesson_num"],
+                "hw_status": None,
+                "delivered_at": None,
+                "opened_at": None,
+                "hw_answer": None,
+                "feedback_count": 0,
+                "feedback_types": [],
+                "delivered": False,
+            },
+        )
+        count = int(row.get("feedback_count") or 0)
+        entry["feedback_count"] = count
+        types = row.get("feedback_types") or []
+        if isinstance(types, tuple):
+            types = list(types)
+        entry["feedback_types"] = list(types)
+        if count > 0:
+            entry["delivered"] = True
+            if entry.get("hw_status") is None:
+                entry["hw_status"] = "submitted"
+
+    return details
+
+
+async def get_user_progress(user_id: int) -> dict[int, dict[str, Any]]:
+    details = await _collect_progress_details([user_id])
+    return details.get(user_id, {})
+
+
+def _serialize_progress_update(entry: dict[str, Any]) -> dict[str, Any]:
+    serialized: dict[str, Any] = {}
+    for key, value in entry.items():
+        if value is None:
+            continue
+        if isinstance(value, datetime):
+            serialized[key] = value.isoformat()
+        else:
+            serialized[key] = value
+    return serialized
+
+
+async def sync_user_progress(
+    user_id: int,
+    updates: list[dict[str, Any]],
+    *,
+    actor_id: int | None = None,
+) -> dict[int, dict[str, Any]]:
+    if user_id is None:
+        raise ValueError("user_id is required for progress sync")
+
+    normalized_updates: list[dict[str, Any]] = []
+
+    if updates:
+        async with transaction() as conn:
+            for raw in updates:
+                if not isinstance(raw, dict):
+                    continue
+                lesson_raw = raw.get("lesson")
+                if lesson_raw is None:
+                    raise ValueError("progress entry missing lesson")
+                try:
+                    lesson_num = int(lesson_raw)
+                except (ValueError, TypeError):
+                    raise ValueError(f"lesson must be integer, got {lesson_raw!r}") from None
+                if lesson_num not in (1, 2, 3, 4):
+                    raise ValueError(f"lesson must be 1..4, got {lesson_num}")
+
+                reset = bool(raw.get("reset"))
+                status = raw.get("status")
+                if status:
+                    status = str(status).strip().lower()
+                    if status not in _PROGRESS_STATUS_LABELS:
+                        raise ValueError(
+                            f"invalid status '{status}' for lesson {lesson_num}"
+                        )
+                delivered_at = raw.get("delivered_at") or raw.get("delivered")
+                opened_at = raw.get("opened_at") or raw.get("opened")
+                hw_answer = raw.get("hw_answer") if "hw_answer" in raw else raw.get("answer")
+                feedback = raw.get("feedback")
+
+                delivered_dt = delivered_at
+                if isinstance(delivered_dt, str):
+                    delivered_dt = _coerce_datetime(delivered_dt)
+                    if delivered_dt is None:
+                        raise ValueError(
+                            f"invalid delivered_at value for lesson {lesson_num}"
+                        )
+                opened_dt = opened_at
+                if isinstance(opened_dt, str):
+                    opened_dt = _coerce_datetime(opened_dt)
+                    if opened_dt is None:
+                        raise ValueError(
+                            f"invalid opened_at value for lesson {lesson_num}"
+                        )
+
+                if feedback is None:
+                    feedback_list: list[str] | None = None
+                else:
+                    if isinstance(feedback, str):
+                        feedback_list = [
+                            chunk.strip()
+                            for chunk in feedback.split(",")
+                            if chunk.strip()
+                        ]
+                    else:
+                        feedback_list = [
+                            str(chunk).strip()
+                            for chunk in feedback
+                            if str(chunk).strip()
+                        ]
+
+                normalized_entry: dict[str, Any] = {
+                    "lesson": lesson_num,
+                    "status": status,
+                    "delivered_at": delivered_dt,
+                    "opened_at": opened_dt,
+                    "hw_answer": hw_answer,
+                    "feedback": feedback_list,
+                    "reset": reset,
+                }
+                normalized_updates.append(normalized_entry)
+
+                if reset:
+                    await conn.execute(
+                        "DELETE FROM funnel_progress WHERE user_id=$1 AND lesson_num=$2",
+                        user_id,
+                        lesson_num,
+                    )
+                    await conn.execute(
+                        "DELETE FROM lesson_feedback WHERE user_id=$1 AND lesson_num=$2",
+                        user_id,
+                        lesson_num,
+                    )
+                    continue
+
+                existing = await conn.fetchrow(
+                    "SELECT id FROM funnel_progress WHERE user_id=$1 AND lesson_num=$2",
+                    user_id,
+                    lesson_num,
+                )
+
+                if existing:
+                    updates_sql: list[str] = []
+                    params: list[Any] = [user_id, lesson_num]
+                    idx = 3
+                    if status:
+                        updates_sql.append(f"hw_status=${idx}")
+                        params.append(status)
+                        idx += 1
+                    if delivered_dt is not None:
+                        updates_sql.append(f"delivered_at=${idx}")
+                        params.append(delivered_dt)
+                        idx += 1
+                    if opened_dt is not None:
+                        updates_sql.append(f"opened_at=${idx}")
+                        params.append(opened_dt)
+                        idx += 1
+                    if hw_answer is not None:
+                        updates_sql.append(f"hw_answer=${idx}")
+                        params.append(hw_answer)
+                        idx += 1
+                    if updates_sql:
+                        await conn.execute(
+                            f"UPDATE funnel_progress SET {', '.join(updates_sql)} WHERE user_id=$1 AND lesson_num=$2",
+                            *params,
+                        )
+                else:
+                    await conn.execute(
+                        """
+                        INSERT INTO funnel_progress (user_id, lesson_num, delivered_at, opened_at, hw_answer, hw_status)
+                        VALUES ($1, $2, $3, $4, $5, $6)
+                        """,
+                        user_id,
+                        lesson_num,
+                        delivered_dt or datetime.now(timezone.utc),
+                        opened_dt,
+                        hw_answer,
+                        status or "pending",
+                    )
+
+                if feedback_list is not None:
+                    await conn.execute(
+                        "DELETE FROM lesson_feedback WHERE user_id=$1 AND lesson_num=$2",
+                        user_id,
+                        lesson_num,
+                    )
+                    for code in feedback_list:
+                        await conn.execute(
+                            """
+                            INSERT INTO lesson_feedback (user_id, lesson_num, feedback_type, created_at)
+                            VALUES ($1, $2, $3, NOW())
+                            """,
+                            user_id,
+                            lesson_num,
+                            code,
+                        )
+
+    if actor_id and normalized_updates:
+        payload = {
+            "user_id": user_id,
+            "lessons": [_serialize_progress_update(entry) for entry in normalized_updates],
+        }
+        await log_admin_action(actor_id, "progress_sync", payload)
+
+    details = await _collect_progress_details([user_id])
+    return details.get(user_id, {})
+
+
+def _progress_line_details(
+    lesson_num: int,
+    status: str | None,
+    delivered: bool,
+    feedback_count: int,
+    next_lesson: int,
+) -> tuple[str, str]:
+    if status in _PROGRESS_STATUS_LABELS:
+        icon = _PROGRESS_STATUS_ICONS.get(status, "•")
+        description = _PROGRESS_STATUS_LABELS[status]
+        if status == "submitted":
+            suffix = _feedback_suffix(feedback_count)
+            if suffix:
+                description += suffix
+        return icon, description
+
+    if delivered or lesson_num < next_lesson or next_lesson == 5:
+        suffix = _feedback_suffix(feedback_count)
+        description = _PROGRESS_STATUS_LABELS["submitted"] + suffix
+        return _PROGRESS_STATUS_ICONS["submitted"], description
+
+    if lesson_num == next_lesson:
+        return "🚀", "готов к старту"
+
+    return "🔒", "откроется после предыдущего"
+
+
 async def send_profile_overview(
     message: types.Message,
     user: Optional[dict],
@@ -3179,38 +3575,12 @@ async def send_profile_overview(
         return
 
     status_key = user_row.get("status") or "lead_funnel"
-    status_label = _PROFILE_STATUS_TITLES.get(status_key, "—")
-
-    access_until = user_row.get("access_until")
-    access_line = "Доступ пока не активирован."
-    if status_key == "member_active":
-        if access_until:
-            dt = access_until
-            if isinstance(dt, str):
-                try:
-                    dt = datetime.fromisoformat(dt.replace("Z", "+00:00"))
-                except ValueError:
-                    dt = None
-            if isinstance(dt, datetime):
-                access_line = f"Доступ активен до {tz_aware_msk(dt)}"
-            else:
-                access_line = "Доступ активен."
-        else:
-            access_line = "Доступ активен."
-    elif status_key == "member_expired":
-        if access_until:
-            dt = access_until
-            if isinstance(dt, str):
-                try:
-                    dt = datetime.fromisoformat(dt.replace("Z", "+00:00"))
-                except ValueError:
-                    dt = None
-            if isinstance(dt, datetime):
-                access_line = f"Доступ истёк {tz_aware_msk(dt)}"
-            else:
-                access_line = "Доступ истёк."
-        else:
-            access_line = "Доступ истёк."
+    ru_status_label = _PROFILE_STATUS_TITLES.get(status_key, "—")
+    membership = _membership_summary(user_row)
+    status_caption = membership["status_label"]
+    if ru_status_label and ru_status_label != status_caption:
+        status_caption = f"{status_caption} ({ru_status_label})"
+    access_line = membership["access_line"]
 
     email_value = user_row.get("email") or "—"
     phone_value = user_row.get("phone") or "—"
@@ -3221,7 +3591,7 @@ async def send_profile_overview(
         f"Имя: {html.escape(name_value)}\n"
         f"Email: {html.escape(email_value)}\n"
         f"Телефон: {html.escape(phone_value)}\n\n"
-        f"Статус: {status_label}\n"
+        f"Статус: {status_caption}\n"
         f"{access_line}\n\n"
         "Используй кнопки ниже, чтобы обновить контакты."
     )
@@ -3241,6 +3611,7 @@ async def send_learning_progress_section(
     is_admin: bool,
     *,
     from_callback: bool = False,
+    menu_section: str = "learning",
 ) -> None:
     user_row = user or await get_user_with_id(message.from_user.id)
     if not user_row:
@@ -3249,34 +3620,28 @@ async def send_learning_progress_section(
             user_row,
             is_admin,
             "Перезапусти /start, чтобы сохранить прогресс и открыть уроки.",
-            section="learning",
+            section=menu_section,
             from_callback=from_callback,
         )
         return
 
-    rows = await fetch(
-        "SELECT lesson_num, hw_status FROM funnel_progress WHERE user_id=$1 ORDER BY lesson_num",
-        user_row["id"],
-    )
-    status_map = {int(row["lesson_num"]): row["hw_status"] for row in rows or []}
+    membership = _membership_summary(user_row)
+    progress_details = await get_user_progress(user_row["id"])
     next_lesson = await next_lesson_to_deliver(user_row["id"])
 
     status_lines: list[str] = []
     for lesson_num in range(1, 5):
-        status_code = status_map.get(lesson_num)
-        if status_code == "submitted":
-            icon, description = "✅", "завершён"
-        elif status_code == "skipped":
-            icon, description = "⏭️", "пропущен"
-        elif status_code == "pending":
-            icon, description = "⏳", "в работе"
-        else:
-            if next_lesson == 5 or lesson_num < next_lesson:
-                icon, description = "✅", "завершён"
-            elif lesson_num == next_lesson:
-                icon, description = "🚀", "готов к старту"
-            else:
-                icon, description = "🔒", "откроется после предыдущего"
+        info = progress_details.get(lesson_num, {})
+        status_code = info.get("hw_status")
+        delivered = bool(info.get("delivered"))
+        feedback_count = int(info.get("feedback_count") or 0)
+        icon, description = _progress_line_details(
+            lesson_num,
+            status_code,
+            delivered,
+            feedback_count,
+            next_lesson,
+        )
         status_lines.append(f"{icon} Урок {lesson_num}: {description}")
 
     progress_rows = "\n".join(status_lines)
@@ -3290,8 +3655,17 @@ async def send_learning_progress_section(
 
     template = await get_content(
         "menu.learning.progress",
-        "<b>Мой прогресс</b>\n\n{progress_rows}\n\n{summary}",
+        (
+            "<b>Мой прогресс</b>\n"
+            "{membership_status_line}\n"
+            "{membership_access_line}\n\n"
+            "{progress_rows}\n\n"
+            "{summary}"
+        ),
     )
+    membership_status_line = membership["status_line"]
+    membership_access_line = membership["access_line"]
+
     progress_text = render_content(
         template,
         progress_rows=progress_rows,
@@ -3300,12 +3674,26 @@ async def send_learning_progress_section(
         SUMMARY=summary,
         next_lesson=next_label,
         NEXT_LESSON=next_label,
+        membership_status=membership["summary"],
+        MEMBERSHIP_STATUS=membership["summary"],
+        membership_status_line=membership_status_line,
+        MEMBERSHIP_STATUS_LINE=membership_status_line,
+        membership_access=membership["access_line"],
+        MEMBERSHIP_ACCESS=membership["access_line"],
+        membership_access_line=membership_access_line,
+        MEMBERSHIP_ACCESS_LINE=membership_access_line,
+        membership_status_label=membership["status_label"],
+        MEMBERSHIP_STATUS_LABEL=membership["status_label"],
+        membership_status_code=membership["status_code"],
+        MEMBERSHIP_STATUS_CODE=membership["status_code"],
+        membership_access_date=membership["access_date"],
+        MEMBERSHIP_ACCESS_DATE=membership["access_date"],
     )
 
     keyboard = await build_menu_keyboard(
         user=user_row,
         is_admin=is_admin,
-        section="learning",
+        section=menu_section,
     )
 
     await message.answer(progress_text, reply_markup=keyboard)
@@ -4878,13 +5266,15 @@ async def mark_form_completed(user_id: int, form_slug: str) -> tuple[Optional[di
 async def get_user_with_id(tg_user_id: int) -> Optional[dict]:
     return await fetchrow("SELECT * FROM users WHERE tg_user_id=$1", tg_user_id)
 async def next_lesson_to_deliver(user_id: int) -> int:
-    rows = await fetch(
-        "SELECT lesson_num FROM funnel_progress WHERE user_id=$1 ORDER BY lesson_num", user_id
-    )
-    delivered = {r["lesson_num"] for r in rows} if rows else set()
-    for i in range(1, 5):
-        if i not in delivered:
-            return i
+    progress = await get_user_progress(user_id)
+    delivered = {
+        lesson
+        for lesson, info in progress.items()
+        if info.get("delivered") or info.get("hw_status")
+    }
+    for lesson_num in range(1, 5):
+        if lesson_num not in delivered:
+            return lesson_num
     return 5
 
 
@@ -6553,6 +6943,14 @@ async def cancel_handler(message: types.Message, state: FSMContext):
         await send_admin_payments_overview(message)
         return
 
+    if current_state == AdminUserStates.waiting_progress.state and is_admin:
+        selected_user_id = (data or {}).get("selected_user_id") if data else None
+        if selected_user_id:
+            await _show_admin_user_card(message, state, user_id=selected_user_id)
+        else:
+            await admin_users_menu_entry(message, state)
+        return
+
     kb = await build_menu_keyboard(user=user, is_admin=is_admin, section="root")
     await message.answer("Действие отменено. Возвращаюсь в главное меню...", reply_markup=kb)
 
@@ -7480,6 +7878,83 @@ async def admin_users_update_contacts(message: types.Message, state: FSMContext)
     await _show_admin_user_card(message, state, user_id=user_id, notice="Контакты обновлены")
 
 
+@router.message(AdminUserStates.viewing_user, F.text == ADMIN_USERS_EDIT_PROGRESS)
+async def admin_users_progress_prompt(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+
+    data = await state.get_data()
+    user_id = (data or {}).get("selected_user_id")
+    if not user_id:
+        await message.answer("Сначала выбери участницу в списке пользователей.")
+        return
+
+    instructions = (
+        "<b>Корректировка прогресса</b>\n\n"
+        "Пришли одну или несколько строк в формате "
+        "<code>lesson=1 status=submitted feedback=excellent,good</code>.\n\n"
+        "Поля:\n"
+        "• <code>lesson</code> — номер урока (1-4).\n"
+        "• <code>status</code> — submitted/pending/skipped (опционально).\n"
+        "• <code>feedback</code> — коды отзывов через запятую, пусто — очистить.\n"
+        "• <code>delivered</code>/<code>opened</code> — даты ISO (опционально).\n"
+        "• <code>answer</code> — текст ответа на ДЗ.\n"
+        "• <code>reset=1</code> — удалить запись урока и отзывы.\n\n"
+        "Для отмены нажми «Отмена»."
+    )
+
+    await state.set_state(AdminUserStates.waiting_progress)
+    await message.answer(
+        instructions,
+        reply_markup=cancel_keyboard(
+            extra_buttons=[ADMIN_USERS_BACK_TO_LIST, ADMIN_USERS_BACK_TO_SEGMENTS]
+        ),
+        parse_mode=ParseMode.HTML,
+        disable_web_page_preview=True,
+    )
+
+
+@router.message(AdminUserStates.waiting_progress, F.text.len() > 0)
+async def admin_users_progress_receive(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        await state.clear()
+        return
+
+    data = await state.get_data()
+    user_id = (data or {}).get("selected_user_id")
+    if not user_id:
+        await state.clear()
+        await admin_users_menu_entry(message, state)
+        return
+
+    try:
+        updates = _parse_progress_updates_payload(message.text)
+    except ValueError as exc:
+        await message.answer(
+            f"Не удалось разобрать строку: {exc}\nПопробуй снова или нажми «Отмена»."
+        )
+        return
+
+    if not updates:
+        await message.answer(
+            "Не нашла данных для изменения. Укажи хотя бы lesson=... и status=...."
+        )
+        return
+
+    try:
+        await sync_user_progress(user_id, updates, actor_id=message.from_user.id)
+    except ValueError as exc:
+        await message.answer(f"Не удалось применить изменения: {exc}")
+        return
+
+    await _show_admin_user_card(
+        message,
+        state,
+        user_id=user_id,
+        notice="Прогресс обновлён",
+    )
+
+
 @router.message(F.text == ADMIN_BROADCAST_BUTTON)
 async def admin_broadcast_menu_entry(message: types.Message, state: FSMContext):
     if not is_admin_id(message.from_user.id):
@@ -7685,6 +8160,73 @@ def _parse_materials_payload(text: str | None) -> dict[str, str]:
         key, value = chunk.split("=", 1)
         data[key.strip().lower()] = value.strip()
     return data
+
+
+def _parse_progress_updates_payload(text: str | None) -> list[dict[str, Any]]:
+    entries: list[dict[str, Any]] = []
+    if not text:
+        return entries
+
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+
+        tokens: dict[str, str] = {}
+        for chunk in shlex.split(line):
+            if "=" not in chunk:
+                continue
+            key, value = chunk.split("=", 1)
+            tokens[key.strip().lower()] = value.strip()
+
+        if not tokens:
+            continue
+
+        lesson_value = tokens.get("lesson") or tokens.get("l")
+        if not lesson_value:
+            raise ValueError(f"Не нашла lesson=... в строке: {line}")
+
+        try:
+            lesson_num = int(lesson_value)
+        except ValueError as exc:
+            raise ValueError(f"lesson должен быть числом: {lesson_value}") from exc
+
+        entry: dict[str, Any] = {"lesson": lesson_num}
+
+        status_value = tokens.get("status") or tokens.get("hw_status")
+        if status_value is not None:
+            entry["status"] = status_value.strip().lower()
+
+        feedback_value = tokens.get("feedback")
+        if feedback_value is not None:
+            if feedback_value == "" or feedback_value.lower() in {"clear", "none"}:
+                entry["feedback"] = []
+            else:
+                entry["feedback"] = [
+                    part.strip()
+                    for part in feedback_value.split(",")
+                    if part.strip()
+                ]
+
+        delivered_value = tokens.get("delivered") or tokens.get("delivered_at")
+        if delivered_value:
+            entry["delivered_at"] = delivered_value
+
+        opened_value = tokens.get("opened") or tokens.get("opened_at")
+        if opened_value:
+            entry["opened_at"] = opened_value
+
+        answer_value = tokens.get("answer") or tokens.get("hw_answer")
+        if answer_value is not None:
+            entry["hw_answer"] = answer_value
+
+        reset_flag = tokens.get("reset") or tokens.get("clear")
+        if reset_flag:
+            entry["reset"] = reset_flag.strip().lower() in {"1", "true", "yes", "y"}
+
+        entries.append(entry)
+
+    return entries
 
 
 def _parse_optional_bool(value: str | None) -> Optional[bool]:
