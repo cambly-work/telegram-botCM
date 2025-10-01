@@ -373,14 +373,17 @@ def admin_onboarding_delete_keyboard(steps: list[str]) -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
 
-def admin_broadcast_keyboard() -> ReplyKeyboardMarkup:
+def admin_broadcast_keyboard(status_flags: dict[str, bool]) -> ReplyKeyboardMarkup:
     rows = [
         [KeyboardButton(text=BROADCAST_ALL_BUTTON), KeyboardButton(text=BROADCAST_LEADS_BUTTON)],
         [KeyboardButton(text=BROADCAST_MEMBERS_BUTTON), KeyboardButton(text=BROADCAST_EXPIRED_BUTTON)],
         [KeyboardButton(text=BROADCAST_TEMPLATES_BUTTON)],
         [KeyboardButton(text=ADMIN_BROADCAST_REMINDER_TEXT)],
-        [KeyboardButton(text=BACK_TO_ADMIN), KeyboardButton(text=BACK_TO_MAIN)],
     ]
+    for label, enabled in status_flags.items():
+        status = "✅" if enabled else "❌"
+        rows.append([KeyboardButton(text=f"{status} {label}")])
+    rows.append([KeyboardButton(text=BACK_TO_ADMIN), KeyboardButton(text=BACK_TO_MAIN)])
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
 

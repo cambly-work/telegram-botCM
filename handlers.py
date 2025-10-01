@@ -1099,6 +1099,18 @@ _ADMIN_SETTINGS_DEFAULTS: dict[str, bool] = {
     "show_schedule": True,
 }
 
+_ADMIN_BROADCAST_SETTINGS_DEFAULTS: dict[str, bool] = {
+    "broadcast_form_reminders_enabled": True,
+    "broadcast_soft_reminders_enabled": True,
+    "broadcast_access_expiry_enabled": True,
+}
+
+_ADMIN_BROADCAST_SETTINGS_LABELS: dict[str, str] = {
+    "broadcast_form_reminders_enabled": "Напоминания анкет",
+    "broadcast_soft_reminders_enabled": "Напоминания уроков",
+    "broadcast_access_expiry_enabled": "Напоминания об окончании доступа",
+}
+
 _ADMIN_SETTINGS_LABELS: dict[str, str] = {
     "payments_open": "Окно оплаты",
     "payments_manual_review": "Ручная проверка оплат",
@@ -2421,6 +2433,26 @@ async def get_menu_flags() -> dict[str, bool]:
     return flags
 
 
+async def get_broadcast_flags() -> dict[str, bool]:
+    flags: dict[str, bool] = {}
+    for setting_key, default in _ADMIN_BROADCAST_SETTINGS_DEFAULTS.items():
+        flags[setting_key] = await get_bool_setting(setting_key, default)
+    return flags
+
+
+def _broadcast_status_labels(flags: dict[str, bool]) -> dict[str, bool]:
+    labeled: dict[str, bool] = {}
+    for key, default in _ADMIN_BROADCAST_SETTINGS_DEFAULTS.items():
+        label = _ADMIN_BROADCAST_SETTINGS_LABELS.get(key, key)
+        labeled[label] = flags.get(key, default)
+    return labeled
+
+
+async def build_admin_broadcast_keyboard() -> ReplyKeyboardMarkup:
+    flags = await get_broadcast_flags()
+    return admin_broadcast_keyboard(_broadcast_status_labels(flags))
+
+
 async def build_menu_keyboard(
     *,
     user: Optional[dict],
@@ -3217,6 +3249,15 @@ async def send_admin_onboarding_menu(message: types.Message) -> None:
 async def send_admin_broadcast_menu(message: types.Message) -> None:
     reminder_template = await get_content("forms.reminder_template", default="")
     reminder_preview = _preview_text_for_admin(reminder_template, limit=400)
+    broadcast_flags = await get_broadcast_flags()
+    status_lines = []
+    for key, label in _ADMIN_BROADCAST_SETTINGS_LABELS.items():
+        enabled = broadcast_flags.get(
+            key, _ADMIN_BROADCAST_SETTINGS_DEFAULTS.get(key, True)
+        )
+        status_lines.append(f"• {label}: {'включены' if enabled else 'выключены'}")
+    status_text = "\n".join(status_lines)
+    keyboard = admin_broadcast_keyboard(_broadcast_status_labels(broadcast_flags))
 
     text = (
         "<b>Рассылка</b>\n\n"
@@ -3224,12 +3265,15 @@ async def send_admin_broadcast_menu(message: types.Message) -> None:
         "Можно сохранять тексты как шаблоны и переиспользовать их позже.\n\n"
         "<b>Текст напоминаний:</b>\n"
         f"{reminder_preview}\n\n"
+        "<b>Автоматические напоминания:</b>\n"
+        f"{status_text}\n\n"
+        "Нужна пауза? Нажми на соответствующую строку, чтобы включить или выключить рассылку.\n\n"
         "Нужно обновить шаблон напоминания о незавершённых анкетах?"
         f" Нажми «{ADMIN_BROADCAST_REMINDER_TEXT}» — откроется знакомый редактор текста."
     )
     await message.answer(
         text,
-        reply_markup=admin_broadcast_keyboard(),
+        reply_markup=keyboard,
         disable_web_page_preview=True,
     )
 
@@ -4902,6 +4946,18 @@ def _admin_toggle_key_from_text(text: str | None) -> str | None:
     return None
 
 
+def _admin_broadcast_toggle_key_from_text(text: str | None) -> str | None:
+    if not text:
+        return None
+    normalized = text.strip()
+    if normalized.startswith("✅") or normalized.startswith("❌"):
+        normalized = normalized[1:].strip()
+    for key, label in _ADMIN_BROADCAST_SETTINGS_LABELS.items():
+        if normalized == label:
+            return key
+    return None
+
+
 def _parse_onboarding_index(text: str | None, prefix: str) -> Optional[int]:
     if not text or not prefix:
         return None
@@ -5459,6 +5515,28 @@ async def admin_broadcast_edit_reminder(message: types.Message, state: FSMContex
     )
 
 
+@router.message(F.text.func(lambda text: _admin_broadcast_toggle_key_from_text(text) is not None))
+async def admin_broadcast_toggle_setting(message: types.Message):
+    if not is_admin_id(message.from_user.id):
+        return
+
+    key = _admin_broadcast_toggle_key_from_text(message.text)
+    if not key:
+        return
+
+    current = await get_bool_setting(
+        key, _ADMIN_BROADCAST_SETTINGS_DEFAULTS.get(key, True)
+    )
+    new_value = not current
+    await set_bool_setting(key, new_value, updated_by=message.from_user.id)
+    await log_admin_action(
+        message.from_user.id,
+        "toggle_broadcast_setting",
+        {"key": key, "value": new_value},
+    )
+    await send_admin_broadcast_menu(message)
+
+
 @router.message(F.text == DELETE_BROADCAST_TEMPLATE_BUTTON)
 async def admin_broadcast_delete_prompt(message: types.Message, state: FSMContext):
     if not is_admin_id(message.from_user.id):
@@ -5467,7 +5545,7 @@ async def admin_broadcast_delete_prompt(message: types.Message, state: FSMContex
     if not templates:
         await message.answer(
             "Пока нет сохранённых шаблонов.",
-            reply_markup=admin_broadcast_keyboard(),
+            reply_markup=await build_admin_broadcast_keyboard(),
         )
         return
     titles = [tpl["title"] for tpl in templates]
@@ -8051,7 +8129,7 @@ async def admin_broadcast_change_segment(message: types.Message, state: FSMConte
     await state.update_data(change_segment=True)
     await message.answer(
         "Выбери новый сегмент для рассылки.",
-        reply_markup=admin_broadcast_keyboard(),
+        reply_markup=await build_admin_broadcast_keyboard(),
     )
 
 
