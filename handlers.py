@@ -104,6 +104,7 @@ from keyboards import (
     ADMIN_DEBUG_BUTTON,
     ADMIN_SETTINGS_BUTTON,
     ADMIN_PAYMENTS_BUTTON,
+    ADMIN_BROADCAST_REMINDER_TEXT,
     admin_users_segments_keyboard,
     admin_users_pagination_keyboard,
     admin_user_card_keyboard,
@@ -3214,10 +3215,17 @@ async def send_admin_onboarding_menu(message: types.Message) -> None:
 
 
 async def send_admin_broadcast_menu(message: types.Message) -> None:
+    reminder_template = await get_content("forms.reminder_template", default="")
+    reminder_preview = _preview_text_for_admin(reminder_template, limit=400)
+
     text = (
         "<b>Рассылка</b>\n\n"
         "Выберите сегмент, напишите текст — бот покажет предпросмотр и спросит подтверждение.\n"
-        "Можно сохранять тексты как шаблоны и переиспользовать их позже."
+        "Можно сохранять тексты как шаблоны и переиспользовать их позже.\n\n"
+        "<b>Текст напоминаний:</b>\n"
+        f"{reminder_preview}\n\n"
+        "Нужно обновить шаблон напоминания о незавершённых анкетах?"
+        f" Нажми «{ADMIN_BROADCAST_REMINDER_TEXT}» — откроется знакомый редактор текста."
     )
     await message.answer(
         text,
@@ -5436,6 +5444,21 @@ async def admin_broadcast_templates(message: types.Message, state: FSMContext):
     await send_admin_broadcast_templates(message)
 
 
+@router.message(F.text == ADMIN_BROADCAST_REMINDER_TEXT)
+async def admin_broadcast_edit_reminder(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+
+    await prompt_content_edit(
+        message,
+        state,
+        key="forms.reminder_template",
+        label="Напоминание о незавершённой анкете",
+        group_title="📝 Анкеты",
+        return_to_broadcast=True,
+    )
+
+
 @router.message(F.text == DELETE_BROADCAST_TEMPLATE_BUTTON)
 async def admin_broadcast_delete_prompt(message: types.Message, state: FSMContext):
     if not is_admin_id(message.from_user.id):
@@ -7156,40 +7179,35 @@ async def admin_texts_back_to_groups(message: types.Message, state: FSMContext):
     await send_admin_text_groups(message)
 
 
-@router.message(F.text.func(lambda text: text in _ADMIN_TEXT_GROUPS))
-async def admin_texts_open_group(message: types.Message, state: FSMContext):
-    if not is_admin_id(message.from_user.id):
-        return
-    await _reset_state_if_needed(state)
-    await send_admin_text_items(message, message.text)
-
-
-@router.message(F.text.func(lambda text: _admin_find_text_entry(text or "")[1] is not None))
-async def admin_texts_edit_prompt(message: types.Message, state: FSMContext):
-    if not is_admin_id(message.from_user.id):
-        return
-
-    group_title, key = _admin_find_text_entry(message.text or "")
-    if not key:
-        return
-
+async def prompt_content_edit(
+    message: types.Message,
+    state: FSMContext,
+    *,
+    key: str,
+    label: str | None = None,
+    group_title: str | None = None,
+    return_to_broadcast: bool = False,
+) -> None:
     await _reset_state_if_needed(state)
     await state.set_state(AdminContentStates.waiting_value)
 
     current_text = await get_content(key, default="")
 
+    label_text = label or key or ""
+
     await state.update_data(
         content_key=key,
         content_group=group_title,
-        content_label=message.text,
+        content_label=label_text,
         content_preview_text=current_text,
+        return_to_broadcast_menu=return_to_broadcast,
     )
-    preview = _preview_text_for_admin(current_text)
 
+    preview = _preview_text_for_admin(current_text)
     placeholders_line = _admin_placeholder_hint_line(key)
 
     text_lines = [
-        f"<b>Редактирование текста:</b> {html.escape(message.text or key)}",
+        f"<b>Редактирование текста:</b> {html.escape(label_text)}",
         "",
         "<b>Текущий текст:</b>",
         preview,
@@ -7212,6 +7230,32 @@ async def admin_texts_edit_prompt(message: types.Message, state: FSMContext):
         reply_markup=cancel_keyboard(extra_buttons=[ADMIN_TEXTS_PREVIEW_BUTTON]),
         parse_mode="HTML",
         disable_web_page_preview=True,
+    )
+
+
+@router.message(F.text.func(lambda text: text in _ADMIN_TEXT_GROUPS))
+async def admin_texts_open_group(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+    await _reset_state_if_needed(state)
+    await send_admin_text_items(message, message.text)
+
+
+@router.message(F.text.func(lambda text: _admin_find_text_entry(text or "")[1] is not None))
+async def admin_texts_edit_prompt(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+
+    group_title, key = _admin_find_text_entry(message.text or "")
+    if not key:
+        return
+
+    await prompt_content_edit(
+        message,
+        state,
+        key=key,
+        label=message.text,
+        group_title=group_title,
     )
 
 
@@ -7260,6 +7304,7 @@ async def admin_texts_receive_value(message: types.Message, state: FSMContext):
     key = data.get("content_key")
     label = data.get("content_label") or key
     group_title = data.get("content_group")
+    return_to_broadcast = bool(data.get("return_to_broadcast_menu"))
 
     if not key:
         await state.clear()
@@ -7289,6 +7334,12 @@ async def admin_texts_receive_value(message: types.Message, state: FSMContext):
         "content_set_menu",
         {"key": key, "length": len(new_text)},
     )
+
+    if return_to_broadcast:
+        await message.answer(f"Текст «{label}» обновлён ✅")
+        await state.clear()
+        await send_admin_broadcast_menu(message)
+        return
 
     await message.answer(
         f"Текст «{label}» обновлён ✅",
