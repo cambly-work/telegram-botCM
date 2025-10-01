@@ -6,6 +6,7 @@ from keyboards import (
     ADMIN_BROADCAST_BUTTON,
     ADMIN_SCHEDULE_BUTTON,
     ADMIN_BROADCAST_HISTORY_BUTTON,
+    ADMIN_BROADCAST_NEW_BUTTON,
     ADMIN_BROADCAST_REMINDER_TEXT,
     ADMIN_CONTENT_MENU,
     ADMIN_TEXTS_ENTRY,
@@ -26,30 +27,34 @@ from keyboards import (
     ADMIN_PAYMENTS_OPEN_WINDOW,
     ADMIN_PAYMENTS_REVOKE_ACCESS,
     ADMIN_PAYMENTS_SHOW_LATEST,
+    ADMIN_MATERIALS_BUTTON,
     ADMIN_SETTINGS_BUTTON,
     ADMIN_STATS_BUTTON,
     ADMIN_USERS_BUTTON,
+    ADMIN_USERS_EDIT_PROGRESS,
     BACK_TO_ADMIN,
+    BACK_TO_BROADCAST,
     BACK_TO_BEHAVIOR,
     BACK_TO_MAIN,
     BACK_TO_MATERIALS,
     BROADCAST_ALL_BUTTON,
     BROADCAST_EXPIRED_BUTTON,
     BROADCAST_LEADS_BUTTON,
-    BROADCAST_HISTORY_MORE_BUTTON,
     BROADCAST_MEMBERS_BUTTON,
     BROADCAST_TEMPLATES_BUTTON,
     LEARNING_PROGRESS_BUTTON,
     MATERIALS_CATALOG_BUTTON,
     materials_menu_keyboard,
     learning_menu_keyboard,
+    profile_menu_keyboard,
     admin_behavior_keyboard,
     admin_broadcast_keyboard,
+    admin_broadcast_segments_keyboard,
     admin_main_keyboard,
     admin_materials_keyboard,
-    admin_materials_categories_keyboard,
     admin_payments_keyboard,
     admin_settings_keyboard,
+    admin_user_card_keyboard,
 )
 
 
@@ -66,15 +71,21 @@ def test_admin_broadcast_keyboard_includes_status_flags():
 
     rows = _keyboard_texts(admin_broadcast_keyboard(statuses))
 
-    assert rows[0] == [BROADCAST_ALL_BUTTON, BROADCAST_LEADS_BUTTON]
-    assert rows[1] == [BROADCAST_MEMBERS_BUTTON, BROADCAST_EXPIRED_BUTTON]
-    assert rows[2] == [BROADCAST_TEMPLATES_BUTTON, ADMIN_BROADCAST_HISTORY_BUTTON]
-    assert rows[3] == [BROADCAST_HISTORY_MORE_BUTTON]
-    assert rows[4] == [ADMIN_BROADCAST_REMINDER_TEXT]
-    assert rows[5] == ["✅ Напоминания анкет"]
-    assert rows[6] == ["❌ Напоминания уроков"]
-    assert rows[7] == ["✅ Напоминания об окончании доступа"]
-    assert rows[8] == [BACK_TO_ADMIN, BACK_TO_MAIN]
+    assert rows[0] == [ADMIN_BROADCAST_NEW_BUTTON]
+    assert rows[1] == [BROADCAST_TEMPLATES_BUTTON, ADMIN_BROADCAST_HISTORY_BUTTON]
+    assert rows[2] == [ADMIN_BROADCAST_REMINDER_TEXT]
+    assert rows[3] == ["✅ Напоминания анкет"]
+    assert rows[4] == ["❌ Напоминания уроков"]
+    assert rows[5] == ["✅ Напоминания об окончании доступа"]
+    assert rows[6] == [BACK_TO_ADMIN, BACK_TO_MAIN]
+
+    assert len(rows) == len(statuses) + 4
+
+    flattened = [text for row in rows for text in row]
+    assert BROADCAST_ALL_BUTTON not in flattened
+    assert BROADCAST_LEADS_BUTTON not in flattened
+    assert BROADCAST_MEMBERS_BUTTON not in flattened
+    assert BROADCAST_EXPIRED_BUTTON not in flattened
 
 
 def test_admin_main_keyboard_layout():
@@ -91,6 +102,15 @@ def test_admin_main_keyboard_layout():
     ]
     flattened = [text for row in rows for text in row]
     assert ADMIN_PAYMENTS_BUTTON not in flattened
+    assert ADMIN_CONTENT_MENU not in flattened
+
+
+def test_admin_materials_keyboard_layout():
+    rows = _keyboard_texts(admin_materials_keyboard())
+    assert rows == [
+        [ADMIN_CONTENT_MENU],
+        [BACK_TO_ADMIN, BACK_TO_MAIN],
+    ]
 
 
 def test_admin_materials_keyboard_layout():
@@ -138,18 +158,17 @@ def test_admin_payments_keyboard_back_navigation():
     assert rows_closed[5] == [BACK_TO_MAIN]
 
 
-def test_learning_menu_keyboard_layout():
-    rows = _keyboard_texts(learning_menu_keyboard())
-
+def test_admin_broadcast_segments_keyboard_layout():
+    rows = _keyboard_texts(admin_broadcast_segments_keyboard())
     assert rows == [
-        ["Бесплатные уроки", LEARNING_PROGRESS_BUTTON],
-        ["Окно в Магнетизм", "Записаться на разбор"],
-        ["Пройти тест"],
+        [BROADCAST_ALL_BUTTON, BROADCAST_LEADS_BUTTON],
+        [BROADCAST_MEMBERS_BUTTON, BROADCAST_EXPIRED_BUTTON],
+        [BACK_TO_BROADCAST, BACK_TO_ADMIN],
         [BACK_TO_MAIN],
     ]
 
 
-def test_materials_menu_keyboard_root_layout():
+def test_materials_menu_keyboard_all_sections_available():
     rows = _keyboard_texts(
         materials_menu_keyboard(weekly_enabled=True, schedule_enabled=True)
     )
@@ -214,3 +233,15 @@ def test_admin_settings_keyboard_no_content_shortcuts():
     assert flattened[1] == "❌ Ручная проверка оплат"
     assert flattened[2] == "✅ Материалы недели"
     assert flattened[3] == "❌ Расписание"
+
+
+def test_profile_menu_keyboard_adds_progress_button():
+    rows = _keyboard_texts(
+        profile_menu_keyboard(has_pay=True, payments_open=True)
+    )
+    assert rows[0] == ["Мой профиль", LEARNING_PROGRESS_BUTTON]
+
+
+def test_admin_user_card_keyboard_contains_progress_control():
+    rows = _keyboard_texts(admin_user_card_keyboard())
+    assert ADMIN_USERS_EDIT_PROGRESS in rows[1]

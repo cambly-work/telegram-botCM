@@ -17,7 +17,7 @@ BACK_TO_PROFILE = "⬅️ К профилю"
 BACK_TO_ADMIN = "⬅️ В админку"
 BACK_TO_TEXT_GROUPS = "⬅️ К списку текстов"
 BACK_TO_LESSONS = "⬅️ К списку уроков"
-BACK_TO_BEHAVIOR = "⬅️ К логике бота"
+BACK_TO_BEHAVIOR = "⬅️ К геймификации"
 BACK_TO_ONBOARDING = "⬅️ К шагам онбординга"
 LESSON_DONE = "✅ Выполнено"
 LESSON_SKIP = "⏭️ Пропустить"
@@ -55,7 +55,8 @@ ADMIN_USERS_BACK_TO_LIST = "📋 К списку"
 ADMIN_USERS_GRANT_ACCESS = "✅ Выдать доступ"
 ADMIN_USERS_REVOKE_ACCESS = "🚫 Отозвать доступ"
 ADMIN_USERS_UPDATE_CONTACTS = "✏️ Обновить контакты"
-ADMIN_BROADCAST_BUTTON = "📢 Рассылка"
+ADMIN_MATERIALS_BUTTON = "📚 Материалы"
+ADMIN_BROADCAST_BUTTON = "📣 Рассылки"
 ADMIN_STATS_BUTTON = "📊 Статистика"
 ADMIN_STATS_REFRESH = "🔄 Обновить сводку"
 ADMIN_STATS_USERS_BREAKDOWN = "📋 Статусы пользователей"
@@ -113,6 +114,7 @@ FEEDBACK_OPTIONS: dict[str, str] = {
 }
 
 LEARNING_PROGRESS_BUTTON = "Мой прогресс"
+ADMIN_USERS_EDIT_PROGRESS = "📈 Обновить прогресс"
 MATERIALS_CATALOG_BUTTON = "Каталог материалов"
 MATERIALS_PODCASTS_BUTTON = "Подкасты"
 MATERIALS_PRACTICES_BUTTON = "Практики"
@@ -238,7 +240,10 @@ def profile_menu_keyboard(
     payments_open: bool,
 ) -> ReplyKeyboardMarkup:
     rows: list[list[KeyboardButton]] = [
-        [KeyboardButton(text="Мой профиль")],
+        [
+            KeyboardButton(text="Мой профиль"),
+            KeyboardButton(text=LEARNING_PROGRESS_BUTTON),
+        ],
         [KeyboardButton(text="Изменить email"), KeyboardButton(text="Изменить телефон")],
     ]
 
@@ -356,10 +361,7 @@ def admin_main_keyboard() -> ReplyKeyboardMarkup:
 
 def admin_materials_keyboard() -> ReplyKeyboardMarkup:
     rows = [
-        [KeyboardButton(text=ADMIN_MATERIALS_LIST)],
-        [KeyboardButton(text=ADMIN_MATERIALS_CREATE), KeyboardButton(text=ADMIN_MATERIALS_UPDATE)],
-        [KeyboardButton(text=ADMIN_MATERIALS_DELETE)],
-        [KeyboardButton(text=ADMIN_MATERIALS_GRANT), KeyboardButton(text=ADMIN_MATERIALS_REVOKE)],
+        [KeyboardButton(text=ADMIN_CONTENT_MENU)],
         [KeyboardButton(text=BACK_TO_ADMIN), KeyboardButton(text=BACK_TO_MAIN)],
     ]
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
@@ -433,7 +435,10 @@ def admin_user_card_keyboard() -> ReplyKeyboardMarkup:
             KeyboardButton(text=ADMIN_USERS_GRANT_ACCESS),
             KeyboardButton(text=ADMIN_USERS_REVOKE_ACCESS),
         ],
-        [KeyboardButton(text=ADMIN_USERS_UPDATE_CONTACTS)],
+        [
+            KeyboardButton(text=ADMIN_USERS_UPDATE_CONTACTS),
+            KeyboardButton(text=ADMIN_USERS_EDIT_PROGRESS),
+        ],
         [KeyboardButton(text=ADMIN_USERS_BACK_TO_LIST)],
         [KeyboardButton(text=ADMIN_USERS_BACK_TO_SEGMENTS)],
         [KeyboardButton(text=BACK_TO_ADMIN), KeyboardButton(text=BACK_TO_MAIN)],
@@ -492,16 +497,24 @@ def admin_onboarding_delete_keyboard(steps: list[str]) -> ReplyKeyboardMarkup:
 
 def admin_broadcast_keyboard(status_flags: dict[str, bool]) -> ReplyKeyboardMarkup:
     rows = [
-        [KeyboardButton(text=BROADCAST_ALL_BUTTON), KeyboardButton(text=BROADCAST_LEADS_BUTTON)],
-        [KeyboardButton(text=BROADCAST_MEMBERS_BUTTON), KeyboardButton(text=BROADCAST_EXPIRED_BUTTON)],
+        [KeyboardButton(text=ADMIN_BROADCAST_NEW_BUTTON)],
         [KeyboardButton(text=BROADCAST_TEMPLATES_BUTTON), KeyboardButton(text=ADMIN_BROADCAST_HISTORY_BUTTON)],
-        [KeyboardButton(text=BROADCAST_HISTORY_MORE_BUTTON)],
         [KeyboardButton(text=ADMIN_BROADCAST_REMINDER_TEXT)],
     ]
     for label, enabled in status_flags.items():
         status = "✅" if enabled else "❌"
         rows.append([KeyboardButton(text=f"{status} {label}")])
     rows.append([KeyboardButton(text=BACK_TO_ADMIN), KeyboardButton(text=BACK_TO_MAIN)])
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
+
+
+def admin_broadcast_segments_keyboard() -> ReplyKeyboardMarkup:
+    rows = [
+        [KeyboardButton(text=BROADCAST_ALL_BUTTON), KeyboardButton(text=BROADCAST_LEADS_BUTTON)],
+        [KeyboardButton(text=BROADCAST_MEMBERS_BUTTON), KeyboardButton(text=BROADCAST_EXPIRED_BUTTON)],
+        [KeyboardButton(text=BACK_TO_BROADCAST), KeyboardButton(text=BACK_TO_ADMIN)],
+        [KeyboardButton(text=BACK_TO_MAIN)],
+    ]
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
 
