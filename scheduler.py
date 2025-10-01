@@ -237,10 +237,8 @@ async def job_form_reminders(bot: Bot):
 
     template = await get_content(
         "forms.reminder_template",
-        (
-            "Напоминание: анкета «{form_label}» ждёт завершения.\n"
-            "Если уже отправила форму, просто игнорируй это сообщение."
-        ),
+        "Напоминание: анкета «{form_label}» ждёт завершения.\n"
+        "Если уже отправила форму, просто игнорируй это сообщение.",
     )
 
     sent, errors = 0, 0
