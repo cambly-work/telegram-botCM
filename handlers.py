@@ -9541,18 +9541,33 @@ async def admin_materials_receive_grant(message: types.Message, state: FSMContex
     tg_raw = payload.get("tg")
     user_id_raw = payload.get("user") or payload.get("user_id")
 
-@router.message(F.text == ADMIN_MATERIALS_BUTTON)
-async def admin_materials_menu(message: types.Message, state: FSMContext):
-    if not is_admin_id(message.from_user.id):
-        return
-    await _reset_state_if_needed(state)
-    await send_admin_materials_menu(message)
+    if tg_raw:
+        try:
+            tg_id = int(tg_raw)
+        except ValueError:
+            user_error = "Telegram ID должен быть числом."
+        else:
+            user_row = await fetchrow(
+                "SELECT * FROM users WHERE tg_user_id=$1",
+                tg_id,
+            )
+            if not user_row:
+                user_error = f"Пользователь с tg-id {tg_id} не найден."
+    elif user_id_raw:
+        try:
+            internal_id = int(user_id_raw)
+        except ValueError:
+            user_error = "Поле user должно быть числом."
+        else:
+            user_row = await fetchrow(
+                "SELECT * FROM users WHERE id=$1",
+                internal_id,
+            )
+            if not user_row:
+                user_error = f"Пользователь с id {internal_id} не найден."
+    else:
+        user_error = "Укажи <code>tg</code> или <code>user</code> для выдачи доступа."
 
-
-@router.message(F.text.func(lambda text: _admin_broadcast_toggle_key_from_text(text) is not None))
-async def admin_broadcast_toggle_setting(message: types.Message):
-    if not is_admin_id(message.from_user.id):
-        return
     if user_error:
         await message.answer(
             user_error,
@@ -9620,6 +9635,14 @@ async def admin_broadcast_toggle_setting(message: types.Message):
         f"Доступ к «{category['title']}» выдан{expires_hint} ✅",
         reply_markup=admin_materials_keyboard(),
     )
+
+
+@router.message(F.text == ADMIN_MATERIALS_BUTTON)
+async def admin_materials_menu(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+    await _reset_state_if_needed(state)
+    await send_admin_materials_menu(message)
 
 
 @router.message(F.text == ADMIN_MATERIALS_REVOKE)
