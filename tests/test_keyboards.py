@@ -102,10 +102,8 @@ def test_admin_broadcast_keyboard_includes_status_flags():
 def test_admin_main_keyboard_layout():
     rows = _keyboard_texts(admin_main_keyboard())
     assert rows == [
-        [ADMIN_CATEGORY_USERS],
-        [ADMIN_CATEGORY_CONTENT],
-        [ADMIN_CATEGORY_COMMUNICATIONS],
-        [ADMIN_CATEGORY_SERVICE],
+        [ADMIN_CATEGORY_USERS, ADMIN_CATEGORY_CONTENT],
+        [ADMIN_CATEGORY_COMMUNICATIONS, ADMIN_CATEGORY_SERVICE],
         [BACK_TO_MAIN],
     ]
     flattened = [text for row in rows for text in row]

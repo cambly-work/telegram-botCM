@@ -351,10 +351,14 @@ ADMIN_PAYMENTS_MARK_FAILED = "❗ Пометить как ошибку"
 
 def admin_main_keyboard() -> ReplyKeyboardMarkup:
     rows = [
-        [KeyboardButton(text=ADMIN_CATEGORY_USERS)],
-        [KeyboardButton(text=ADMIN_CATEGORY_CONTENT)],
-        [KeyboardButton(text=ADMIN_CATEGORY_COMMUNICATIONS)],
-        [KeyboardButton(text=ADMIN_CATEGORY_SERVICE)],
+        [
+            KeyboardButton(text=ADMIN_CATEGORY_USERS),
+            KeyboardButton(text=ADMIN_CATEGORY_CONTENT),
+        ],
+        [
+            KeyboardButton(text=ADMIN_CATEGORY_COMMUNICATIONS),
+            KeyboardButton(text=ADMIN_CATEGORY_SERVICE),
+        ],
         [KeyboardButton(text=BACK_TO_MAIN)],
     ]
     return ReplyKeyboardMarkup(
