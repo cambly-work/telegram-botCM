@@ -445,7 +445,9 @@ CREATE TABLE IF NOT EXISTS admin_log (
 ALTER TABLE admin_log
   ADD COLUMN IF NOT EXISTS admin_id  BIGINT,
   ADD COLUMN IF NOT EXISTS action    TEXT,
-  ADD COLUMN IF NOT EXISTS payload   JSONB,
+  ADD COLUMN IF NOT EXISTS payload   JSONB;
+
+ALTER TABLE admin_log
   ALTER COLUMN created_at TYPE TIMESTAMPTZ USING created_at::timestamptz;
 
 -- 2) Мягко перенесём старые значения event → action (только если action пуст)
