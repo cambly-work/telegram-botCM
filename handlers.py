@@ -34,6 +34,7 @@ except ImportError:  # aiogram < 3.13.1 compatibility
     from aiogram.dispatcher.event.bases import SkipHandler as EventSkip
 from urllib.parse import parse_qs, urlparse, quote_plus, urlencode
 from aiogram.dispatcher.middlewares.base import BaseMiddleware
+from asyncpg import UndefinedColumnError
 from db import fetchrow, fetch, execute, transaction
 from settings import ADMIN_IDS, YOOMONEY_CHECKOUT_URL
 from keyboards import (
@@ -1391,17 +1392,34 @@ async def list_recent_broadcasts(limit: int = 5, offset: int = 0) -> list[dict]:
     if normalized_limit <= 0:
         return []
     normalized_offset = max(0, int(offset))
-    rows = await fetch(
-        """
+    query = """
         SELECT id, admin_id, payload, created_at
         FROM admin_log
         WHERE action = 'broadcast'
         ORDER BY created_at DESC
         LIMIT $1 OFFSET $2
-        """,
-        normalized_limit,
-        normalized_offset,
-    )
+    """
+    try:
+        rows = await fetch(
+            query,
+            normalized_limit,
+            normalized_offset,
+        )
+    except UndefinedColumnError:
+        logger.warning(
+            "admin_log schema is outdated (missing admin_id/payload). Please run migrations.",
+        )
+        rows = await fetch(
+            """
+            SELECT id, user_id AS admin_id, event AS payload, created_at
+            FROM admin_log
+            WHERE action = 'broadcast'
+            ORDER BY created_at DESC
+            LIMIT $1 OFFSET $2
+            """,
+            normalized_limit,
+            normalized_offset,
+        )
     result: list[dict] = []
     for row in rows:
         entry = dict(row)
