@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 
 
 LOGGER = logging.getLogger(__name__)
@@ -12,7 +13,7 @@ def _admin_ids() -> set[int]:
     """Parse administrator IDs from the environment."""
     ids = os.getenv("ADMIN_IDS", "")
     parsed_ids: set[int] = set()
-    for raw_value in ids.split(","):
+    for raw_value in re.split(r"[\s,]+", ids):
         value = raw_value.strip()
         if not value:
             continue
