@@ -617,6 +617,63 @@ async def test_support_cancel_removes_keyboard(monkeypatch):
     assert support_calls, "cancel_handler should forward to support section"
 
 
+@pytest.mark.parametrize(
+    ("state_obj", "handler", "existing_data"),
+    [
+        (handlers.AnalysisStates.waiting_format, handlers.analysis_collect_format, {}),
+        (
+            handlers.AnalysisStates.waiting_contact,
+            handlers.analysis_collect_contact,
+            {"analysis_format": "Zoom"},
+        ),
+        (
+            handlers.AnalysisStates.waiting_time,
+            handlers.analysis_collect_time,
+            {"analysis_format": "Zoom", "analysis_contact": "@user"},
+        ),
+        (
+            handlers.AnalysisStates.waiting_confirm,
+            handlers.analysis_confirm_request,
+            {
+                "analysis_format": "Zoom",
+                "analysis_contact": "@user",
+                "analysis_time": "Утро",
+            },
+        ),
+    ],
+)
+async def test_analysis_cancel_clears_state(monkeypatch, state_obj, handler, existing_data):
+    events: list[tuple[str, dict]] = []
+    user = DummyFromUser(user_id=606)
+    message = DummyMessage(handlers.CANCEL_TEXT, user, events)
+    state = DummyState()
+    await state.set_state(state_obj)
+    if existing_data:
+        await state.update_data(**existing_data)
+
+    async def fake_get_user_and_admin(_):
+        return {"id": user.id}, False
+
+    original_cancel = handlers.cancel_handler
+
+    async def spy_cancel(msg, st):
+        spy_cancel.called = True
+        await original_cancel(msg, st)
+
+    spy_cancel.called = False
+
+    monkeypatch.setattr(handlers, "_get_user_and_admin", fake_get_user_and_admin, raising=False)
+    monkeypatch.setattr(handlers, "cancel_handler", spy_cancel, raising=False)
+
+    await handler(message, state)
+
+    assert spy_cancel.called, "cancel_handler should be triggered"
+    assert await state.get_state() is None
+    assert await state.get_data() == {}
+    assert events, "cancel_handler should respond to the user"
+    assert any("Действие отменено" in text for text, _ in events)
+
+
 async def test_notify_admins_error_path_keeps_flow(monkeypatch):
     events: list[tuple[str, dict]] = []
     user = DummyFromUser(user_id=404, username="student")

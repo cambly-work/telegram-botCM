@@ -48,8 +48,11 @@ from keyboards import (
     BROADCAST_KEYS_BUTTON,
     BROADCAST_PRACTICE_BUTTON,
     BROADCAST_TEMPLATES_BUTTON,
+    CANCEL_TEXT,
     LEARNING_PROGRESS_BUTTON,
     MATERIALS_CATALOG_BUTTON,
+    analysis_confirm_keyboard,
+    cancel_keyboard,
     materials_menu_keyboard,
     learning_menu_keyboard,
     profile_menu_keyboard,
@@ -303,3 +306,13 @@ def test_profile_menu_keyboard_adds_progress_button():
 def test_admin_user_card_keyboard_contains_progress_control():
     rows = _keyboard_texts(admin_user_card_keyboard())
     assert ADMIN_USERS_EDIT_PROGRESS in rows[1]
+
+
+def test_cancel_keyboard_contains_cancel_button():
+    rows = _keyboard_texts(cancel_keyboard())
+    assert any(CANCEL_TEXT in row for row in rows)
+
+
+def test_analysis_confirm_keyboard_contains_cancel_button():
+    rows = _keyboard_texts(analysis_confirm_keyboard())
+    assert any(CANCEL_TEXT in row for row in rows)
