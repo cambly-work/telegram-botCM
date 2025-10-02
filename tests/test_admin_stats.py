@@ -72,25 +72,36 @@ def _default_stats() -> dict:
     }
 
 
-def test_admin_stats_forms_includes_applicants_names_and_usernames():
+def test_admin_stats_forms_default_summary_without_applicant_table():
     stats = _default_stats()
     text = handlers._format_admin_stats_forms(stats)
 
-    assert "<b>Список заявителей</b>" in text
-    assert "Иван Иванов" in text
-    assert "@ivan_test" in text
-    assert "Пётр Петров" in text
-    assert "@petr_petrov" in text
+    assert "<b>Список заявителей</b>" not in text
+    assert "Иван Иванов" not in text
+    assert "@ivan_test" not in text
+    assert "Пётр Петров" not in text
+    assert "@petr_petrov" not in text
 
 
 def test_admin_stats_forms_handles_missing_usernames():
     stats = _default_stats()
-    stats["forms"]["sessions_details"][0]["username"] = ""
-    stats["forms"]["sessions_details"][0]["tg_user_id"] = 112233
+    stats["forms"]["test_requests"]["entries"][0]["username"] = ""
+    stats["forms"]["test_requests"]["entries"][0]["tg_user_id"] = 112233
 
-    text = handlers._format_admin_stats_forms(stats)
+    text = handlers._format_admin_stats_forms(stats, status_filter="waiting")
 
     assert "112233" in text
+
+
+def test_admin_stats_forms_waiting_filter_shows_applicants():
+    stats = _default_stats()
+
+    text = handlers._format_admin_stats_forms(stats, status_filter="waiting")
+
+    assert "<b>Список заявителей</b>" in text
+    assert "Иван Иванов" in text
+    assert "@ivan_test" in text
+    assert "Пётр Петров" not in text
 
 
 def test_admin_stats_forms_filter_limits_entries():

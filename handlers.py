@@ -84,6 +84,7 @@ from keyboards import (
     ADMIN_FORMS_FILTER_ALL,
     admin_forms_filter_keyboard,
     admin_forms_filter_status_from_text,
+    ADMIN_FORMS_TOGGLE_WAITING,
     BACK_TO_MAIN,
     BACK_TO_LEARNING,
     BACK_TO_MATERIALS,
@@ -2142,6 +2143,16 @@ def _is_admin_forms_filter_text(text: str | None) -> bool:
     return status is None or status in _ADMIN_FORMS_ALLOWED_STATUSES
 
 
+def _is_admin_forms_waiting_toggle(text: str | None) -> bool:
+    if not text:
+        return False
+    cleaned = text.strip()
+    for prefix in ("✅", "🔥", "•"):
+        if cleaned.startswith(prefix):
+            cleaned = cleaned[len(prefix) :].strip()
+    return cleaned == ADMIN_FORMS_TOGGLE_WAITING
+
+
 def _admin_user_segment_label(segment: str | None) -> str:
     if not segment:
         return "—"
@@ -2943,8 +2954,20 @@ def _format_admin_stats_forms(
 
     if normalized_filter and not applicant_rows:
         lines.extend(["", "По выбранному фильтру заявки не найдены."])
+    elif not normalized_filter:
+        toggle_hint = f"🔥 {ADMIN_FORMS_TOGGLE_WAITING}"
+        waiting_label = TEST_REQUEST_STATUS_LABELS.get("waiting", "В ожидании")
+        lines.extend(
+            [
+                "",
+                (
+                    f"Используйте кнопку «{toggle_hint}», чтобы показать заявки"
+                    f" в статусе «{waiting_label}»."
+                ),
+            ]
+        )
 
-    if applicant_table:
+    if normalized_filter and applicant_table:
         lines.extend(["", "<b>Список заявителей</b>", applicant_table])
 
     timestamp = _format_datetime_safe(stats.get("timestamp"))
@@ -12966,6 +12989,18 @@ async def admin_stats_forms_breakdown(message: types.Message, state: FSMContext)
     admin_id = message.from_user.id if message.from_user else None
     filter_slug = _get_admin_forms_filter(admin_id)
     await _send_admin_forms_breakdown(message, status_filter=filter_slug)
+
+
+@router.message(StateFilter("*"), F.text.func(_is_admin_forms_waiting_toggle))
+async def admin_stats_forms_toggle_waiting(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+    await _reset_state_if_needed(state)
+    admin_id = message.from_user.id if message.from_user else None
+    current = _get_admin_forms_filter(admin_id)
+    new_filter = None if current == "waiting" else "waiting"
+    _set_admin_forms_filter(admin_id, new_filter)
+    await _send_admin_forms_breakdown(message, status_filter=_get_admin_forms_filter(admin_id))
 
 
 @router.message(StateFilter("*"), F.text.func(_is_admin_forms_filter_text))
