@@ -259,12 +259,18 @@ def test_admin_settings_keyboard_no_content_shortcuts():
         "payments_manual_review": False,
         "show_weekly_materials": True,
         "show_schedule": False,
+        "notify_registration": True,
+        "notify_form_analysis": False,
+        "notify_form_test": True,
     }
     labels = {
         "payments_open": "Окно оплаты",
         "payments_manual_review": "Ручная проверка оплат",
         "show_weekly_materials": "Материалы недели",
         "show_schedule": "Расписание",
+        "notify_registration": "Уведомления о регистрациях",
+        "notify_form_analysis": "Уведомления о разборе",
+        "notify_form_test": "Уведомления о тесте",
     }
 
     rows = _keyboard_texts(admin_settings_keyboard(flags, labels))
@@ -275,10 +281,16 @@ def test_admin_settings_keyboard_no_content_shortcuts():
     assert ADMIN_CONTENT_MENU not in flattened
     assert ADMIN_TEXTS_ENTRY not in flattened
 
-    assert flattened[0] == "✅ Окно оплаты"
-    assert flattened[1] == "❌ Ручная проверка оплат"
-    assert flattened[2] == "✅ Материалы недели"
-    assert flattened[3] == "❌ Расписание"
+    expected = [
+        "✅ Окно оплаты",
+        "❌ Ручная проверка оплат",
+        "✅ Материалы недели",
+        "❌ Расписание",
+        "✅ Уведомления о регистрациях",
+        "❌ Уведомления о разборе",
+        "✅ Уведомления о тесте",
+    ]
+    assert flattened[: len(expected)] == expected
 
 
 def test_profile_menu_keyboard_adds_progress_button():

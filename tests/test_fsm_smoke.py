@@ -176,6 +176,92 @@ async def test_registration_smoke_flow(monkeypatch):
     assert execute_calls
 
 
+async def test_registration_notifies_admins_when_enabled(monkeypatch):
+    events: list[tuple[str, dict]] = []
+    user = DummyFromUser(user_id=808, username="newbie")
+    message = DummyMessage("+79991234567", user, events)
+    state = DummyState()
+    await state.set_state(handlers.RegistrationStates.waiting_phone)
+
+    notifications: list[str] = []
+
+    async def fake_execute(*args, **kwargs):
+        return None
+
+    async def fake_get_user(_):
+        return {
+            "id": 55,
+            "full_name": "New User",
+            "email": "user@example.com",
+        }
+
+    async def fake_get_content(key, fallback):
+        if key == "settings.notify_registration":
+            return "true"
+        return fallback
+
+    def fake_render_content(template: str, **kwargs):
+        return template.format(**{k: v for k, v in kwargs.items() if isinstance(v, str)})
+
+    async def fake_notify(text: str):
+        notifications.append(text)
+
+    monkeypatch.setattr(handlers, "execute", fake_execute, raising=False)
+    monkeypatch.setattr(handlers, "get_user_with_id", fake_get_user, raising=False)
+    monkeypatch.setattr(handlers, "is_admin_id", lambda _: False, raising=False)
+    monkeypatch.setattr(handlers, "get_content", fake_get_content, raising=False)
+    monkeypatch.setattr(handlers, "render_content", fake_render_content, raising=False)
+    monkeypatch.setattr(handlers, "_get_notify_admins", lambda: fake_notify, raising=False)
+    monkeypatch.setattr(handlers, "_notify_admins_cached", None, raising=False)
+
+    await handlers.registration_receive_phone(message, state)
+
+    assert notifications and "Новая регистрация" in notifications[0]
+
+
+async def test_registration_notifications_disabled(monkeypatch):
+    events: list[tuple[str, dict]] = []
+    user = DummyFromUser(user_id=909, username="quiet")
+    message = DummyMessage("+79991234567", user, events)
+    state = DummyState()
+    await state.set_state(handlers.RegistrationStates.waiting_phone)
+
+    notifications: list[str] = []
+
+    async def fake_execute(*args, **kwargs):
+        return None
+
+    async def fake_get_user(_):
+        return {
+            "id": 77,
+            "full_name": "Silent User",
+            "email": "silent@example.com",
+        }
+
+    async def fake_get_content(key, fallback):
+        if key == "settings.notify_registration":
+            return "false"
+        return fallback
+
+    def fake_render_content(template: str, **kwargs):
+        return template.format(**{k: v for k, v in kwargs.items() if isinstance(v, str)})
+
+    async def fake_notify(text: str):
+        notifications.append(text)
+
+    monkeypatch.setattr(handlers, "execute", fake_execute, raising=False)
+    monkeypatch.setattr(handlers, "get_user_with_id", fake_get_user, raising=False)
+    monkeypatch.setattr(handlers, "is_admin_id", lambda _: False, raising=False)
+    monkeypatch.setattr(handlers, "get_content", fake_get_content, raising=False)
+    monkeypatch.setattr(handlers, "render_content", fake_render_content, raising=False)
+    monkeypatch.setattr(handlers, "_get_notify_admins", lambda: fake_notify, raising=False)
+    monkeypatch.setattr(handlers, "_notify_admins_cached", None, raising=False)
+
+    await handlers.registration_receive_phone(message, state)
+
+    assert notifications == []
+
+
 async def test_hw_answer_to_feedback_transition(monkeypatch):
     events: list[tuple[str, dict]] = []
     user = DummyFromUser()
@@ -190,8 +276,12 @@ async def test_hw_answer_to_feedback_transition(monkeypatch):
     async def fake_mark_done(*args, **kwargs):
         return None
 
+    async def fake_grant_weekly_key(*args, **kwargs):
+        return {"success": True, "updated": False}
+
     monkeypatch.setattr(handlers, "get_user_with_id", fake_get_user, raising=False)
     monkeypatch.setattr(handlers, "mark_lesson_done", fake_mark_done, raising=False)
+    monkeypatch.setattr(handlers, "grant_weekly_key", fake_grant_weekly_key, raising=False)
 
     await handlers.hw_receive_answer(message, state)
     assert await state.get_state() == handlers.HWStates.waiting_feedback.state
@@ -285,9 +375,217 @@ async def test_notify_admins_on_test_cancel(monkeypatch):
     monkeypatch.setattr(handlers, "_get_user_and_admin", fake_get_user_and_admin, raising=False)
     monkeypatch.setattr(handlers, "_get_notify_admins", lambda: fake_notify, raising=False)
     monkeypatch.setattr(handlers, "_notify_admins_cached", fake_notify, raising=False)
+    async def fake_get_bool_setting(key: str, default: bool = True) -> bool:
+        if key == "notify_form_test":
+            return True
+        return default
+
+    monkeypatch.setattr(handlers, "get_bool_setting", fake_get_bool_setting, raising=False)
 
     await handlers.cancel_handler(message, state)
     assert notifications and "Заявка на тест отменена" in notifications[0]
+
+
+async def test_test_notifications_disabled(monkeypatch):
+    events: list[tuple[str, dict]] = []
+    user = DummyFromUser(user_id=404, username="candidate")
+    message = DummyMessage("Аня", user, events)
+    state = DummyState()
+    await state.set_state(handlers.TestStates.waiting_name)
+    await state.update_data(
+        test_birthdate=date(1992, 8, 24).isoformat(), test_form_slug="test", test_user_id=42
+    )
+
+    notifications: list[str] = []
+
+    async def fake_get_user_and_admin(_):
+        return {"id": 42, "name": ""}, False
+
+    async def fake_mark_form_started(*args, **kwargs):
+        return None
+
+    async def fake_upsert_request(*args, **kwargs):
+        return None
+
+    async def fake_get_content(key, fallback):
+        return fallback
+
+    def fake_render_content(template: str, **kwargs):
+        return template.format(**{k: v for k, v in kwargs.items() if isinstance(v, str)})
+
+    async def fake_get_bool_setting(key: str, default: bool = True) -> bool:
+        if key == "notify_form_test":
+            return False
+        return default
+
+    async def fake_notify(text: str):
+        notifications.append(text)
+
+    monkeypatch.setattr(handlers, "_get_user_and_admin", fake_get_user_and_admin, raising=False)
+    monkeypatch.setattr(handlers, "mark_form_started", fake_mark_form_started, raising=False)
+    monkeypatch.setattr(handlers, "upsert_test_request", fake_upsert_request, raising=False)
+    monkeypatch.setattr(handlers, "get_content", fake_get_content, raising=False)
+    monkeypatch.setattr(handlers, "render_content", fake_render_content, raising=False)
+    monkeypatch.setattr(handlers, "get_bool_setting", fake_get_bool_setting, raising=False)
+    monkeypatch.setattr(handlers, "_get_notify_admins", lambda: fake_notify, raising=False)
+    monkeypatch.setattr(handlers, "_notify_admins_cached", fake_notify, raising=False)
+
+    await handlers.test_collect_name(message, state)
+
+    assert notifications == []
+
+
+async def test_test_cancel_notifications_disabled(monkeypatch):
+    events: list[tuple[str, dict]] = []
+    user = DummyFromUser(user_id=505)
+    message = DummyMessage("Отмена", user, events)
+    state = DummyState()
+    await state.set_state(handlers.TestStates.waiting_birthdate)
+    await state.update_data(test_birthdate=date(1990, 1, 1).isoformat(), test_user_id=99)
+
+    notifications: list[str] = []
+
+    async def fake_get_user_and_admin(_):
+        return {"id": 99, "name": ""}, False
+
+    async def fake_get_bool_setting(key: str, default: bool = True) -> bool:
+        if key == "notify_form_test":
+            return False
+        return default
+
+    async def fake_notify(text: str):
+        notifications.append(text)
+
+    monkeypatch.setattr(handlers, "_get_user_and_admin", fake_get_user_and_admin, raising=False)
+    monkeypatch.setattr(handlers, "get_bool_setting", fake_get_bool_setting, raising=False)
+    monkeypatch.setattr(handlers, "_get_notify_admins", lambda: fake_notify, raising=False)
+    monkeypatch.setattr(handlers, "_notify_admins_cached", fake_notify, raising=False)
+
+    await handlers.cancel_handler(message, state)
+
+    assert notifications == []
+
+
+async def test_form_done_notifications_enabled(monkeypatch):
+    events: list[tuple[str, dict]] = []
+    user = DummyFromUser(user_id=707, username="applicant")
+    message = DummyMessage("/form_done", user, events)
+    state = DummyState()
+    command = SimpleNamespace(args="analysis")
+
+    notifications: list[str] = []
+
+    async def fake_mark_form_completed(user_id: int, slug: str):
+        return {"user_id": user_id, "slug": slug}, True
+
+    async def fake_get_user(_):
+        return {"id": 101, "name": "Applicant"}
+
+    async def fake_get_bool_setting(key: str, default: bool = True) -> bool:
+        if key == "notify_form_analysis":
+            return True
+        return default
+
+    async def fake_get_content(key, fallback):
+        if key.startswith("forms.completed."):
+            return "Готово"
+        return fallback
+
+    def fake_render_content(template: str, **kwargs):
+        return template
+
+    async def fake_gen_invite_link():
+        return None
+
+    async def fake_notify(text: str):
+        notifications.append(text)
+
+    import app as app_module
+
+    form_done_handlers = sorted(
+        [
+            h.callback
+            for h in handlers.router.message.handlers
+            if getattr(h.callback, "__name__", "") == "cmd_form_done"
+        ],
+        key=lambda fn: getattr(fn, "__code__", None).co_firstlineno if hasattr(fn, "__code__") else 0,
+    )
+    assert form_done_handlers, "cmd_form_done handler should be registered"
+    handler = form_done_handlers[0]
+
+    monkeypatch.setattr(handlers, "mark_form_completed", fake_mark_form_completed, raising=False)
+    monkeypatch.setattr(handlers, "get_user_with_id", fake_get_user, raising=False)
+    monkeypatch.setattr(handlers, "is_admin_id", lambda _: False, raising=False)
+    monkeypatch.setattr(handlers, "get_bool_setting", fake_get_bool_setting, raising=False)
+    monkeypatch.setattr(handlers, "get_content", fake_get_content, raising=False)
+    monkeypatch.setattr(handlers, "render_content", fake_render_content, raising=False)
+    monkeypatch.setattr(app_module, "gen_invite_link", fake_gen_invite_link, raising=False)
+    monkeypatch.setattr(app_module, "notify_admins", fake_notify, raising=False)
+
+    await handler(message, command, state)
+
+    assert notifications and "Завершена анкета" in notifications[0]
+
+
+async def test_form_done_notifications_disabled(monkeypatch):
+    events: list[tuple[str, dict]] = []
+    user = DummyFromUser(user_id=808, username="silent")
+    message = DummyMessage("/form_done", user, events)
+    state = DummyState()
+    command = SimpleNamespace(args="analysis")
+
+    notifications: list[str] = []
+
+    async def fake_mark_form_completed(user_id: int, slug: str):
+        return {"user_id": user_id, "slug": slug}, True
+
+    async def fake_get_user(_):
+        return {"id": 202, "name": "Silent"}
+
+    async def fake_get_bool_setting(key: str, default: bool = True) -> bool:
+        if key == "notify_form_analysis":
+            return False
+        return default
+
+    async def fake_get_content(key, fallback):
+        if key.startswith("forms.completed."):
+            return "Готово"
+        return fallback
+
+    def fake_render_content(template: str, **kwargs):
+        return template
+
+    async def fake_gen_invite_link():
+        return None
+
+    async def fake_notify(text: str):
+        notifications.append(text)
+
+    import app as app_module
+
+    form_done_handlers = sorted(
+        [
+            h.callback
+            for h in handlers.router.message.handlers
+            if getattr(h.callback, "__name__", "") == "cmd_form_done"
+        ],
+        key=lambda fn: getattr(fn, "__code__", None).co_firstlineno if hasattr(fn, "__code__") else 0,
+    )
+    assert form_done_handlers, "cmd_form_done handler should be registered"
+    handler = form_done_handlers[0]
+
+    monkeypatch.setattr(handlers, "mark_form_completed", fake_mark_form_completed, raising=False)
+    monkeypatch.setattr(handlers, "get_user_with_id", fake_get_user, raising=False)
+    monkeypatch.setattr(handlers, "is_admin_id", lambda _: False, raising=False)
+    monkeypatch.setattr(handlers, "get_bool_setting", fake_get_bool_setting, raising=False)
+    monkeypatch.setattr(handlers, "get_content", fake_get_content, raising=False)
+    monkeypatch.setattr(handlers, "render_content", fake_render_content, raising=False)
+    monkeypatch.setattr(app_module, "gen_invite_link", fake_gen_invite_link, raising=False)
+    monkeypatch.setattr(app_module, "notify_admins", fake_notify, raising=False)
+
+    await handler(message, command, state)
+
+    assert notifications == []
 
 
 async def test_support_cancel_removes_keyboard(monkeypatch):

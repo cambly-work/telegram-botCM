@@ -1632,6 +1632,9 @@ _ADMIN_SETTINGS_DEFAULTS: dict[str, bool] = {
     "payments_manual_review": False,
     "show_weekly_materials": True,
     "show_schedule": True,
+    "notify_registration": True,
+    "notify_form_analysis": True,
+    "notify_form_test": True,
 }
 
 _ADMIN_BROADCAST_SETTINGS_DEFAULTS: dict[str, bool] = {
@@ -1651,7 +1654,32 @@ _ADMIN_SETTINGS_LABELS: dict[str, str] = {
     "payments_manual_review": "Ручная проверка оплат",
     "show_weekly_materials": "Материалы недели",
     "show_schedule": "Расписание",
+    "notify_registration": "Уведомления о регистрациях",
+    "notify_form_analysis": "Уведомления о разборе",
+    "notify_form_test": "Уведомления о тесте",
 }
+
+_ADMIN_SETTINGS_STATUS_TEXTS: dict[str, tuple[str, str]] = {
+    "payments_open": ("открыто", "закрыто"),
+    "payments_manual_review": ("включена", "выключена"),
+    "show_weekly_materials": ("доступны", "скрыты"),
+    "show_schedule": ("показывается", "скрыто"),
+    "notify_registration": ("включены", "выключены"),
+    "notify_form_analysis": ("включены", "выключены"),
+    "notify_form_test": ("включены", "выключены"),
+}
+
+_FORM_NOTIFY_FLAGS: dict[str, str] = {
+    FORM_SLUG_ANALYSIS: "notify_form_analysis",
+    FORM_SLUG_TEST: "notify_form_test",
+}
+
+
+async def _is_form_notification_enabled(slug: str) -> bool:
+    flag_key = _FORM_NOTIFY_FLAGS.get(slug)
+    if not flag_key:
+        return True
+    return await _is_admin_setting_enabled(flag_key)
 
 _PROFILE_STATUS_TITLES: dict[str, str] = {
     "lead_funnel": "Без подписки",
@@ -3222,6 +3250,10 @@ async def get_broadcast_flags() -> dict[str, bool]:
     for setting_key, default in _ADMIN_BROADCAST_SETTINGS_DEFAULTS.items():
         flags[setting_key] = await get_bool_setting(setting_key, default)
     return flags
+
+
+async def _is_admin_setting_enabled(key: str) -> bool:
+    return await get_bool_setting(key, _ADMIN_SETTINGS_DEFAULTS.get(key, True))
 
 
 def _safe_int(value: Any, default: int = 0) -> int:
@@ -6313,15 +6345,26 @@ async def send_admin_settings(
     from_callback: bool = False,
 ) -> None:
     flags = await get_menu_flags()
-    text = (
-        "Тонкие настройки бота\n\n"
-        f"Окно оплаты: {'открыто' if flags.get('payments_open', True) else 'закрыто'}\n"
-        f"Ручная проверка оплат: {'включена' if flags.get('payments_manual_review', False) else 'выключена'}\n"
-        f"Материалы недели: {'доступны' if flags.get('show_weekly_materials', True) else 'скрыты'}\n"
-        f"Расписание: {'показывается' if flags.get('show_schedule', True) else 'скрыто'}\n\n"
-        "Используй кнопки ниже, чтобы включать и выключать опции.\n\n"
-        "Готово? Вернись через «⬅️ В админку» или открой главное меню."
+    lines = ["Тонкие настройки бота", ""]
+    for key, label in _ADMIN_SETTINGS_LABELS.items():
+        enabled_text, disabled_text = _ADMIN_SETTINGS_STATUS_TEXTS.get(
+            key, ("включено", "выключено")
+        )
+        status_text = (
+            enabled_text
+            if flags.get(key, _ADMIN_SETTINGS_DEFAULTS.get(key, True))
+            else disabled_text
+        )
+        lines.append(f"{label}: {status_text}")
+
+    lines.extend(
+        [
+            "",
+            "Используй кнопки ниже, чтобы включать и выключать опции.",
+            "Готово? Вернись через «⬅️ В админку» или открой главное меню.",
+        ]
     )
+    text = "\n".join(lines)
     keyboard = admin_settings_keyboard(flags, _ADMIN_SETTINGS_LABELS)
 
     await message.answer(text, reply_markup=keyboard)
@@ -7210,6 +7253,33 @@ async def registration_receive_phone(message: types.Message, state: FSMContext):
 
     await message.answer(completion_text, reply_markup=kb)
 
+    notify_admins = _get_notify_admins()
+    if notify_admins and await _is_admin_setting_enabled("notify_registration"):
+        card_lines = [
+            "🆕 Новая регистрация",
+            f"tg-id: <code>{message.from_user.id}</code>",
+        ]
+        if user and user.get("id"):
+            card_lines.append(f"user-id: <code>{user['id']}</code>")
+        full_name = user.get("full_name") if user else None
+        if full_name:
+            card_lines.append(f"Имя: {html.escape(full_name)}")
+        if message.from_user.username:
+            card_lines.append(f"Username: @{message.from_user.username}")
+        email = (user or {}).get("email")
+        if email:
+            card_lines.append(f"Email: {html.escape(email)}")
+        if phone:
+            card_lines.append(f"Телефон: {html.escape(phone)}")
+        try:
+            await notify_admins("\n".join(card_lines))
+        except Exception as exc:
+            logger.warning(
+                "registration: notify_admins failed tg_user_id=%s err=%s",
+                message.from_user.id,
+                exc,
+            )
+
 async def _reset_state_if_needed(state: FSMContext) -> bool:
     """Сбрасывает активный FSM-стейт, если он есть."""
     if state is None:
@@ -7592,7 +7662,7 @@ async def cmd_form_done(message: types.Message, command: CommandObject, state: F
             response_lines.append(invite_text)
         else:
             response_lines.append("Мы передали заявку администраторам и свяжемся с тобой в ближайшее время.")
-        if notify_admins:
+        if notify_admins and await _is_form_notification_enabled(slug):
             username = message.from_user.username
             display = f"@{username}" if username else message.from_user.full_name or message.from_user.id
             if invite_generated:
@@ -7979,7 +8049,7 @@ async def test_collect_birthdate(message: types.Message, state: FSMContext):
     await message.answer(name_prompt, reply_markup=cancel_keyboard())
 
     notify_admins = _get_notify_admins()
-    if notify_admins:
+    if notify_admins and await _is_form_notification_enabled(FORM_SLUG_TEST):
         stage_label = "ожидание имени"
         card_lines = [
             "🧪 Заявка на тест: обновление",
@@ -8078,7 +8148,7 @@ async def test_collect_name(message: types.Message, state: FSMContext):
     await message.answer(thanks_text, reply_markup=keyboard)
 
     notify_admins = _get_notify_admins()
-    if notify_admins:
+    if notify_admins and await _is_form_notification_enabled(FORM_SLUG_TEST):
         card_lines = [
             "🧪 Новая запись на тестирование",
             f"tg-id: <code>{message.from_user.id}</code>",
@@ -8491,7 +8561,11 @@ async def cancel_handler(message: types.Message, state: FSMContext):
         birthdate_raw = (data or {}).get("test_birthdate") if data else None
         stored_user_id = (data or {}).get("test_user_id") if data else None
         resolved_user_id = stored_user_id or ((user or {}).get("id") if user else None)
-        if notify_admins and (birthdate_raw or resolved_user_id):
+        if (
+            notify_admins
+            and await _is_form_notification_enabled(FORM_SLUG_TEST)
+            and (birthdate_raw or resolved_user_id)
+        ):
             stage_label = (
                 "ожидание даты рождения"
                 if current_state == TestStates.waiting_birthdate.state
