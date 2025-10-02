@@ -42,7 +42,7 @@ ADMIN_CATEGORY_CONTENT = "🧾 Контент"
 ADMIN_CATEGORY_COMMUNICATIONS = "📣 Коммуникации"
 ADMIN_CATEGORY_SERVICE = "🛠️ Служебное"
 
-ADMIN_USERS_BUTTON = "📋 Управление участницами"
+ADMIN_USERS_BUTTON = "📋 Управление участницами (участниками)"
 ADMIN_SCHEDULE_BUTTON = "📆 Расписание"
 ADMIN_SCHEDULE_ADD_EVENT = "➕ Добавить событие"
 ADMIN_SCHEDULE_EDIT_EVENT = "✏️ Изменить событие"

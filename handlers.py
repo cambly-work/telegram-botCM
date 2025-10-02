@@ -1924,7 +1924,7 @@ _CONTENT_PREVIEW_KEY_PLAIN_RE = re.compile(r"Ключ[:：]\s*([A-Za-z0-9_.-]{3,
 _BROADCAST_SEGMENT_LABELS: dict[str, str] = {
     "all": "Все пользователи",
     "lead_funnel": "Лиды без доступа",
-    "member_active": "Активные участницы",
+    "member_active": "Активные участницы (участники)",
     "member_expired": "Доступ истёк",
     "keys_waiting": "Ожидают ключи",
     "keys_delivered": "Ключи выданы",
@@ -3718,7 +3718,7 @@ async def send_rules_section(
         "menu.rules",
         (
             "Правила CODE: Магнетизм.\n\n"
-            "1. Уважение к участникам.\n"
+            "1. Уважение к участницам (участникам).\n"
             "2. Только полезный контент.\n"
             "3. Без спама и рекламы.\n"
             "4. Конфиденциальность.\n"
@@ -5331,7 +5331,7 @@ async def send_weekly_materials_section(
         locked_text = await get_content(
             "menu.weekly.locked",
             (
-                "Материалы недели доступны участницам клуба.\n\n"
+                "Материалы недели доступны участницам (участникам) клуба.\n\n"
                 f"Оформи доступ в разделе «{ADMIN_PAYMENTS_BUTTON}», и бот пришлёт ссылки автоматически."
             ),
         )
@@ -5577,7 +5577,7 @@ async def send_materials_category_section(
         await _materials_update_state(state, stack=stack, options=options)
         locked_key = f"{category['content_key']}.locked"
         locked_default = (
-            f"Раздел «{category['title']}» доступен участницам клуба.\n\n"
+            f"Раздел «{category['title']}» доступен участницам (участникам) клуба.\n\n"
             f"Оформи доступ в разделе «{ADMIN_PAYMENTS_BUTTON}», и бот пришлёт ссылки автоматически."
         )
         locked_text = await get_content(locked_key, locked_default)
@@ -5670,7 +5670,7 @@ async def send_schedule_section(
         locked_text = await get_content(
             "menu.schedule.locked",
             (
-                "Расписание доступно участницам клуба.\n\n"
+                "Расписание доступно участницам (участникам) клуба.\n\n"
                 "Активируй доступ — и бот пришлёт ближайшие эфиры."
             ),
         )
@@ -6042,7 +6042,7 @@ async def send_admin_menu(
     admin_text_default = (
         "<b>Админ-панель</b>\n\n"
         "Выберите категорию, чтобы открыть нужные инструменты:\n"
-        f"• {ADMIN_CATEGORY_USERS} — сегменты участниц, подтверждение оплат и управление ключами.\n"
+        f"• {ADMIN_CATEGORY_USERS} — сегменты участниц (участников), подтверждение оплат и управление ключами.\n"
         f"• {ADMIN_CATEGORY_CONTENT} — тексты экранов, материалы и сценарии бота.\n"
         f"• {ADMIN_CATEGORY_COMMUNICATIONS} — рассылки и календарь событий.\n"
         f"• {ADMIN_CATEGORY_SERVICE} — статистика, настройки и диагностика.\n\n"
@@ -6059,7 +6059,7 @@ async def send_admin_menu(
 async def send_admin_users_category(message: types.Message) -> None:
     default_text = (
         f"<b>{ADMIN_CATEGORY_USERS}</b>\n\n"
-        f"• «{ADMIN_USERS_BUTTON}» — перейти к сегментам участниц и карточкам профилей.\n"
+        f"• «{ADMIN_USERS_BUTTON}» — перейти к сегментам участниц (участников) и карточкам профилей.\n"
         f"• «{ADMIN_PAYMENTS_BUTTON}» — подтвердить или приостановить доступ вручную.\n"
         f"• «{ADMIN_KEYS_BUTTON}» — управлять ключами для недель и потоков.\n\n"
         f"Возвращайся к разделам через «{BACK_TO_ADMIN}» или нажми «{BACK_TO_MAIN}», чтобы выйти."
@@ -6376,7 +6376,7 @@ async def send_admin_behavior_menu(message: types.Message) -> None:
         "Здесь можно быстро настроить ключевые сценарии и управление доступами:\n"
         "• Изменить приветствие при /start.\n"
         "• Обновить сообщение после регистрации.\n"
-        "• Управлять шагами онбординга для новых участниц.\n"
+        "• Управлять шагами онбординга для новых участниц (участников).\n"
         "• Открыть раздел «💳 Оплаты» для ручных операций с платежами.\n\n"
         "Выбирай нужный раздел — бот попросит только текст, остальное он сделает сам."
     )
@@ -6416,7 +6416,7 @@ async def send_admin_payments_overview(message: types.Message) -> None:
             "<i>Подсказки:</i>",
             "• Кнопки 🔓/🔒 открывают или закрывают окно оплаты.",
             "• «🧾 Последние платежи» обновляет список ниже.",
-            "• «✅ Подтвердить доступ» и «🚫 Приостановить доступ» требуют @username или ID участницы.",
+            "• «✅ Подтвердить доступ» и «🚫 Приостановить доступ» требуют @username или ID участницы (участника).",
             "• Кнопки отметки платежа добавят отметку о ручной проверке в карточку платежа.",
             f"• «{BACK_TO_BEHAVIOR}» вернёт к настройкам сценариев и оплат.",
         ]
@@ -6436,7 +6436,7 @@ async def send_admin_onboarding_menu(message: types.Message) -> None:
     summary = format_onboarding_summary(steps)
     text = (
         "<b>Шаги онбординга</b>\n\n"
-        "Эти сообщения бот отправляет новым участницам после оплаты.\n"
+        "Эти сообщения бот отправляет новым участницам (участникам) после оплаты.\n"
         "Можно редактировать существующие шаги, добавлять новые и удалять лишние.\n\n"
         f"<b>Текущий сценарий:</b>\n{html.escape(summary)}"
     )
@@ -7504,7 +7504,7 @@ async def _handle_schedule_reminder_request(message: types.Message, event_id: in
 
     if not await is_member(user_row):
         await message.answer(
-            "Напоминания доступны участницам клуба. Активируй доступ, чтобы получать уведомления о событиях."
+            "Напоминания доступны участницам (участникам) клуба. Активируй доступ, чтобы получать уведомления о событиях."
         )
         return
 
@@ -9445,7 +9445,7 @@ async def admin_users_menu_entry(message: types.Message, state: FSMContext):
         await state.set_state(AdminUserStates.choosing_segment)
         await message.answer(
             f"<b>{ADMIN_USERS_BUTTON}</b>\n\n"
-            "Выберите сегмент, чтобы посмотреть список участниц и управлять доступом.",
+            "Выберите сегмент, чтобы посмотреть список участниц (участников) и управлять доступом.",
             reply_markup=admin_users_segments_keyboard(),
             disable_web_page_preview=True,
         )
@@ -9681,7 +9681,7 @@ async def admin_users_progress_prompt(message: types.Message, state: FSMContext)
     data = await state.get_data()
     user_id = (data or {}).get("selected_user_id")
     if not user_id:
-        await message.answer("Сначала выбери участницу в списке пользователей.")
+        await message.answer("Сначала выбери участницу (участника) в списке пользователей.")
         return
 
     instructions = (
@@ -10553,7 +10553,7 @@ async def admin_materials_grant_prompt(message: types.Message, state: FSMContext
         "<b>Выдача персонального доступа</b>\n\n"
         "Формат: <code>slug=podcasts;tg=123456789;days=30</code>.\n\n"
         "• <code>slug</code> — идентификатор категории.\n"
-        "• <code>tg</code> или <code>user</code> — Telegram ID или внутренний id участницы.\n"
+        "• <code>tg</code> или <code>user</code> — Telegram ID или внутренний id участницы (участника).\n"
         "• <code>days</code> или <code>expires</code> — срок действия (опционально)."
     )
     await message.answer(
@@ -10782,7 +10782,7 @@ async def admin_materials_receive_revoke(message: types.Message, state: FSMConte
 
     if not removed:
         await message.answer(
-            "Для этой участницы не было активных доступов.",
+            "Для этой участницы (участника) не было активных доступов.",
             reply_markup=admin_materials_keyboard(),
         )
         return
@@ -10873,7 +10873,7 @@ async def admin_keys_receive_bulk(message: types.Message, state: FSMContext):
     users, lookup_errors = await _collect_users_from_payload(payload)
     if not users and lookup_errors:
         await message.answer(
-            "Не удалось найти участниц:\n" + "\n".join(f"• {err}" for err in lookup_errors),
+            "Не удалось найти участниц (участников):\n" + "\n".join(f"• {err}" for err in lookup_errors),
             reply_markup=cancel_keyboard(),
             parse_mode=ParseMode.HTML,
         )
@@ -10881,7 +10881,7 @@ async def admin_keys_receive_bulk(message: types.Message, state: FSMContext):
 
     if not users:
         await message.answer(
-            "Укажи хотя бы один Telegram ID или внутренний идентификатор участницы.",
+            "Укажи хотя бы один Telegram ID или внутренний идентификатор участницы (участника).",
             reply_markup=cancel_keyboard(),
         )
         return
@@ -10927,7 +10927,7 @@ async def admin_keys_receive_bulk(message: types.Message, state: FSMContext):
         },
     )
 
-    summary_lines = [f"<b>Неделя {week}</b>: обработано {len(users)} участниц."]
+    summary_lines = [f"<b>Неделя {week}</b>: обработано {len(users)} участниц (участников)."]
     summary_lines.append(f"Новых ключей: {len(granted)}")
     if already_active:
         summary_lines.append("Уже активны: " + ", ".join(map(str, already_active)))
@@ -10997,7 +10997,7 @@ async def admin_keys_receive_revoke(message: types.Message, state: FSMContext):
     users, lookup_errors = await _collect_users_from_payload(payload)
     if not users and lookup_errors:
         await message.answer(
-            "Не удалось найти участниц:\n" + "\n".join(f"• {err}" for err in lookup_errors),
+            "Не удалось найти участниц (участников):\n" + "\n".join(f"• {err}" for err in lookup_errors),
             reply_markup=cancel_keyboard(),
             parse_mode=ParseMode.HTML,
         )
@@ -11005,7 +11005,7 @@ async def admin_keys_receive_revoke(message: types.Message, state: FSMContext):
 
     if not users:
         await message.answer(
-            "Укажи хотя бы один Telegram ID или внутренний идентификатор участницы.",
+            "Укажи хотя бы один Telegram ID или внутренний идентификатор участницы (участника).",
             reply_markup=cancel_keyboard(),
         )
         return
@@ -11046,7 +11046,7 @@ async def admin_keys_receive_revoke(message: types.Message, state: FSMContext):
         },
     )
 
-    summary_lines = [f"<b>Неделя {week}</b>: обработано {len(users)} участниц."]
+    summary_lines = [f"<b>Неделя {week}</b>: обработано {len(users)} участниц (участников)."]
     summary_lines.append(f"Отозвано ключей: {len(revoked_ids)}")
     if already_revoked:
         summary_lines.append("Уже отозваны: " + ", ".join(map(str, already_revoked)))
@@ -12736,7 +12736,7 @@ async def admin_payments_prompt_grant(message: types.Message, state: FSMContext)
     await _reset_state_if_needed(state)
     await state.set_state(AdminPaymentsStates.waiting_access_user)
     await message.answer(
-        "Отправь @username или ID участницы и срок доступа.\n"
+        "Отправь @username или ID участницы (участника) и срок доступа.\n"
         "Примеры: <code>@username 30</code>, <code>123456789 2024-12-31</code>,"
         " <code>@username forever</code>.",
         parse_mode=ParseMode.HTML,
@@ -12750,7 +12750,7 @@ async def admin_payments_prompt_revoke(message: types.Message, state: FSMContext
     await _reset_state_if_needed(state)
     await state.set_state(AdminPaymentsStates.waiting_revoke_user)
     await message.answer(
-        "Отправь @username или ID участницы, чтобы приостановить доступ.",
+        "Отправь @username или ID участницы (участника), чтобы приостановить доступ.",
     )
 
 
@@ -12775,14 +12775,14 @@ async def admin_payments_receive_access(message: types.Message, state: FSMContex
 
     text = (message.text or "").strip()
     if not text:
-        await message.answer("Нужны данные: отправь @username или ID участницы.")
+        await message.answer("Нужны данные: отправь @username или ID участницы (участника).")
         return
 
     parts = text.split()
     target = parts[0]
     user = await _admin_find_user(target)
     if not user:
-        await message.answer("Не нашла такую участницу. Проверь ник или ID и попробуй снова.")
+        await message.answer("Не нашла такую участницу (участника). Проверь ник или ID и попробуй снова.")
         return
 
     access_until, consumed = _parse_admin_access_token(parts[1] if len(parts) > 1 else None)
@@ -12829,7 +12829,7 @@ async def admin_payments_receive_revoke(message: types.Message, state: FSMContex
 
     user = await _admin_find_user(text)
     if not user:
-        await message.answer("Не нашла такую участницу. Проверь данные и попробуй снова.")
+        await message.answer("Не нашла такую участницу (участника). Проверь данные и попробуй снова.")
         return
 
     await _admin_set_member_expired(user["id"])
@@ -14022,7 +14022,7 @@ async def cmd_debug(message: types.Message, command: CommandObject):
         stats_text = (
             f"Статистика\n\n"
             f"Всего пользователей: {users_count}\n"
-            f"Активных участников: {active_users}\n"
+            f"Активных участниц (участников): {active_users}\n"
             f"Выполнено уроков: {lessons_completed}\n"
             f"Оставлено отзывов: {feedback_count}"
         )
