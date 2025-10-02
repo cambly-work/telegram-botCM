@@ -13,14 +13,21 @@ def _admin_ids() -> set[int]:
     """Parse administrator IDs from the environment."""
     ids = os.getenv("ADMIN_IDS", "")
     parsed_ids: set[int] = set()
-    for raw_value in re.split(r"[\s,]+", ids):
-        value = raw_value.strip()
-        if not value:
+    tokens = re.findall(r"[^\s,;]+", ids)
+
+    for token in tokens:
+        matches = re.findall(r"-?\d+", token)
+        if not matches:
+            LOGGER.warning("Invalid ADMIN_IDS token: %r", token)
             continue
-        try:
-            parsed_ids.add(int(value))
-        except ValueError:
-            LOGGER.warning("Invalid ADMIN_IDS token: %r", value)
+
+        for match in matches:
+            try:
+                parsed_ids.add(int(match))
+            except ValueError:
+                LOGGER.warning("Invalid ADMIN_IDS token: %r", token)
+                break
+
     return parsed_ids
 
 
