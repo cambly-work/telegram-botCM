@@ -91,6 +91,9 @@ from keyboards import (
     SKIP_FEEDBACK,
     FEEDBACK_OPTIONS,
     CANCEL_TEXT,
+    ANALYSIS_BACK_BUTTON,
+    ANALYSIS_CONFIRM_BUTTON,
+    analysis_confirm_keyboard,
     ADMIN_TEXTS_ENTRY,
     ADMIN_CONTENT_MENU,
     ADMIN_CONTENT_VIEW,
@@ -229,6 +232,45 @@ FORM_ALIASES: dict[str, str] = {
     "тест": FORM_SLUG_TEST,
     "magnetism-window": "magnetism-window",
     "magnetism_window": "magnetism-window",
+}
+
+_ANALYSIS_DEFAULT_INTRO = (
+    "Персональный разбор.\n\n"
+    "Ответь на несколько вопросов, чтобы оставить заявку."
+)
+_ANALYSIS_DEFAULT_FORMAT_PROMPT = (
+    "Какой формат встречи тебе удобен? Например: Zoom, очно или другой вариант."
+)
+_ANALYSIS_DEFAULT_FORMAT_RETRY = (
+    "Напиши, какой формат разбора тебе подходит. Можно указать несколько вариантов."
+)
+_ANALYSIS_DEFAULT_CONTACT_PROMPT = (
+    "Оставь контакт для связи: телефон, @username или другой удобный способ."
+)
+_ANALYSIS_DEFAULT_CONTACT_RETRY = (
+    "Нужен контакт, чтобы мы связались. Напиши телефон, @username или ссылку."
+)
+_ANALYSIS_DEFAULT_TIME_PROMPT = (
+    "Когда тебе удобно провести разбор? Укажи несколько вариантов даты и времени."
+)
+_ANALYSIS_DEFAULT_TIME_RETRY = (
+    "Напиши, когда тебе комфортно провести разбор. Можно предложить несколько слотов."
+)
+_ANALYSIS_DEFAULT_CONFIRM_PROMPT = (
+    "Проверь заявку:\n"
+    "• Формат: {format}\n"
+    "• Контакт: {contact}\n"
+    "• Время: {time}\n\n"
+    "Если всё верно — нажми «{confirm_button}»."
+)
+_ANALYSIS_DEFAULT_SUCCESS = (
+    "Заявка сохранена. Команда свяжется с тобой, чтобы согласовать детали."
+)
+
+_ANALYSIS_BACK_TOKENS = {
+    ANALYSIS_BACK_BUTTON.casefold(),
+    ANALYSIS_BACK_BUTTON.strip().casefold(),
+    "назад",
 }
 
 WEEKLY_KEY_STATUS_ACTIVE = "active"
@@ -747,6 +789,42 @@ async def upsert_test_request(
     except Exception as e:
         logger.warning(
             "test_request upsert failed: tg_user_id=%s err=%s",
+            tg_user_id,
+            e,
+        )
+        return None
+
+
+async def create_analysis_request(
+    *,
+    tg_user_id: int,
+    user_id: Optional[int],
+    preferred_format: str,
+    contact: str,
+    preferred_time: str,
+) -> Optional[dict]:
+    try:
+        return await fetchrow(
+            """
+            INSERT INTO analysis_requests (
+                tg_user_id,
+                user_id,
+                preferred_format,
+                contact,
+                preferred_time
+            )
+            VALUES ($1, $2, $3, $4, $5)
+            RETURNING *
+            """,
+            tg_user_id,
+            user_id,
+            preferred_format,
+            contact,
+            preferred_time,
+        )
+    except Exception as e:
+        logger.warning(
+            "analysis_request insert failed: tg_user_id=%s err=%s",
             tg_user_id,
             e,
         )
@@ -1520,6 +1598,15 @@ class RegistrationStates(StatesGroup):
     waiting_name = State()      # ждём имя пользователя
     waiting_email = State()     # ждём email
     waiting_phone = State()     # ждём телефон
+
+
+class AnalysisStates(StatesGroup):
+    waiting_format = State()
+    waiting_contact = State()
+    waiting_time = State()
+    waiting_confirm = State()
+
+
 class HWStates(StatesGroup):
     waiting_answer = State()  # ждём текстовый ответ на ДЗ ({"lesson_num": int})
     waiting_feedback = State() # ждём обратную связь после урока
@@ -1722,7 +1809,15 @@ _ADMIN_TEXT_GROUPS: dict[str, list[tuple[str, str]]] = {
     ],
     "🎓 Раздел «Обучение»": [
         ("Подсказка «Обучение»", "menu.prompts.learning"),
-        ("Окно «Записаться на разбор»", "menu.analysis"),
+        ("Заявка на разбор: вводное сообщение", "menu.analysis.intro"),
+        ("Заявка на разбор: вопрос формата", "menu.analysis.format_prompt"),
+        ("Заявка на разбор: уточнение формата", "menu.analysis.format_retry"),
+        ("Заявка на разбор: вопрос контакта", "menu.analysis.contact_prompt"),
+        ("Заявка на разбор: уточнение контакта", "menu.analysis.contact_retry"),
+        ("Заявка на разбор: вопрос времени", "menu.analysis.time_prompt"),
+        ("Заявка на разбор: уточнение времени", "menu.analysis.time_retry"),
+        ("Заявка на разбор: подтверждение", "menu.analysis.confirm_prompt"),
+        ("Заявка на разбор: успешное сообщение", "menu.analysis.success"),
         ("Окно «Пройти тест»", "menu.test"),
         ("Сообщение «Все уроки пройдены»", "menu.funnel.completed"),
     ],
@@ -1806,6 +1901,14 @@ _ADMIN_TEXT_PLACEHOLDERS: dict[str, dict[str, list[str]]] = {
         "required": ["{form_label}"],
         "optional": [],
     },
+    "menu.analysis.confirm_prompt": {
+        "required": ["{format}", "{contact}", "{time}"],
+        "optional": ["{confirm_button}"],
+    },
+    "menu.analysis.success": {
+        "required": ["{format}", "{contact}", "{time}"],
+        "optional": [],
+    },
 }
 
 _ADMIN_TEXT_PREVIEW_SAMPLE_DATA: dict[str, str] = {
@@ -1844,6 +1947,10 @@ _ADMIN_TEXT_PREVIEW_SAMPLE_DATA: dict[str, str] = {
     "support_site_label": "🌐 Сайт",
     "support_site_description": "Полезные ссылки.",
     "support_site_display": "https://codemagnetic.ru",
+    "format": "Zoom",
+    "contact": "@codemagnetic",
+    "time": "Будни после 18:00",
+    "confirm_button": ANALYSIS_CONFIRM_BUTTON,
 }
 
 
@@ -3737,54 +3844,156 @@ async def send_rules_section(
     )
 
 
-async def send_analysis_section(
-    message: types.Message,
-    user: Optional[dict],
-    is_admin: bool,
-    *,
-    from_callback: bool = False,
-) -> None:
-    user_row = user or await get_user_with_id(message.from_user.id)
-    if not user_row:
-        user_row = await ensure_user(message.from_user)
+def _analysis_normalize_text(text: str | None) -> str:
+    return (text or "").strip().casefold()
 
-    default_url = "https://forms.example.com/analysis"
-    template = await get_content(
+
+def _analysis_is_back(text: str | None) -> bool:
+    if not text:
+        return False
+    normalized = _analysis_normalize_text(text)
+    if not normalized:
+        return False
+    arrowless = normalized.replace("⬅️", "").strip()
+    return normalized in _ANALYSIS_BACK_TOKENS or arrowless == "назад"
+
+
+async def _analysis_get_intro_text() -> str:
+    intro_text, _ = await get_content_with_source("menu.analysis.intro", "")
+    if intro_text.strip():
+        return intro_text
+    legacy_text, _ = await get_content_with_source(
         "menu.analysis",
-        (
-            "Персональный разбор.\n\n"
-            "Заполни форму → мы назначим время.\n\n"
-            "{analysis_url}"
-        ),
+        _ANALYSIS_DEFAULT_INTRO,
     )
-    analysis_text = render_content(
+    return legacy_text or _ANALYSIS_DEFAULT_INTRO
+
+
+async def _analysis_send_format_prompt(
+    message: types.Message,
+    *,
+    include_intro: bool = False,
+) -> None:
+    parts: list[str] = []
+    if include_intro:
+        intro = (await _analysis_get_intro_text()).strip()
+        if intro:
+            parts.append(intro)
+    prompt = (await get_content("menu.analysis.format_prompt", _ANALYSIS_DEFAULT_FORMAT_PROMPT)).strip()
+    if prompt:
+        parts.append(prompt)
+    text = "\n\n".join(parts) if parts else _ANALYSIS_DEFAULT_FORMAT_PROMPT
+    await message.answer(text, reply_markup=cancel_keyboard())
+
+
+async def _analysis_send_format_retry(message: types.Message) -> None:
+    retry_text = await get_content("menu.analysis.format_retry", _ANALYSIS_DEFAULT_FORMAT_RETRY)
+    text = retry_text.strip() or _ANALYSIS_DEFAULT_FORMAT_RETRY
+    await message.answer(text, reply_markup=cancel_keyboard())
+
+
+async def _analysis_send_contact_prompt(message: types.Message) -> None:
+    prompt = await get_content("menu.analysis.contact_prompt", _ANALYSIS_DEFAULT_CONTACT_PROMPT)
+    text = prompt.strip() or _ANALYSIS_DEFAULT_CONTACT_PROMPT
+    await message.answer(
+        text,
+        reply_markup=cancel_keyboard(extra_buttons=[ANALYSIS_BACK_BUTTON]),
+    )
+
+
+async def _analysis_send_contact_retry(message: types.Message) -> None:
+    retry_text = await get_content("menu.analysis.contact_retry", _ANALYSIS_DEFAULT_CONTACT_RETRY)
+    text = retry_text.strip() or _ANALYSIS_DEFAULT_CONTACT_RETRY
+    await message.answer(
+        text,
+        reply_markup=cancel_keyboard(extra_buttons=[ANALYSIS_BACK_BUTTON]),
+    )
+
+
+async def _analysis_send_time_prompt(message: types.Message) -> None:
+    prompt = await get_content("menu.analysis.time_prompt", _ANALYSIS_DEFAULT_TIME_PROMPT)
+    text = prompt.strip() or _ANALYSIS_DEFAULT_TIME_PROMPT
+    await message.answer(
+        text,
+        reply_markup=cancel_keyboard(extra_buttons=[ANALYSIS_BACK_BUTTON]),
+    )
+
+
+async def _analysis_send_time_retry(message: types.Message) -> None:
+    retry_text = await get_content("menu.analysis.time_retry", _ANALYSIS_DEFAULT_TIME_RETRY)
+    text = retry_text.strip() or _ANALYSIS_DEFAULT_TIME_RETRY
+    await message.answer(
+        text,
+        reply_markup=cancel_keyboard(extra_buttons=[ANALYSIS_BACK_BUTTON]),
+    )
+
+
+def _analysis_escape_value(value: str | None) -> str:
+    if value is None:
+        return "—"
+    cleaned = value.strip()
+    return html.escape(cleaned) if cleaned else "—"
+
+
+def _analysis_display_values(data: dict) -> tuple[str, str, str]:
+    return (
+        _analysis_escape_value(data.get("analysis_format")),
+        _analysis_escape_value(data.get("analysis_contact")),
+        _analysis_escape_value(data.get("analysis_time")),
+    )
+
+
+async def _analysis_send_confirm_prompt(message: types.Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    if not data or not all(data.get(key) for key in ("analysis_format", "analysis_contact", "analysis_time")):
+        await state.set_state(AnalysisStates.waiting_format)
+        await _analysis_send_format_prompt(message)
+        return
+
+    format_value, contact_value, time_value = _analysis_display_values(data)
+    template = await get_content(
+        "menu.analysis.confirm_prompt",
+        _ANALYSIS_DEFAULT_CONFIRM_PROMPT,
+    )
+    rendered = render_content(
         template,
-        analysis_url=default_url,
-        ANALYSIS_URL=default_url,
+        format=format_value,
+        contact=contact_value,
+        time=time_value,
+        confirm_button=ANALYSIS_CONFIRM_BUTTON,
+    )
+    fallback = render_content(
+        _ANALYSIS_DEFAULT_CONFIRM_PROMPT,
+        format=format_value,
+        contact=contact_value,
+        time=time_value,
+        confirm_button=ANALYSIS_CONFIRM_BUTTON,
+    )
+    await message.answer(
+        rendered.strip() or fallback,
+        reply_markup=analysis_confirm_keyboard(),
     )
 
-    if user_row:
-        form_url = extract_first_url(analysis_text) or default_url
-        slug = resolve_form_slug(form_url, FORM_SLUG_ANALYSIS)
-        if slug:
-            try:
-                await mark_form_started(user_row["id"], slug)
-            except Exception as e:
-                logger.warning(
-                    "form_session: mark start failed user_id=%s slug=%s: %s",
-                    user_row.get("id"),
-                    slug,
-                    e,
-                )
 
-    await answer_with_main_menu(
-        message,
-        user_row,
-        is_admin,
-        analysis_text,
-        section="learning",
-        from_callback=from_callback,
+async def _analysis_success_text(data: dict) -> str:
+    format_value, contact_value, time_value = _analysis_display_values(data)
+    template = await get_content(
+        "menu.analysis.success",
+        _ANALYSIS_DEFAULT_SUCCESS,
     )
+    rendered = render_content(
+        template,
+        format=format_value,
+        contact=contact_value,
+        time=time_value,
+    )
+    fallback = render_content(
+        _ANALYSIS_DEFAULT_SUCCESS,
+        format=format_value,
+        contact=contact_value,
+        time=time_value,
+    )
+    return rendered.strip() or fallback
 
 
 async def send_test_section(
@@ -7962,8 +8171,161 @@ async def menu_magnetism_window(message: types.Message, state: FSMContext):
 @router.message(StateFilter("*"), F.text == "Записаться на разбор")
 async def menu_analysis(message: types.Message, state: FSMContext):
     await _reset_state_if_needed(state)
+    user, _ = await _get_user_and_admin(message)
+    if not user:
+        user = await ensure_user(message.from_user)
+
+    user_id = (user or {}).get("id")
+    if user_id:
+        try:
+            await mark_form_started(user_id, FORM_SLUG_ANALYSIS)
+        except Exception as exc:
+            logger.warning(
+                "analysis_request: mark start failed user_id=%s err=%s",
+                user_id,
+                exc,
+            )
+
+    await state.set_state(AnalysisStates.waiting_format)
+    await state.update_data(analysis_user_id=user_id)
+    await _analysis_send_format_prompt(message, include_intro=True)
+
+
+@router.message(AnalysisStates.waiting_format)
+async def analysis_collect_format(message: types.Message, state: FSMContext):
+    text = (message.text or "").strip()
+    if _analysis_is_back(text):
+        await _analysis_send_format_prompt(message)
+        return
+
+    if not text:
+        await _analysis_send_format_retry(message)
+        return
+
+    await state.update_data(analysis_format=text)
+    await state.set_state(AnalysisStates.waiting_contact)
+    await _analysis_send_contact_prompt(message)
+
+
+@router.message(AnalysisStates.waiting_contact)
+async def analysis_collect_contact(message: types.Message, state: FSMContext):
+    text = (message.text or "").strip()
+    if _analysis_is_back(text):
+        await state.set_state(AnalysisStates.waiting_format)
+        await _analysis_send_format_prompt(message)
+        return
+
+    if not text:
+        await _analysis_send_contact_retry(message)
+        return
+
+    await state.update_data(analysis_contact=text)
+    await state.set_state(AnalysisStates.waiting_time)
+    await _analysis_send_time_prompt(message)
+
+
+@router.message(AnalysisStates.waiting_time)
+async def analysis_collect_time(message: types.Message, state: FSMContext):
+    text = (message.text or "").strip()
+    if _analysis_is_back(text):
+        await state.set_state(AnalysisStates.waiting_contact)
+        await _analysis_send_contact_prompt(message)
+        return
+
+    if not text:
+        await _analysis_send_time_retry(message)
+        return
+
+    await state.update_data(analysis_time=text)
+    await state.set_state(AnalysisStates.waiting_confirm)
+    await _analysis_send_confirm_prompt(message, state)
+
+
+@router.message(AnalysisStates.waiting_confirm)
+async def analysis_confirm_request(message: types.Message, state: FSMContext):
+    text = (message.text or "").strip()
+    if _analysis_is_back(text):
+        await state.set_state(AnalysisStates.waiting_time)
+        await _analysis_send_time_prompt(message)
+        return
+
+    if _analysis_normalize_text(text) != _analysis_normalize_text(ANALYSIS_CONFIRM_BUTTON):
+        await _analysis_send_confirm_prompt(message, state)
+        return
+
+    data = await state.get_data()
+    if not data or not all(
+        (data.get(key) or "").strip() for key in ("analysis_format", "analysis_contact", "analysis_time")
+    ):
+        await state.set_state(AnalysisStates.waiting_format)
+        await _analysis_send_format_prompt(message, include_intro=True)
+        return
+
+    format_raw = (data.get("analysis_format") or "").strip()
+    contact_raw = (data.get("analysis_contact") or "").strip()
+    time_raw = (data.get("analysis_time") or "").strip()
+    user_id = data.get("analysis_user_id")
+
+    request_row = await create_analysis_request(
+        tg_user_id=message.from_user.id,
+        user_id=user_id,
+        preferred_format=format_raw,
+        contact=contact_raw,
+        preferred_time=time_raw,
+    )
+
+    if user_id and request_row:
+        try:
+            await mark_form_completed(user_id, FORM_SLUG_ANALYSIS)
+        except Exception as exc:
+            logger.warning(
+                "analysis_request: mark complete failed user_id=%s err=%s",
+                user_id,
+                exc,
+            )
+
+    notify_admins = _get_notify_admins()
+    if request_row and notify_admins and await _is_form_notification_enabled(FORM_SLUG_ANALYSIS):
+        try:
+            format_value, contact_value, time_value = _analysis_display_values(data)
+            card_lines = [
+                "🧭 Заявка на разбор",
+                f"tg-id: <code>{message.from_user.id}</code>",
+            ]
+            if user_id:
+                card_lines.append(f"user-id: <code>{user_id}</code>")
+            full_name = (message.from_user.full_name or "").strip()
+            if full_name:
+                card_lines.append(f"Имя: {html.escape(full_name)}")
+            card_lines.extend(
+                [
+                    f"Формат: {format_value}",
+                    f"Контакт: {contact_value}",
+                    f"Время: {time_value}",
+                ]
+            )
+            await notify_admins("\n".join(card_lines))
+        except Exception as exc:
+            logger.warning(
+                "analysis_request: notify_admins failed tg_user_id=%s err=%s",
+                message.from_user.id,
+                exc,
+            )
+
+    success_text = await _analysis_success_text(data)
+    await state.clear()
+
     user, is_admin = await _get_user_and_admin(message)
-    await send_analysis_section(message, user, is_admin)
+    if not user:
+        user = await ensure_user(message.from_user)
+
+    await answer_with_main_menu(
+        message,
+        user,
+        is_admin,
+        success_text,
+        section="learning",
+    )
 
 
 @router.message(StateFilter("*"), F.text == "Пройти тест")
