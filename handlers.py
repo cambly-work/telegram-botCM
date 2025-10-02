@@ -37,6 +37,12 @@ except ImportError:  # aiogram < 3.13.1 compatibility
 from urllib.parse import parse_qs, urlparse, quote_plus, urlencode
 from aiogram.dispatcher.middlewares.base import BaseMiddleware
 from asyncpg import UndefinedColumnError
+from admin_forms import (
+    TEST_REQUEST_CLOSED_STATUSES,
+    TEST_REQUEST_STATUS_LABELS,
+    TEST_REQUEST_STATUS_ORDER,
+    get_status_label,
+)
 from db import fetchrow, fetch, execute, transaction
 from settings import ADMIN_IDS, YOOMONEY_CHECKOUT_URL
 from keyboards import (
@@ -75,6 +81,9 @@ from keyboards import (
     admin_broadcast_templates_keyboard,
     admin_broadcast_delete_keyboard,
     BROADCAST_TEMPLATE_PREFIX,
+    ADMIN_FORMS_FILTER_ALL,
+    admin_forms_filter_keyboard,
+    admin_forms_filter_status_from_text,
     BACK_TO_MAIN,
     BACK_TO_LEARNING,
     BACK_TO_MATERIALS,
@@ -2096,31 +2105,36 @@ _ADMIN_PAYMENT_STATUS_LABELS: dict[str, str] = {
     "failed": "Ошибка",
 }
 
-_TEST_REQUEST_STATUS_ORDER = [
-    "waiting",
-    "booked",
-    "in_progress",
-    "done",
-    "cancelled",
-    "archived",
-]
-
-_TEST_REQUEST_STATUS_LABELS: dict[str, str] = {
-    "waiting": "В ожидании",
-    "booked": "Запланировано",
-    "in_progress": "В работе",
-    "done": "Завершено",
-    "cancelled": "Отменено",
-    "archived": "Архив",
-}
-
-_TEST_REQUEST_CLOSED_STATUSES = {"done", "completed", "cancelled", "archived", "rejected"}
-
-
 def _admin_user_segment_from_text(text: str | None) -> str | None:
     if not text:
         return None
     return _ADMIN_USER_BUTTON_SEGMENTS.get(text.strip())
+
+
+_ADMIN_FORMS_ALLOWED_STATUSES = set(TEST_REQUEST_STATUS_LABELS)
+_ADMIN_FORMS_ACTIVE_FILTERS: dict[int, str] = {}
+
+
+def _get_admin_forms_filter(admin_id: int | None) -> str | None:
+    if not admin_id:
+        return None
+    return _ADMIN_FORMS_ACTIVE_FILTERS.get(admin_id)
+
+
+def _set_admin_forms_filter(admin_id: int | None, status: str | None) -> None:
+    if not admin_id:
+        return
+    if status and status in _ADMIN_FORMS_ALLOWED_STATUSES:
+        _ADMIN_FORMS_ACTIVE_FILTERS[admin_id] = status
+    else:
+        _ADMIN_FORMS_ACTIVE_FILTERS.pop(admin_id, None)
+
+
+def _is_admin_forms_filter_text(text: str | None) -> bool:
+    valid, status = admin_forms_filter_status_from_text(text)
+    if not valid:
+        return False
+    return status is None or status in _ADMIN_FORMS_ALLOWED_STATUSES
 
 
 def _admin_user_segment_label(segment: str | None) -> str:
@@ -2703,7 +2717,11 @@ def _format_admin_stats_payments(stats: dict[str, Any]) -> str:
     ])
 
 
-def _format_admin_stats_forms(stats: dict[str, Any]) -> str:
+def _format_admin_stats_forms(
+    stats: dict[str, Any],
+    *,
+    status_filter: str | None = None,
+) -> str:
     headers, rows, align = _generate_form_sessions_table_data(stats)
     forms_table = _render_stats_table(headers, rows, align)
 
@@ -2716,22 +2734,28 @@ def _format_admin_stats_forms(stats: dict[str, Any]) -> str:
     request_entries = test_requests.get("entries") or []
     session_entries = forms_data.get("sessions_details") or []
 
+    normalized_filter: str | None = None
+    if status_filter:
+        candidate = str(status_filter).strip().lower()
+        if candidate in _ADMIN_FORMS_ALLOWED_STATUSES:
+            normalized_filter = candidate
+
     if not total_requests and status_rows:
         total_requests = sum(int(item.get("count") or 0) for item in status_rows)
     if not active_requests and status_rows:
         active_requests = sum(
             int(item.get("count") or 0)
             for item in status_rows
-            if str(item.get("status") or "").lower() not in _TEST_REQUEST_CLOSED_STATUSES
+            if str(item.get("status") or "").lower() not in TEST_REQUEST_CLOSED_STATUSES
         )
 
     if status_rows:
         def _status_key(item: dict[str, Any]) -> tuple[int, str]:
             status = str(item.get("status") or "")
             try:
-                return _TEST_REQUEST_STATUS_ORDER.index(status), status
+                return TEST_REQUEST_STATUS_ORDER.index(status), status
             except ValueError:
-                return len(_TEST_REQUEST_STATUS_ORDER), status
+                return len(TEST_REQUEST_STATUS_ORDER), status
 
         ordered_statuses = sorted(status_rows, key=_status_key)
     else:
@@ -2740,19 +2764,42 @@ def _format_admin_stats_forms(stats: dict[str, Any]) -> str:
     status_lines: list[str] = []
     for item in ordered_statuses:
         status = str(item.get("status") or "")
-        label = _TEST_REQUEST_STATUS_LABELS.get(status, status or "—")
+        label = TEST_REQUEST_STATUS_LABELS.get(status, status or "—")
         count = int(item.get("count") or 0)
         last_updated = _format_datetime_safe(item.get("last_updated"))
         suffix = f" (обновлено: {last_updated})" if last_updated != "—" else ""
-        is_active = str(status).lower() not in _TEST_REQUEST_CLOSED_STATUSES
+        status_lower = str(status).lower()
+        is_active = status_lower not in TEST_REQUEST_CLOSED_STATUSES
         marker = "🔥" if is_active else "✅"
-        status_lines.append(f"{marker} {label}: <b>{count}</b>{suffix}")
+        line = f"{marker} {label}: <b>{count}</b>{suffix}"
+        if normalized_filter and status_lower == normalized_filter:
+            line += " — <i>выбранный фильтр</i>"
+        status_lines.append(line)
 
     updates = [item.get("last_updated") for item in ordered_statuses if item.get("last_updated")]
     last_status_update = max(updates) if updates else None
 
     applicant_headers = ["Имя", "Ник", "Детали"]
     applicant_rows: list[list[str]] = []
+
+    if normalized_filter:
+        filtered_requests = [
+            item
+            for item in request_entries
+            if str(item.get("status") or "").lower() == normalized_filter
+        ]
+    else:
+        filtered_requests = list(request_entries)
+
+    def _session_status_slug(item: dict[str, Any]) -> str:
+        return "done" if item.get("completed_at") is not None else "in_progress"
+
+    if normalized_filter:
+        filtered_sessions = [
+            item for item in session_entries if _session_status_slug(item) == normalized_filter
+        ]
+    else:
+        filtered_sessions = list(session_entries)
 
     def _format_username(value: str | None, tg_user_id: int | None = None) -> str:
         username = (value or "").strip()
@@ -2764,8 +2811,8 @@ def _format_admin_stats_forms(stats: dict[str, Any]) -> str:
 
     def _append_request_row(item: dict[str, Any]) -> None:
         status = str(item.get("status") or "")
-        is_active = status.lower() not in _TEST_REQUEST_CLOSED_STATUSES
-        label = _TEST_REQUEST_STATUS_LABELS.get(status, status or "—")
+        is_active = status.lower() not in TEST_REQUEST_CLOSED_STATUSES
+        label = TEST_REQUEST_STATUS_LABELS.get(status, status or "—")
         marker = "🔥" if is_active else "✅"
         timestamp = _format_datetime_safe(item.get("updated_at") or item.get("created_at"))
 
@@ -2830,12 +2877,12 @@ def _format_admin_stats_forms(stats: dict[str, Any]) -> str:
 
     def _request_sort_key(item: dict[str, Any]) -> tuple[int, float, int]:
         status = str(item.get("status") or "").lower()
-        is_closed = status in _TEST_REQUEST_CLOSED_STATUSES
+        is_closed = status in TEST_REQUEST_CLOSED_STATUSES
         updated = _sort_timestamp(item.get("updated_at") or item.get("created_at"))
         identifier = int(item.get("id") or 0)
         return (1 if is_closed else 0, -updated, -identifier)
 
-    for entry in sorted(request_entries, key=_request_sort_key):
+    for entry in sorted(filtered_requests, key=_request_sort_key):
         _append_request_row(entry)
 
     def _session_sort_key(item: dict[str, Any]) -> tuple[int, float, int]:
@@ -2844,7 +2891,7 @@ def _format_admin_stats_forms(stats: dict[str, Any]) -> str:
         identifier = int(item.get("id") or 0)
         return (1 if completed else 0, -started, -identifier)
 
-    for entry in sorted(session_entries, key=_session_sort_key):
+    for entry in sorted(filtered_sessions, key=_session_sort_key):
         _append_session_row(entry)
 
     applicant_table = (
@@ -2853,21 +2900,44 @@ def _format_admin_stats_forms(stats: dict[str, Any]) -> str:
         else None
     )
 
+    if normalized_filter:
+        display_total_requests = len(filtered_requests)
+        display_active_requests = sum(
+            1
+            for item in filtered_requests
+            if str(item.get("status") or "").lower() not in TEST_REQUEST_CLOSED_STATUSES
+        )
+    else:
+        display_total_requests = total_requests
+        display_active_requests = active_requests
+
+    filter_label = (
+        get_status_label(normalized_filter)
+        if normalized_filter
+        else ADMIN_FORMS_FILTER_ALL
+    )
+
     lines = [
         "<b>🗂 Формы и консультации</b>",
+        "",
+        f"Текущий фильтр: <b>{html.escape(filter_label)}</b>",
+        "Нажмите «Все», чтобы показать все записи.",
         "",
         "<b>Формы</b>",
         forms_table,
         "",
         "<b>Заявки на консультацию</b>",
-        f"Всего заявок: <b>{total_requests}</b>",
-        f"Активных (ожидают действий): <b>{active_requests}</b>",
+        f"Всего заявок: <b>{display_total_requests}</b>",
+        f"Активных (ожидают действий): <b>{display_active_requests}</b>",
     ]
 
     if status_lines:
         lines.extend(["", "По статусам:", *status_lines])
     else:
         lines.extend(["", "Пока нет заявок в базе."])
+
+    if normalized_filter and not applicant_rows:
+        lines.extend(["", "По выбранному фильтру заявки не найдены."])
 
     if applicant_table:
         lines.extend(["", "<b>Список заявителей</b>", applicant_table])
@@ -2882,6 +2952,21 @@ def _format_admin_stats_forms(stats: dict[str, Any]) -> str:
     ])
 
     return "\n".join(lines)
+
+
+async def _send_admin_forms_breakdown(
+    message: types.Message,
+    *,
+    status_filter: str | None,
+) -> None:
+    stats = await _collect_admin_stats_data()
+    text = _format_admin_stats_forms(stats, status_filter=status_filter)
+    await message.answer(
+        text,
+        reply_markup=admin_forms_filter_keyboard(active_filter=status_filter),
+        disable_web_page_preview=True,
+        parse_mode=ParseMode.HTML,
+    )
 
 
 async def _admin_set_member_active(user_id: int, access_until: Optional[datetime]) -> None:
@@ -12873,15 +12958,22 @@ async def admin_stats_forms_breakdown(message: types.Message, state: FSMContext)
     if not is_admin_id(message.from_user.id):
         return
     await _reset_state_if_needed(state)
+    admin_id = message.from_user.id if message.from_user else None
+    filter_slug = _get_admin_forms_filter(admin_id)
+    await _send_admin_forms_breakdown(message, status_filter=filter_slug)
 
-    stats = await _collect_admin_stats_data()
-    text = _format_admin_stats_forms(stats)
-    await message.answer(
-        text,
-        reply_markup=admin_stats_keyboard(),
-        disable_web_page_preview=True,
-        parse_mode=ParseMode.HTML,
-    )
+
+@router.message(StateFilter("*"), F.text.func(_is_admin_forms_filter_text))
+async def admin_stats_forms_apply_filter(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+    valid, status = admin_forms_filter_status_from_text(message.text)
+    if not valid:
+        return
+    await _reset_state_if_needed(state)
+    admin_id = message.from_user.id if message.from_user else None
+    _set_admin_forms_filter(admin_id, status)
+    await _send_admin_forms_breakdown(message, status_filter=_get_admin_forms_filter(admin_id))
 
 
 @router.message(F.text == ADMIN_STATS_RECENT_PAYMENTS)

@@ -2,6 +2,8 @@
 import os
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 
+from admin_forms import TEST_REQUEST_STATUS_LABELS, TEST_REQUEST_STATUS_ORDER
+
 # ──────────────────────────────────────────────────────────────────────────────
 # ENV / helpers
 # ──────────────────────────────────────────────────────────────────────────────
@@ -108,6 +110,25 @@ BROADCAST_KEYS_BUTTON = "🔑 Ключи"
 BROADCAST_PRACTICE_BUTTON = "🧘 Практика"
 BROADCAST_TEMPLATES_BUTTON = "🗂 Шаблоны рассылок"
 BROADCAST_TEMPLATE_PREFIX = "🗂 Шаблон: "
+
+ADMIN_FORMS_FILTER_ALL = "Все"
+ADMIN_FORMS_FILTER_LABEL_TO_STATUS: dict[str, str] = {
+    TEST_REQUEST_STATUS_LABELS.get(status, status): status for status in TEST_REQUEST_STATUS_ORDER
+}
+
+
+def admin_forms_filter_status_from_text(text: str | None) -> tuple[bool, str | None]:
+    if not text:
+        return False, None
+
+    cleaned = text.strip()
+    for prefix in ("✅", "•"):
+        if cleaned.startswith(prefix):
+            cleaned = cleaned[len(prefix) :].strip()
+    if cleaned == ADMIN_FORMS_FILTER_ALL:
+        return True, None
+    status = ADMIN_FORMS_FILTER_LABEL_TO_STATUS.get(cleaned)
+    return (True, status) if status else (False, None)
 
 SEND_BROADCAST_BUTTON = "🚀 Отправить"
 EDIT_BROADCAST_BUTTON = "✏️ Изменить текст"
@@ -460,6 +481,45 @@ def admin_stats_keyboard() -> ReplyKeyboardMarkup:
         [KeyboardButton(text=ADMIN_STATS_FORMS_BREAKDOWN)],
         [KeyboardButton(text=BACK_TO_ADMIN), KeyboardButton(text=BACK_TO_MAIN)],
     ]
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
+
+
+def admin_forms_filter_keyboard(*, active_filter: str | None = None) -> ReplyKeyboardMarkup:
+    rows: list[list[KeyboardButton]] = [
+        [
+            KeyboardButton(
+                text=("✅ " + ADMIN_FORMS_FILTER_ALL)
+                if active_filter is None
+                else ADMIN_FORMS_FILTER_ALL
+            )
+        ]
+    ]
+
+    labels = [TEST_REQUEST_STATUS_LABELS.get(status, status) for status in TEST_REQUEST_STATUS_ORDER]
+    for idx in range(0, len(labels), 2):
+        chunk = []
+        for label in labels[idx : idx + 2]:
+            status = ADMIN_FORMS_FILTER_LABEL_TO_STATUS.get(label)
+            text = f"✅ {label}" if status == active_filter else label
+            chunk.append(KeyboardButton(text=text))
+        rows.append(chunk)
+
+    rows.append([KeyboardButton(text=ADMIN_STATS_REFRESH)])
+    rows.append(
+        [
+            KeyboardButton(text=ADMIN_STATS_USERS_BREAKDOWN),
+            KeyboardButton(text=ADMIN_STATS_LESSON_PROGRESS),
+        ]
+    )
+    rows.append(
+        [
+            KeyboardButton(text=ADMIN_STATS_PAYMENTS_BREAKDOWN),
+            KeyboardButton(text=ADMIN_STATS_RECENT_PAYMENTS),
+        ]
+    )
+    rows.append([KeyboardButton(text=ADMIN_STATS_FORMS_BREAKDOWN)])
+    rows.append([KeyboardButton(text=BACK_TO_ADMIN), KeyboardButton(text=BACK_TO_MAIN)])
+
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
 

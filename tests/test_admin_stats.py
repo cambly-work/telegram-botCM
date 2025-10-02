@@ -91,3 +91,52 @@ def test_admin_stats_forms_handles_missing_usernames():
     text = handlers._format_admin_stats_forms(stats)
 
     assert "112233" in text
+
+
+def test_admin_stats_forms_filter_limits_entries():
+    stats = _default_stats()
+    base_ts = _build_base_timestamp()
+    later_ts = base_ts + timedelta(hours=2)
+
+    stats["forms"]["test_requests"]["entries"].append(
+        {
+            "id": 6,
+            "status": "done",
+            "updated_at": later_ts,
+            "created_at": base_ts,
+            "preferred_name": "Сергей Сергеев",
+            "username": "sergey_done",
+            "tg_user_id": 192837,
+        }
+    )
+    stats["forms"]["sessions_details"].append(
+        {
+            "id": 12,
+            "form_slug": handlers.FORM_SLUG_ANALYSIS,
+            "started_at": base_ts,
+            "completed_at": later_ts,
+            "user_id": 8,
+            "full_name": "Анна Завершённая",
+            "username": "anna_completed",
+            "tg_user_id": 246810,
+        }
+    )
+
+    text = handlers._format_admin_stats_forms(stats, status_filter="done")
+
+    assert "Текущий фильтр: <b>Завершено</b>" in text
+    assert "Сергей Сергеев" in text
+    assert "Анна Завершённая" in text
+    assert "Иван Иванов" not in text
+    assert "Пётр Петров" not in text
+    assert "Всего заявок: <b>1</b>" in text
+    assert "Активных (ожидают действий): <b>0</b>" in text
+
+
+def test_admin_stats_forms_filter_empty_message():
+    stats = _default_stats()
+
+    text = handlers._format_admin_stats_forms(stats, status_filter="booked")
+
+    assert "Текущий фильтр: <b>Запланировано</b>" in text
+    assert "По выбранному фильтру заявки не найдены." in text
