@@ -9043,14 +9043,35 @@ async def admin_schedule_receive_link(message: types.Message, state: FSMContext)
 async def admin_users_menu_entry(message: types.Message, state: FSMContext):
     if not is_admin_id(message.from_user.id):
         return
-    await _reset_state_if_needed(state)
-    await state.set_state(AdminUserStates.choosing_segment)
-    await message.answer(
-        "<b>👥 Пользователи</b>\n\n"
-        "Выберите сегмент, чтобы посмотреть список участниц и управлять доступом.",
-        reply_markup=admin_users_segments_keyboard(),
-        disable_web_page_preview=True,
+    admin_id = message.from_user.id if message.from_user else None
+    button_text = (message.text or "").strip()
+    logger.info(
+        "Admin users menu requested",
+        extra={"admin_id": admin_id, "button_text": button_text},
     )
+    try:
+        await _reset_state_if_needed(state)
+        await state.set_state(AdminUserStates.choosing_segment)
+        await message.answer(
+            "<b>👥 Пользователи</b>\n\n"
+            "Выберите сегмент, чтобы посмотреть список участниц и управлять доступом.",
+            reply_markup=admin_users_segments_keyboard(),
+            disable_web_page_preview=True,
+        )
+    except Exception:
+        logger.exception(
+            "Failed to open admin users menu",
+            extra={"admin_id": admin_id},
+        )
+        try:
+            await message.answer(
+                "Не удалось открыть меню пользователей. Пожалуйста, попробуйте позже."
+            )
+        except Exception:
+            logger.debug(
+                "Failed to send admin users menu fallback message",
+                extra={"admin_id": admin_id},
+            )
 
 
 @router.message(AdminUserStates.choosing_segment, F.text.func(lambda text: _admin_user_segment_from_text(text) is not None))
