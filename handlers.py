@@ -2364,9 +2364,29 @@ def _format_admin_test_request_entry(entry: dict) -> str:
     created_text = _format_datetime_safe(entry.get("created_at"))
     updated_text = _format_datetime_safe(entry.get("updated_at") or entry.get("created_at"))
 
+    birthdate_value = entry.get("birthdate")
+    birthdate_display = "—"
+    if isinstance(birthdate_value, date):
+        birthdate_display = _format_birthdate(birthdate_value)
+    elif isinstance(birthdate_value, str):
+        normalized_birthdate = birthdate_value.strip()
+        if normalized_birthdate:
+            try:
+                parsed_birthdate = date.fromisoformat(normalized_birthdate)
+            except ValueError:
+                birthdate_display = normalized_birthdate
+            else:
+                birthdate_display = _format_birthdate(parsed_birthdate)
+    elif birthdate_value is not None:
+        birthdate_display = str(birthdate_value)
+
+    if birthdate_display != "—":
+        birthdate_display = html.escape(birthdate_display)
+
     lines = [
         f"• <b>{title}</b> — {status_label_text}",
         "  " + " · ".join(details),
+        f"  Дата рождения: {birthdate_display}",
         f"  Создана: {created_text}; обновлена: {updated_text}",
     ]
     return "\n".join(lines)
@@ -2505,6 +2525,7 @@ async def _collect_admin_stats_data() -> dict[str, Any]:
                tr.status,
                tr.created_at,
                tr.updated_at,
+               tr.birthdate,
                tr.preferred_name,
                tr.tg_user_id,
                tr.user_id,
