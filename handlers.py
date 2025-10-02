@@ -11,6 +11,7 @@ import logging
 import time
 import html
 from collections import OrderedDict
+from typing import TYPE_CHECKING
 from datetime import datetime, date, timedelta, timezone
 from zoneinfo import ZoneInfo
 from typing import Optional, Iterable, Dict, List, Callable, Awaitable, Any, Sequence
@@ -195,6 +196,9 @@ logger = logging.getLogger("handlers")
 
 
 TELEGRAM_MESSAGE_LIMIT = 4096
+
+if TYPE_CHECKING:  # pragma: no cover - for static analyzers only
+    from scheduler import get_scheduler_status as _scheduler_get_status
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -3218,6 +3222,58 @@ async def get_broadcast_flags() -> dict[str, bool]:
     for setting_key, default in _ADMIN_BROADCAST_SETTINGS_DEFAULTS.items():
         flags[setting_key] = await get_bool_setting(setting_key, default)
     return flags
+
+
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _record_get(record: Any, key: str, default: Any = None) -> Any:
+    if record is None:
+        return default
+    if isinstance(record, dict):
+        return record.get(key, default)
+    getter = getattr(record, "get", None)
+    if callable(getter):
+        return getter(key, default)
+    try:
+        return dict(record).get(key, default)  # type: ignore[arg-type]
+    except Exception:
+        return default
+
+
+def _collect_scheduler_status() -> dict[str, Any]:
+    """Return scheduler status without raising errors."""
+
+    try:
+        from scheduler import get_scheduler_status as _get_status  # type: ignore
+    except Exception as exc:  # pragma: no cover - import may fail in tests
+        logger.debug("Scheduler status unavailable: %s", exc)
+        return {"status": "unavailable", "jobs": None, "running": False}
+
+    try:
+        raw_status = _get_status() or {}
+    except Exception as exc:
+        logger.warning("Failed to retrieve scheduler status: %s", exc)
+        return {"status": "error", "jobs": None, "running": False}
+
+    if not isinstance(raw_status, dict):
+        raw_status = {"status": str(raw_status)}
+
+    status_text = str(raw_status.get("status", "unknown"))
+    jobs_value = raw_status.get("jobs")
+    jobs = _safe_int(jobs_value, default=0) if jobs_value is not None else None
+    running_value = raw_status.get("running")
+    running = bool(running_value) if running_value is not None else status_text.lower() in {"running", "started", "active"}
+
+    return {
+        "status": status_text,
+        "jobs": jobs,
+        "running": running,
+    }
 
 
 def _calculate_remind_at(scheduled_at: datetime) -> datetime:
@@ -12420,15 +12476,143 @@ async def admin_debug(message: types.Message):
             message.text,
         )
         return
-    config_text = (
-        "<b>🛠️ Диагностика</b>\n\n"
-        f"Версия: {BOT_VERSION}\n"
-        f"Часовой пояс: {BOT_TIMEZONE}\n"
-        f"Поддержка: {SUPPORT_CONTACT}\n"
-        f"Продукт ID: {AT_PRODUCT_ID_CLUB or 'Не задан'}\n"
-        f"Чат клуба: {CLUB_CHAT_ID or 'Не задан'}"
+    sections: list[str] = []
+    errors: list[str] = []
+
+    header_lines = [
+        "<b>🛠️ Диагностика</b>",
+        f"Версия: {html.escape(BOT_VERSION)}",
+        f"Часовой пояс: {html.escape(BOT_TIMEZONE)}",
+        f"Поддержка: {html.escape(SUPPORT_CONTACT)}",
+        f"Продукт ID: {html.escape(AT_PRODUCT_ID_CLUB or 'Не задан')}",
+        f"Чат клуба: {html.escape(str(CLUB_CHAT_ID or 'Не задан'))}",
+    ]
+    sections.append("\n".join(header_lines))
+
+    def _format_flags_block(title: str, flags: dict[str, bool]) -> str:
+        if not flags:
+            return f"<b>{html.escape(title)}</b>\n—"
+        lines = [f"<b>{html.escape(title)}</b>"]
+        for key in sorted(flags):
+            value = flags[key]
+            icon = "✅" if value else "⛔️"
+            lines.append(f"{icon} <code>{html.escape(str(key))}</code>")
+        return "\n".join(lines)
+
+    try:
+        menu_flags = await get_menu_flags()
+        sections.append(_format_flags_block("📋 Флаги меню", menu_flags))
+    except Exception as exc:
+        logger.exception("Failed to load menu flags")
+        errors.append(f"Флаги меню: {html.escape(str(exc))}")
+
+    try:
+        broadcast_flags = await get_broadcast_flags()
+        sections.append(_format_flags_block("📣 Рассылки", broadcast_flags))
+    except Exception as exc:
+        logger.exception("Failed to load broadcast flags")
+        errors.append(f"Рассылки: {html.escape(str(exc))}")
+
+    try:
+        scheduler_status = _collect_scheduler_status()
+        scheduler_lines = [
+            "<b>⏱ Планировщик</b>",
+            f"Статус: {html.escape(scheduler_status.get('status', 'unknown'))}",
+        ]
+        jobs = scheduler_status.get("jobs")
+        if jobs is not None:
+            scheduler_lines.append(f"Задачи: {_safe_int(jobs)}")
+        running = scheduler_status.get("running")
+        running_icon = "✅" if running else "⛔️"
+        scheduler_lines.append(f"Работает: {running_icon}")
+        sections.append("\n".join(scheduler_lines))
+    except Exception as exc:
+        logger.exception("Failed to load scheduler status")
+        errors.append(f"Планировщик: {html.escape(str(exc))}")
+
+    admin_ids_sorted = sorted(int(admin_id) for admin_id in ADMIN_IDS)
+    admin_lines = [
+        "<b>👩‍💻 Администраторы</b>",
+        f"Количество: {len(admin_ids_sorted)}",
+    ]
+    if admin_ids_sorted:
+        admin_lines.append(
+            "ID: " + ", ".join(html.escape(str(admin_id)) for admin_id in admin_ids_sorted[:10])
+            + ("…" if len(admin_ids_sorted) > 10 else "")
+        )
+    sections.append("\n".join(admin_lines))
+
+    try:
+        content_summary = await fetchrow(
+            "SELECT COUNT(*) AS total, MAX(updated_at) AS last_updated FROM content"
+        )
+        versions_summary = await fetchrow(
+            "SELECT MAX(updated_at) AS last_version FROM content_versions"
+        )
+
+        total_content = _safe_int(_record_get(content_summary, "total"))
+        last_updated = _format_datetime_safe(_record_get(content_summary, "last_updated"))
+        last_version = _format_datetime_safe(_record_get(versions_summary, "last_version"))
+
+        content_lines = [
+            "<b>🗂 Контент</b>",
+            f"Ключей: {total_content}",
+            f"Последнее обновление: {last_updated}",
+        ]
+        if last_version != "—":
+            content_lines.append(f"Последняя версия: {last_version}")
+        sections.append("\n".join(content_lines))
+    except AssertionError as exc:
+        # Обычно возникает при неинициализированном пуле БД
+        logger.warning("DB is not initialised for admin_debug: %s", exc)
+        errors.append("База данных: недоступна (пул не инициализирован)")
+    except Exception as exc:
+        logger.exception("Failed to query content diagnostics")
+        errors.append(f"Контент: {html.escape(str(exc))}")
+
+    try:
+        users_summary = await fetchrow(
+            """
+            SELECT
+                COUNT(*) AS total,
+                COUNT(*) FILTER (WHERE status='member_active') AS active,
+                COUNT(*) FILTER (WHERE status='lead_funnel') AS leads,
+                COUNT(*) FILTER (WHERE status='member_expired') AS expired
+            FROM users
+            """
+        )
+        if users_summary:
+            total_users = _safe_int(_record_get(users_summary, "total"))
+            active_users = _safe_int(_record_get(users_summary, "active"))
+            lead_users = _safe_int(_record_get(users_summary, "leads"))
+            expired_users = _safe_int(_record_get(users_summary, "expired"))
+            users_lines = [
+                "<b>👥 Пользователи</b>",
+                f"Всего: {total_users}",
+                f"Активные: {active_users}",
+                f"Лиды: {lead_users}",
+                f"Завершившие доступ: {expired_users}",
+            ]
+            sections.append("\n".join(users_lines))
+    except AssertionError:
+        # уже добавляли блок об отсутствии пула
+        pass
+    except Exception as exc:
+        logger.exception("Failed to query users diagnostics")
+        errors.append(f"Пользователи: {html.escape(str(exc))}")
+
+    if errors:
+        error_lines = ["<b>⚠️ Предупреждения</b>"]
+        error_lines.extend(errors)
+        sections.append("\n".join(error_lines))
+
+    report_text = "\n\n".join(sections)
+
+    await message.answer(
+        report_text,
+        reply_markup=admin_main_keyboard(),
+        disable_web_page_preview=True,
     )
-    await message.answer(config_text, reply_markup=admin_main_keyboard(), disable_web_page_preview=True)
 
 
 @router.message(StateFilter("*"), F.text == ADMIN_SETTINGS_BUTTON)
