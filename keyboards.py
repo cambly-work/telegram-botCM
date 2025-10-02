@@ -126,6 +126,7 @@ ADMIN_FORMS_FILTER_LABEL_TO_STATUS: dict[str, str] = {
     TEST_REQUEST_STATUS_LABELS.get(status, status): status
     for status in TEST_REQUEST_STATUS_ORDER
 }
+ADMIN_ANALYSIS_REQUEST_ACTION_PREFIX = "admin:analysis-request-action"
 ADMIN_TEST_REQUEST_STATUS_PREFIX = "admin:test-request-status"
 ADMIN_TEST_REQUEST_DELETE_ACTION = "delete"
 
