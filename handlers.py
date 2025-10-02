@@ -12978,11 +12978,39 @@ async def admin_stats_forms_apply_filter(message: types.Message, state: FSMConte
     await _reset_state_if_needed(state)
     admin_id = message.from_user.id if message.from_user else None
     _set_admin_forms_filter(admin_id, status)
-    await _send_admin_forms_breakdown(message, status_filter=_get_admin_forms_filter(admin_id))
+    status_filter = _get_admin_forms_filter(admin_id)
+    await _send_admin_forms_breakdown(message, status_filter=status_filter)
 
+    stats = await _collect_admin_stats_data()
     forms_data = stats.get("forms") or {}
     test_requests = forms_data.get("test_requests") or {}
     entries = test_requests.get("entries") or []
+
+    normalized_filter: str | None = None
+    if status_filter:
+        candidate = str(status_filter).strip().lower()
+        if candidate in _ADMIN_FORMS_ALLOWED_STATUSES:
+            normalized_filter = candidate
+
+    if normalized_filter:
+        entries = [
+            entry
+            for entry in entries
+            if str(entry.get("status") or "").strip().lower() == normalized_filter
+        ]
+
+    if not entries:
+        empty_text = (
+            "По выбранному фильтру заявки не найдены."
+            if normalized_filter
+            else "Пока нет заявок в базе."
+        )
+        await message.answer(
+            empty_text,
+            disable_web_page_preview=True,
+            parse_mode=ParseMode.HTML,
+        )
+        return
 
     rendered = 0
     for entry in entries:
