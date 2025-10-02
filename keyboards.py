@@ -120,6 +120,7 @@ BROADCAST_TEMPLATES_BUTTON = "🗂 Шаблоны рассылок"
 BROADCAST_TEMPLATE_PREFIX = "🗂 Шаблон: "
 
 ADMIN_FORMS_FILTER_ALL = "Все"
+ADMIN_FORMS_TOGGLE_WAITING = "Заявки «В ожидании»"
 ADMIN_FORMS_FILTER_LABEL_TO_STATUS: dict[str, str] = {
     TEST_REQUEST_STATUS_LABELS.get(status, status): status
     for status in TEST_REQUEST_STATUS_ORDER
@@ -503,17 +504,23 @@ _ADMIN_TEST_REQUEST_STATUS_LEGACY_KEYS = {
 
 
 def admin_forms_filter_keyboard(*, active_filter: str | None = None) -> ReplyKeyboardMarkup:
+    toggle_prefix = "✅ " if active_filter == "waiting" else "🔥 "
     rows: list[list[KeyboardButton]] = [
         [
             KeyboardButton(
                 text=("✅ " + ADMIN_FORMS_FILTER_ALL)
                 if active_filter is None
                 else ADMIN_FORMS_FILTER_ALL
-            )
+            ),
+            KeyboardButton(text=f"{toggle_prefix}{ADMIN_FORMS_TOGGLE_WAITING}"),
         ]
     ]
 
-    labels = [TEST_REQUEST_STATUS_LABELS.get(status, status) for status in TEST_REQUEST_STATUS_ORDER]
+    labels = [
+        TEST_REQUEST_STATUS_LABELS.get(status, status)
+        for status in TEST_REQUEST_STATUS_ORDER
+        if status != "waiting"
+    ]
     for idx in range(0, len(labels), 2):
         chunk = []
         for label in labels[idx : idx + 2]:
