@@ -64,6 +64,7 @@ def _default_stats() -> dict:
                         "updated_at": later_ts,
                         "created_at": base_ts,
                         "preferred_name": "Иван Иванов",
+                        "birthdate": base_ts.date(),
                         "username": "ivan_test",
                         "tg_user_id": 987654,
                     }
@@ -101,6 +102,7 @@ def test_format_admin_test_request_entry_prefers_name_and_escapes():
         "id": 42,
         "status": "waiting",
         "preferred_name": "Анна <Смирнова>",
+        "birthdate": base_ts.date(),
         "username": "anna&co",
         "tg_user_id": 987654321,
         "created_at": base_ts,
@@ -112,6 +114,7 @@ def test_format_admin_test_request_entry_prefers_name_and_escapes():
     assert "#42" in text
     assert handlers.TEST_REQUEST_STATUS_LABELS["waiting"] in text
     assert "@anna&amp;co" in text
+    assert "Дата рождения: 01.01.2024" in text
 
 
 def test_admin_stats_forms_waiting_filter_shows_applicants():
@@ -137,6 +140,7 @@ def test_admin_stats_forms_filter_limits_entries():
             "updated_at": later_ts,
             "created_at": base_ts,
             "preferred_name": "Сергей Сергеев",
+            "birthdate": base_ts.date(),
             "username": "sergey_done",
             "tg_user_id": 192837,
         }
