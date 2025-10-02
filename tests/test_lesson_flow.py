@@ -1,4 +1,5 @@
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -138,3 +139,48 @@ async def test_question_flow_notifies_admins(monkeypatch):
     assert await state.get_state() is None
     assert notifications and "уроку 3" in notifications[0]
     assert any("Ответ придёт" in text for _, text in events)
+
+
+def test_membership_summary_uses_russian_labels():
+    summary = handlers._membership_summary(
+        {
+            "status": "member_active",
+            "access_until": datetime(2024, 1, 31, tzinfo=timezone.utc),
+        }
+    )
+
+    assert summary["status_label"] == "Активный доступ"
+    assert summary["status_line"] == "Статус участия: Активный доступ"
+    assert "Активный доступ" in summary["summary"]
+
+
+async def test_send_profile_overview_formats_status_without_duplicates(monkeypatch):
+    events: list[tuple[str, str]] = []
+    test_user = DummyFromUser()
+    message = DummyMessage("/profile", test_user, events)
+    user_row = {
+        "id": 1,
+        "status": "member_active",
+        "email": "user@example.com",
+        "phone": "+7 900 000-00-00",
+        "name": "Тест",
+        "full_name": "Тестовая Пользовательница",
+        "access_until": datetime(2024, 1, 31, tzinfo=timezone.utc),
+    }
+
+    async def fake_keyboard(**kwargs):
+        return "KEYBOARD"
+
+    async def fake_weekly_keys(user_id):
+        assert user_id == user_row["id"]
+        return []
+
+    monkeypatch.setattr(handlers, "build_menu_keyboard", fake_keyboard)
+    monkeypatch.setattr(handlers, "list_weekly_keys_for_user", fake_weekly_keys)
+
+    await handlers.send_profile_overview(message, user_row, False)
+
+    assert events, "profile overview should send a message"
+    profile_text = events[-1][1]
+    assert "Статус: Активный доступ" in profile_text
+    assert "Активный доступ (" not in profile_text
