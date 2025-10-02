@@ -173,6 +173,7 @@ from keyboards import (
     admin_user_card_keyboard,
     admin_schedule_keyboard,
     admin_test_request_status_keyboard,
+    admin_analysis_request_actions_keyboard,
     ADMIN_USERS_SEGMENT_LEADS,
     ADMIN_USERS_SEGMENT_ACTIVE,
     ADMIN_USERS_SEGMENT_EXPIRED,
@@ -247,6 +248,19 @@ FORM_ALIASES: dict[str, str] = {
     "magnetism-window": "magnetism-window",
     "magnetism_window": "magnetism-window",
 }
+
+ANALYSIS_REQUEST_STATUS_LABELS: dict[str, str] = OrderedDict(
+    (
+        ("new", "Новая"),
+        ("scheduled", "Запланирована"),
+        ("in_progress", "В работе"),
+        ("done", "Завершена"),
+        ("archived", "В архиве"),
+        ("deleted", "Удалена"),
+    )
+)
+ANALYSIS_REQUEST_STATUS_ORDER: tuple[str, ...] = tuple(ANALYSIS_REQUEST_STATUS_LABELS)
+ANALYSIS_REQUEST_CLOSED_STATUSES: set[str] = {"archived", "deleted"}
 
 _ANALYSIS_DEFAULT_INTRO = (
     "Персональный разбор.\n\n"
@@ -2120,6 +2134,7 @@ _ADMIN_FORMS_ALLOWED_STATUSES = set(TEST_REQUEST_STATUS_LABELS)
 _ADMIN_FORMS_ACTIVE_FILTERS: dict[int, str] = {}
 
 _ADMIN_TEST_REQUEST_ENTRIES_LIMIT = 10
+_ADMIN_ANALYSIS_REQUEST_ENTRIES_LIMIT = 10
 _ADMIN_TEST_REQUEST_STATUS_CALLBACK_PREFIX = f"{ADMIN_TEST_REQUEST_STATUS_PREFIX}:"
 
 
@@ -2321,6 +2336,115 @@ def _format_admin_payment_entry(payment: dict) -> str:
         contact_bits.append(html.escape(phone))
     contacts = ", ".join(contact_bits) if contact_bits else "контакты не указаны"
     return f"• <code>{order_id}</code> — {status} ({paid_at})\n  {contacts}"
+
+
+def _analysis_request_display_name(entry: dict[str, Any]) -> str:
+    for key in ("name", "full_name"):
+        value = (entry.get(key) or "").strip()
+        if value:
+            return html.escape(value)
+
+    username = (entry.get("username") or "").strip()
+    if username:
+        return html.escape(f"@{username.lstrip('@')}")
+
+    for key in ("tg_user_id", "user_id"):
+        value = entry.get(key)
+        if value is not None:
+            return html.escape(str(value))
+
+    contact = (entry.get("contact") or "").strip()
+    if contact:
+        return html.escape(contact)
+
+    return "—"
+
+
+def _generate_analysis_requests_table_data(
+    entries: Sequence[dict[str, Any]] | None,
+) -> tuple[list[str], list[list[str]], list[str]]:
+    headers = [
+        "#",
+        "Имя",
+        "Контакт",
+        "Формат",
+        "Время",
+        "Статус",
+        "Обновлено",
+    ]
+
+    rows: list[list[str]] = []
+    if not entries:
+        return headers, rows, ["right", "left", "left", "left", "left", "left", "left"]
+
+    for entry in entries:
+        request_id = entry.get("id")
+        request_id_text = html.escape(str(request_id)) if request_id is not None else "—"
+        contact = (entry.get("contact") or "").strip()
+        preferred_format = (entry.get("preferred_format") or "").strip()
+        preferred_time = (entry.get("preferred_time") or "").strip()
+        status = str(entry.get("status") or "")
+        status_label = ANALYSIS_REQUEST_STATUS_LABELS.get(status, status or "—")
+
+        rows.append(
+            [
+                request_id_text,
+                _analysis_request_display_name(entry),
+                html.escape(contact) if contact else "—",
+                html.escape(preferred_format) if preferred_format else "—",
+                html.escape(preferred_time) if preferred_time else "—",
+                html.escape(status_label),
+                _format_datetime_safe(entry.get("updated_at") or entry.get("created_at")),
+            ]
+        )
+
+    return headers, rows, ["right", "left", "left", "left", "left", "left", "left"]
+
+
+def _format_admin_analysis_request_entry(entry: dict[str, Any]) -> str:
+    request_id = entry.get("id")
+    header_id = f"#{html.escape(str(request_id))}" if request_id is not None else "—"
+
+    status = str(entry.get("status") or "")
+    status_label = ANALYSIS_REQUEST_STATUS_LABELS.get(status, status or "—")
+    status_label_text = html.escape(status_label)
+
+    name_text = _analysis_request_display_name(entry)
+    contact = (entry.get("contact") or "").strip()
+    contact_text = html.escape(contact) if contact else "—"
+    preferred_format = (entry.get("preferred_format") or "").strip()
+    format_text = html.escape(preferred_format) if preferred_format else "—"
+    preferred_time = (entry.get("preferred_time") or "").strip()
+    time_text = html.escape(preferred_time) if preferred_time else "—"
+
+    identifiers: list[str] = []
+    username = (entry.get("username") or "").strip()
+    if username:
+        identifiers.append(html.escape(f"@{username.lstrip('@')}"))
+
+    tg_user_id = entry.get("tg_user_id")
+    if tg_user_id is not None:
+        identifiers.append(f"<code>{html.escape(str(tg_user_id))}</code>")
+
+    user_id = entry.get("user_id")
+    if user_id is not None:
+        identifiers.append(f"<code>id={html.escape(str(user_id))}</code>")
+
+    identifiers_text = " · ".join(identifiers) if identifiers else "—"
+
+    created_text = _format_datetime_safe(entry.get("created_at"))
+    updated_text = _format_datetime_safe(entry.get("updated_at") or entry.get("created_at"))
+
+    lines = [
+        f"• <b>Заявка {header_id}</b> — {status_label_text}",
+        f"  Имя: {name_text}",
+        f"  Контакт: {contact_text}",
+        f"  Формат: {format_text}",
+        f"  Время: {time_text}",
+        f"  Telegram: {identifiers_text}",
+        f"  Создана: {created_text}; обновлена: {updated_text}",
+    ]
+    return "\n".join(lines)
 
 
 def _format_admin_test_request_entry(entry: dict) -> str:
@@ -2543,6 +2667,37 @@ async def _collect_admin_stats_data() -> dict[str, Any]:
         """
     )
 
+    analysis_requests_status_rows = await fetch(
+        """
+        SELECT status, COUNT(*) AS count, MAX(updated_at) AS last_updated
+          FROM analysis_requests
+         GROUP BY status
+        """
+    )
+
+    analysis_requests_details_rows = await fetch(
+        """
+        SELECT ar.id,
+               ar.status,
+               ar.created_at,
+               ar.updated_at,
+               ar.preferred_format,
+               ar.contact,
+               ar.preferred_time,
+               ar.tg_user_id,
+               ar.user_id,
+               u.full_name,
+               u.name,
+               u.username
+          FROM analysis_requests AS ar
+     LEFT JOIN users AS u ON u.id = ar.user_id
+         ORDER BY ar.updated_at DESC NULLS LAST,
+                  ar.created_at DESC NULLS LAST,
+                  ar.id DESC
+         LIMIT 50
+        """
+    )
+
     return {
         "users": {
             "total": int((total or {}).get("c", 0)),
@@ -2558,6 +2713,10 @@ async def _collect_admin_stats_data() -> dict[str, Any]:
         "forms": {
             "sessions": [dict(row) for row in form_sessions_rows or []],
             "sessions_details": [dict(row) for row in form_sessions_details_rows or []],
+            "analysis_requests": {
+                "statuses": [dict(row) for row in analysis_requests_status_rows or []],
+                "entries": [dict(row) for row in analysis_requests_details_rows or []],
+            },
             "test_requests": {
                 "statuses": [dict(row) for row in test_requests_status_rows or []],
                 "summary": {
@@ -2816,13 +2975,78 @@ def _format_admin_stats_forms(
     forms_table = _render_stats_table(headers, rows, align)
 
     forms_data = stats.get("forms") or {}
+    analysis_data = forms_data.get("analysis_requests") or {}
     test_requests = forms_data.get("test_requests") or {}
+    session_entries = forms_data.get("sessions_details") or []
+
+    analysis_entries = analysis_data.get("entries") or []
+    analysis_headers, analysis_rows, analysis_align = _generate_analysis_requests_table_data(
+        analysis_entries
+    )
+    analysis_status_rows = analysis_data.get("statuses") or []
+
+    analysis_total = sum(int(item.get("count") or 0) for item in analysis_status_rows)
+    analysis_active = sum(
+        int(item.get("count") or 0)
+        for item in analysis_status_rows
+        if str(item.get("status") or "").lower() not in ANALYSIS_REQUEST_CLOSED_STATUSES
+    )
+    if not analysis_total and analysis_entries:
+        analysis_total = len(analysis_entries)
+    if not analysis_active and analysis_entries:
+        analysis_active = sum(
+            1
+            for item in analysis_entries
+            if str(item.get("status") or "").lower() not in ANALYSIS_REQUEST_CLOSED_STATUSES
+        )
+
+    if analysis_status_rows:
+
+        def _analysis_status_key(item: dict[str, Any]) -> tuple[int, str]:
+            status = str(item.get("status") or "")
+            try:
+                return ANALYSIS_REQUEST_STATUS_ORDER.index(status), status
+            except ValueError:
+                return len(ANALYSIS_REQUEST_STATUS_ORDER), status
+
+        ordered_analysis_statuses = sorted(analysis_status_rows, key=_analysis_status_key)
+    else:
+        ordered_analysis_statuses = []
+
+    analysis_status_lines: list[str] = []
+    for item in ordered_analysis_statuses:
+        status = str(item.get("status") or "")
+        label = ANALYSIS_REQUEST_STATUS_LABELS.get(status, status or "—")
+        count = int(item.get("count") or 0)
+        last_updated = _format_datetime_safe(item.get("last_updated"))
+        suffix = f" (обновлено: {last_updated})" if last_updated != "—" else ""
+        status_lower = status.lower()
+        if status_lower == "deleted":
+            marker = "🗑️"
+        elif status_lower in ANALYSIS_REQUEST_CLOSED_STATUSES:
+            marker = "📦"
+        else:
+            marker = "🔥"
+        analysis_status_lines.append(f"{marker} {label}: <b>{count}</b>{suffix}")
+
+    analysis_updates = [
+        item.get("last_updated")
+        for item in ordered_analysis_statuses
+        if item.get("last_updated")
+    ]
+    if not analysis_updates and analysis_entries:
+        analysis_updates = [
+            entry.get("updated_at") or entry.get("created_at")
+            for entry in analysis_entries
+            if entry.get("updated_at") or entry.get("created_at")
+        ]
+    analysis_last_update = max(analysis_updates) if analysis_updates else None
+
     status_rows = test_requests.get("statuses") or []
     summary = test_requests.get("summary") or {}
     total_requests = int(summary.get("total") or 0)
     active_requests = int(summary.get("active") or 0)
     request_entries = test_requests.get("entries") or []
-    session_entries = forms_data.get("sessions_details") or []
 
     archived_slug = "archived"
     has_archived_requests = any(
@@ -2845,6 +3069,7 @@ def _format_admin_stats_forms(
         )
 
     if status_rows:
+
         def _status_key(item: dict[str, Any]) -> tuple[int, str]:
             status = str(item.get("status") or "")
             try:
@@ -2872,6 +3097,12 @@ def _format_admin_stats_forms(
         status_lines.append(line)
 
     updates = [item.get("last_updated") for item in ordered_statuses if item.get("last_updated")]
+    if not updates and request_entries:
+        updates = [
+            entry.get("updated_at") or entry.get("created_at")
+            for entry in request_entries
+            if entry.get("updated_at") or entry.get("created_at")
+        ]
     last_status_update = max(updates) if updates else None
 
     applicant_headers = ["Имя", "Ник", "Детали"]
@@ -3019,16 +3250,38 @@ def _format_admin_stats_forms(
     lines = [
         "<b>🗂 Формы и консультации</b>",
         "",
-        f"Текущий фильтр: <b>{html.escape(filter_label)}</b>",
-        "Нажмите «Все», чтобы показать все записи.",
+        f"Фильтр заявок на тестирование: <b>{html.escape(filter_label)}</b>",
+        "Нажмите «Все», чтобы показать все заявки.",
         "",
         "<b>Формы</b>",
         forms_table,
         "",
         "<b>Заявки на консультацию</b>",
-        f"Всего заявок: <b>{display_total_requests}</b>",
-        f"Активных (ожидают действий): <b>{display_active_requests}</b>",
+        f"Всего заявок: <b>{analysis_total}</b>",
+        f"Активных (ожидают действий): <b>{analysis_active}</b>",
     ]
+
+    if analysis_status_lines:
+        lines.extend(["", "По статусам:", *analysis_status_lines])
+    else:
+        lines.extend(["", "Пока нет заявок на консультацию."])
+
+    if analysis_rows:
+        analysis_table = _render_stats_table(
+            analysis_headers,
+            analysis_rows,
+            analysis_align,
+        )
+        lines.extend(["", "<b>Список консультаций</b>", analysis_table])
+
+    lines.extend(
+        [
+            "",
+            "<b>Заявки на тестирование</b>",
+            f"Всего заявок: <b>{display_total_requests}</b>",
+            f"Активных (ожидают действий): <b>{display_active_requests}</b>",
+        ]
+    )
 
     if status_lines:
         lines.extend(["", "По статусам:", *status_lines])
@@ -3054,10 +3307,12 @@ def _format_admin_stats_forms(
 
     timestamp = _format_datetime_safe(stats.get("timestamp"))
     last_status_text = _format_datetime_safe(last_status_update)
+    last_analysis_text = _format_datetime_safe(analysis_last_update)
 
     lines.extend([
         "",
-        f"Последнее изменение статусов: {last_status_text}",
+        f"Последнее изменение консультаций: {last_analysis_text}",
+        f"Последнее изменение статусов теста: {last_status_text}",
         f"Обновлено: {timestamp}",
     ])
 
@@ -3068,8 +3323,10 @@ async def _send_admin_forms_breakdown(
     message: types.Message,
     *,
     status_filter: str | None,
-) -> None:
-    stats = await _collect_admin_stats_data()
+    stats: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    if stats is None:
+        stats = await _collect_admin_stats_data()
     text = _format_admin_stats_forms(stats, status_filter=status_filter)
     await message.answer(
         text,
@@ -3077,6 +3334,143 @@ async def _send_admin_forms_breakdown(
         disable_web_page_preview=True,
         parse_mode=ParseMode.HTML,
     )
+    return stats
+
+
+async def _send_admin_analysis_request_entries(
+    message: types.Message,
+    stats: dict[str, Any],
+    *,
+    include_archived: bool = False,
+) -> None:
+    forms_data = stats.get("forms") or {}
+    analysis_data = forms_data.get("analysis_requests") or {}
+    entries = analysis_data.get("entries") or []
+
+    if not include_archived:
+        entries = [
+            entry
+            for entry in entries
+            if str(entry.get("status") or "").lower() not in ANALYSIS_REQUEST_CLOSED_STATUSES
+        ]
+
+    if not entries:
+        return
+
+    def _timestamp_sort(value: Any) -> float:
+        if isinstance(value, datetime):
+            dt = value
+        elif isinstance(value, str):
+            try:
+                dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            except ValueError:
+                return float("-inf")
+        else:
+            return float("-inf")
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        try:
+            return dt.timestamp()
+        except Exception:
+            return float("-inf")
+
+    def _analysis_sort_key(item: dict[str, Any]) -> tuple[int, float, int]:
+        status_lower = str(item.get("status") or "").lower()
+        is_closed = status_lower in ANALYSIS_REQUEST_CLOSED_STATUSES
+        updated = _timestamp_sort(item.get("updated_at") or item.get("created_at"))
+        identifier = int(item.get("id") or 0)
+        return (1 if is_closed else 0, -updated, -identifier)
+
+    rendered = 0
+    for entry in sorted(entries, key=_analysis_sort_key):
+        request_id = entry.get("id")
+        if request_id is None:
+            continue
+        try:
+            request_id_int = int(request_id)
+        except (TypeError, ValueError):
+            continue
+
+        keyboard = admin_analysis_request_actions_keyboard(
+            request_id=request_id_int,
+            status=str(entry.get("status") or ""),
+        )
+
+        await message.answer(
+            _format_admin_analysis_request_entry(entry),
+            reply_markup=keyboard,
+            disable_web_page_preview=True,
+            parse_mode=ParseMode.HTML,
+        )
+
+        rendered += 1
+        if rendered >= _ADMIN_ANALYSIS_REQUEST_ENTRIES_LIMIT:
+            break
+
+
+async def _send_admin_test_request_entries(
+    message: types.Message,
+    stats: dict[str, Any],
+    *,
+    status_filter: str | None,
+) -> None:
+    forms_data = stats.get("forms") or {}
+    test_requests = forms_data.get("test_requests") or {}
+    entries = test_requests.get("entries") or []
+
+    normalized_filter: str | None = None
+    if status_filter:
+        candidate = str(status_filter).strip().lower()
+        if candidate in _ADMIN_FORMS_ALLOWED_STATUSES:
+            normalized_filter = candidate
+
+    if normalized_filter:
+        entries = [
+            entry
+            for entry in entries
+            if str(entry.get("status") or "").strip().lower() == normalized_filter
+        ]
+
+    if not entries:
+        empty_text = (
+            "По выбранному фильтру заявки не найдены."
+            if normalized_filter
+            else "Пока нет заявок в базе."
+        )
+        await message.answer(
+            empty_text,
+            disable_web_page_preview=True,
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    rendered = 0
+    for entry in entries:
+        request_id = entry.get("id")
+        if request_id is None:
+            continue
+        try:
+            request_id_int = int(request_id)
+        except (TypeError, ValueError):
+            continue
+
+        keyboard = admin_test_request_status_keyboard(
+            test_request_id=request_id_int,
+            statuses=TEST_REQUEST_STATUS_ORDER,
+            labels=TEST_REQUEST_STATUS_LABELS,
+            current_status=str(entry.get("status") or ""),
+        )
+
+        await message.answer(
+            _format_admin_test_request_entry(entry),
+            reply_markup=keyboard,
+            disable_web_page_preview=True,
+            parse_mode=ParseMode.HTML,
+        )
+
+        rendered += 1
+        if rendered >= _ADMIN_TEST_REQUEST_ENTRIES_LIMIT:
+            break
 
 
 async def _admin_set_member_active(user_id: int, access_until: Optional[datetime]) -> None:
@@ -13082,7 +13476,11 @@ async def admin_stats_forms_breakdown(message: types.Message, state: FSMContext)
     await _reset_state_if_needed(state)
     admin_id = message.from_user.id if message.from_user else None
     filter_slug = _get_admin_forms_filter(admin_id)
-    await _send_admin_forms_breakdown(message, status_filter=filter_slug)
+    stats = await _send_admin_forms_breakdown(message, status_filter=filter_slug)
+    if stats is None:
+        stats = await _collect_admin_stats_data()
+    await _send_admin_analysis_request_entries(message, stats)
+    await _send_admin_test_request_entries(message, stats, status_filter=filter_slug)
 
 
 @router.message(StateFilter("*"), F.text.func(_is_admin_forms_waiting_toggle))
@@ -13094,7 +13492,12 @@ async def admin_stats_forms_toggle_waiting(message: types.Message, state: FSMCon
     current = _get_admin_forms_filter(admin_id)
     new_filter = None if current == "waiting" else "waiting"
     _set_admin_forms_filter(admin_id, new_filter)
-    await _send_admin_forms_breakdown(message, status_filter=_get_admin_forms_filter(admin_id))
+    updated_filter = _get_admin_forms_filter(admin_id)
+    stats = await _send_admin_forms_breakdown(message, status_filter=updated_filter)
+    if stats is None:
+        stats = await _collect_admin_stats_data()
+    await _send_admin_analysis_request_entries(message, stats)
+    await _send_admin_test_request_entries(message, stats, status_filter=updated_filter)
 
 
 @router.message(StateFilter("*"), F.text.func(_is_admin_forms_filter_text))
@@ -13375,6 +13778,143 @@ async def admin_stats_test_request_update_status(
         )
 
     await callback.answer(ack_text)
+
+
+@router.callback_query(F.data.startswith(f"{ADMIN_ANALYSIS_REQUEST_ACTION_PREFIX}:"))
+async def admin_stats_analysis_request_update_status(callback: types.CallbackQuery):
+    if not is_admin_id(callback.from_user.id):
+        await callback.answer("Недостаточно прав", show_alert=True)
+        return
+
+    payload = callback.data or ""
+    parts = payload.split(":", 3)
+    if len(parts) != 4:
+        await callback.answer("Некорректный формат данных", show_alert=True)
+        return
+
+    prefix = f"{parts[0]}:{parts[1]}"
+    if prefix != ADMIN_ANALYSIS_REQUEST_ACTION_PREFIX:
+        await callback.answer("Некорректный источник", show_alert=True)
+        return
+
+    try:
+        request_id = int(parts[2])
+    except (TypeError, ValueError):
+        await callback.answer("Некорректный ID", show_alert=True)
+        return
+
+    action = parts[3]
+    if action == "archive":
+        new_status = "archived"
+    elif action == "delete":
+        new_status = "deleted"
+    elif action == "restore":
+        new_status = "new"
+    else:
+        await callback.answer("Неизвестное действие", show_alert=True)
+        return
+
+    current_row = await fetchrow(
+        "SELECT status FROM analysis_requests WHERE id=$1",
+        request_id,
+    )
+    if not current_row:
+        await callback.answer("Заявка не найдена", show_alert=True)
+        return
+
+    previous_status = str(current_row.get("status") or "")
+    if previous_status == new_status:
+        await callback.answer("Статус уже установлен")
+        return
+
+    await execute(
+        """
+        UPDATE analysis_requests
+           SET status=$2,
+               updated_at=NOW()
+         WHERE id=$1
+        """,
+        request_id,
+        new_status,
+    )
+
+    updated_row = await fetchrow(
+        """
+        SELECT ar.id,
+               ar.status,
+               ar.created_at,
+               ar.updated_at,
+               ar.preferred_format,
+               ar.contact,
+               ar.preferred_time,
+               ar.tg_user_id,
+               ar.user_id,
+               u.full_name,
+               u.name,
+               u.username
+          FROM analysis_requests AS ar
+          LEFT JOIN users AS u ON u.id = ar.user_id
+         WHERE ar.id=$1
+        """,
+        request_id,
+    )
+
+    if not updated_row:
+        await callback.answer("Не удалось обновить заявку", show_alert=True)
+        return
+
+    updated_request = dict(updated_row)
+
+    await log_admin_action(
+        callback.from_user.id,
+        "analysis_request_status_update",
+        {
+            "analysis_request_id": request_id,
+            "previous_status": previous_status,
+            "new_status": new_status,
+            "action": action,
+        },
+    )
+
+    if callback.message:
+        try:
+            await callback.message.edit_text(
+                _format_admin_analysis_request_entry(updated_request),
+                parse_mode=ParseMode.HTML,
+                reply_markup=admin_analysis_request_actions_keyboard(
+                    request_id=request_id,
+                    status=new_status,
+                ),
+            )
+        except TelegramBadRequest as exc:
+            if "message is not modified" not in str(exc).lower():
+                logger.warning(
+                    "Failed to edit analysis request message id=%s err=%s",
+                    request_id,
+                    exc,
+                )
+
+    stats = await _collect_admin_stats_data()
+    summary_text = _format_admin_stats_forms(stats)
+
+    target_chat_id = callback.message.chat.id if callback.message else callback.from_user.id
+
+    try:
+        await callback.bot.send_message(
+            target_chat_id,
+            summary_text,
+            reply_markup=admin_stats_keyboard(),
+            disable_web_page_preview=True,
+            parse_mode=ParseMode.HTML,
+        )
+    except TelegramBadRequest as exc:
+        logger.warning(
+            "Failed to send analysis stats update to chat=%s err=%s",
+            target_chat_id,
+            exc,
+        )
+
+    await callback.answer("Статус обновлён")
 
 
 @router.message(StateFilter("*"), F.text == ADMIN_DEBUG_BUTTON)

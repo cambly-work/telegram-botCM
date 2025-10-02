@@ -565,6 +565,53 @@ def admin_forms_filter_keyboard(*, active_filter: str | None = None) -> ReplyKey
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
 
+def admin_analysis_request_actions_keyboard(
+    *,
+    request_id: int,
+    status: str,
+) -> InlineKeyboardMarkup:
+    normalized = (status or "").strip().lower()
+
+    buttons: list[InlineKeyboardButton] = []
+    if normalized not in {"archived", "deleted"}:
+        buttons.append(
+            InlineKeyboardButton(
+                text="📦 В архив",
+                callback_data=f"{ADMIN_ANALYSIS_REQUEST_ACTION_PREFIX}:{request_id}:archive",
+            )
+        )
+        buttons.append(
+            InlineKeyboardButton(
+                text="🗑️ Удалить",
+                callback_data=f"{ADMIN_ANALYSIS_REQUEST_ACTION_PREFIX}:{request_id}:delete",
+            )
+        )
+    else:
+        if normalized == "archived":
+            buttons.append(
+                InlineKeyboardButton(
+                    text="🗑️ Удалить",
+                    callback_data=f"{ADMIN_ANALYSIS_REQUEST_ACTION_PREFIX}:{request_id}:delete",
+                )
+            )
+        buttons.append(
+            InlineKeyboardButton(
+                text="↩️ Вернуть",
+                callback_data=f"{ADMIN_ANALYSIS_REQUEST_ACTION_PREFIX}:{request_id}:restore",
+            )
+        )
+
+    if not buttons:
+        buttons.append(
+            InlineKeyboardButton(
+                text="↩️ Вернуть",
+                callback_data=f"{ADMIN_ANALYSIS_REQUEST_ACTION_PREFIX}:{request_id}:restore",
+            )
+        )
+
+    return InlineKeyboardMarkup(inline_keyboard=[buttons])
+
+
 def _admin_test_request_status_keyboard_legacy(
     *,
     test_request_id: int,

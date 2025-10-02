@@ -45,6 +45,31 @@ def _default_stats() -> dict:
                     "tg_user_id": 123456,
                 }
             ],
+            "analysis_requests": {
+                "statuses": [
+                    {
+                        "status": "new",
+                        "count": 1,
+                        "last_updated": later_ts,
+                    }
+                ],
+                "entries": [
+                    {
+                        "id": 101,
+                        "status": "new",
+                        "created_at": base_ts,
+                        "updated_at": later_ts,
+                        "preferred_format": "Zoom",
+                        "preferred_time": "вечером",
+                        "contact": "@consultant",
+                        "tg_user_id": 555111,
+                        "user_id": 42,
+                        "full_name": "Мария Консультация",
+                        "name": "",
+                        "username": "maria_consult",
+                    }
+                ],
+            },
             "test_requests": {
                 "statuses": [
                     {
@@ -84,6 +109,9 @@ def test_admin_stats_forms_default_summary_without_applicant_table():
     assert "@ivan_test" not in text
     assert "Пётр Петров" not in text
     assert "@petr_petrov" not in text
+    assert "Мария Консультация" in text
+    assert "@consultant" in text
+    assert "Zoom" in text
 
 
 def test_admin_stats_forms_handles_missing_usernames():
@@ -117,6 +145,33 @@ def test_format_admin_test_request_entry_prefers_name_and_escapes():
     assert "Дата рождения: 01.01.2024" in text
 
 
+def test_format_admin_analysis_request_entry_includes_contacts():
+    base_ts = _build_base_timestamp()
+    entry = {
+        "id": 7,
+        "status": "archived",
+        "contact": "mail@example.com",
+        "preferred_format": "Очная",
+        "preferred_time": "утром",
+        "username": "analysis_user",
+        "tg_user_id": 123456,
+        "user_id": 789,
+        "created_at": base_ts,
+        "updated_at": base_ts + timedelta(hours=3),
+        "full_name": "Марина Аналитик",
+    }
+
+    text = handlers._format_admin_analysis_request_entry(entry)
+
+    assert "Заявка #7" in text
+    assert "Марина Аналитик" in text
+    assert "mail@example.com" in text
+    assert "Очная" in text
+    assert "утром" in text
+    assert "@analysis_user" in text
+    assert "id=789" in text
+
+
 def test_admin_stats_forms_waiting_filter_shows_applicants():
     stats = _default_stats()
 
@@ -126,6 +181,7 @@ def test_admin_stats_forms_waiting_filter_shows_applicants():
     assert "Иван Иванов" in text
     assert "@ivan_test" in text
     assert "Пётр Петров" not in text
+    assert "Мария Консультация" in text
 
 
 def test_admin_stats_forms_filter_limits_entries():
@@ -167,6 +223,7 @@ def test_admin_stats_forms_filter_limits_entries():
     assert "Пётр Петров" not in text
     assert "Всего заявок: <b>1</b>" in text
     assert "Активных (ожидают действий): <b>0</b>" in text
+    assert "Мария Консультация" in text
 
 
 def test_admin_stats_forms_filter_empty_message():
