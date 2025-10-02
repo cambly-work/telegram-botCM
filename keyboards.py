@@ -1,6 +1,14 @@
 # keyboards.py
 import os
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
+from typing import Mapping, Sequence
+
+from aiogram.types import (
+    ReplyKeyboardMarkup,
+    KeyboardButton,
+    ReplyKeyboardRemove,
+    InlineKeyboardMarkup,
+    InlineKeyboardButton,
+)
 
 from admin_forms import TEST_REQUEST_STATUS_LABELS, TEST_REQUEST_STATUS_ORDER
 

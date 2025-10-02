@@ -170,6 +170,7 @@ from keyboards import (
     admin_users_pagination_keyboard,
     admin_user_card_keyboard,
     admin_schedule_keyboard,
+    admin_test_request_status_keyboard,
     ADMIN_USERS_SEGMENT_LEADS,
     ADMIN_USERS_SEGMENT_ACTIVE,
     ADMIN_USERS_SEGMENT_EXPIRED,
@@ -196,6 +197,7 @@ from keyboards import (
     ADMIN_STATS_PAYMENTS_BREAKDOWN,
     ADMIN_STATS_RECENT_PAYMENTS,
     ADMIN_STATS_FORMS_BREAKDOWN,
+    ADMIN_TEST_REQUEST_STATUS_PREFIX,
     LEARNING_PROGRESS_BUTTON,
     MATERIALS_CATALOG_BUTTON,
     MATERIALS_PRACTICES_BUTTON,
@@ -2113,6 +2115,9 @@ def _admin_user_segment_from_text(text: str | None) -> str | None:
 
 _ADMIN_FORMS_ALLOWED_STATUSES = set(TEST_REQUEST_STATUS_LABELS)
 _ADMIN_FORMS_ACTIVE_FILTERS: dict[int, str] = {}
+
+_ADMIN_TEST_REQUEST_ENTRIES_LIMIT = 10
+_ADMIN_TEST_REQUEST_STATUS_CALLBACK_PREFIX = f"{ADMIN_TEST_REQUEST_STATUS_PREFIX}:"
 
 
 def _get_admin_forms_filter(admin_id: int | None) -> str | None:
@@ -12975,6 +12980,38 @@ async def admin_stats_forms_apply_filter(message: types.Message, state: FSMConte
     _set_admin_forms_filter(admin_id, status)
     await _send_admin_forms_breakdown(message, status_filter=_get_admin_forms_filter(admin_id))
 
+    forms_data = stats.get("forms") or {}
+    test_requests = forms_data.get("test_requests") or {}
+    entries = test_requests.get("entries") or []
+
+    rendered = 0
+    for entry in entries:
+        request_id = entry.get("id")
+        if request_id is None:
+            continue
+        try:
+            request_id_int = int(request_id)
+        except (TypeError, ValueError):
+            continue
+
+        keyboard = admin_test_request_status_keyboard(
+            test_request_id=request_id_int,
+            statuses=_TEST_REQUEST_STATUS_ORDER,
+            labels=_TEST_REQUEST_STATUS_LABELS,
+            current_status=str(entry.get("status") or ""),
+        )
+
+        await message.answer(
+            _format_admin_test_request_entry(entry),
+            reply_markup=keyboard,
+            disable_web_page_preview=True,
+            parse_mode=ParseMode.HTML,
+        )
+
+        rendered += 1
+        if rendered >= _ADMIN_TEST_REQUEST_ENTRIES_LIMIT:
+            break
+
 
 @router.message(F.text == ADMIN_STATS_RECENT_PAYMENTS)
 async def admin_stats_recent_payments(message: types.Message, state: FSMContext):
@@ -13010,6 +13047,142 @@ async def admin_stats_recent_payments(message: types.Message, state: FSMContext)
         disable_web_page_preview=True,
         parse_mode=ParseMode.HTML,
     )
+
+
+@router.callback_query(F.data.startswith(_ADMIN_TEST_REQUEST_STATUS_CALLBACK_PREFIX))
+async def admin_stats_test_request_update_status(
+    callback: types.CallbackQuery,
+):
+    if not is_admin_id(callback.from_user.id):
+        await callback.answer("Недостаточно прав", show_alert=True)
+        return
+
+    payload = callback.data or ""
+    parts = payload.split(":", 3)
+    if len(parts) != 4:
+        await callback.answer("Некорректный формат данных", show_alert=True)
+        return
+
+    prefix = f"{parts[0]}:{parts[1]}"
+    if prefix != ADMIN_TEST_REQUEST_STATUS_PREFIX:
+        await callback.answer("Некорректный источник", show_alert=True)
+        return
+
+    try:
+        request_id = int(parts[2])
+    except (TypeError, ValueError):
+        await callback.answer("Некорректный ID", show_alert=True)
+        return
+
+    new_status = parts[3]
+    if new_status not in _TEST_REQUEST_STATUS_ORDER:
+        await callback.answer("Неизвестный статус", show_alert=True)
+        return
+
+    current_row = await fetchrow(
+        "SELECT status FROM test_requests WHERE id=$1",
+        request_id,
+    )
+    if not current_row:
+        await callback.answer("Заявка не найдена", show_alert=True)
+        return
+
+    previous_status = str(current_row.get("status") or "")
+    if previous_status == new_status:
+        await callback.answer("Статус уже установлен")
+        return
+
+    await execute(
+        """
+        UPDATE test_requests
+           SET status=$2,
+               updated_at=NOW()
+         WHERE id=$1
+        """,
+        request_id,
+        new_status,
+    )
+
+    updated_row = await fetchrow(
+        """
+        SELECT tr.id,
+               tr.status,
+               tr.updated_at,
+               tr.created_at,
+               tr.preferred_name,
+               tr.tg_user_id,
+               tr.user_id,
+               u.full_name,
+               u.name,
+               u.username
+          FROM test_requests AS tr
+          LEFT JOIN users AS u ON u.id = tr.user_id
+         WHERE tr.id=$1
+        """,
+        request_id,
+    )
+
+    if not updated_row:
+        await callback.answer("Не удалось обновить заявку", show_alert=True)
+        return
+
+    updated_request = dict(updated_row)
+
+    await log_admin_action(
+        callback.from_user.id,
+        "test_request_status_update",
+        {
+            "test_request_id": request_id,
+            "previous_status": previous_status,
+            "new_status": new_status,
+        },
+    )
+
+    if callback.message:
+        try:
+            await callback.message.edit_text(
+                _format_admin_test_request_entry(updated_request),
+                parse_mode=ParseMode.HTML,
+                reply_markup=admin_test_request_status_keyboard(
+                    test_request_id=request_id,
+                    statuses=_TEST_REQUEST_STATUS_ORDER,
+                    labels=_TEST_REQUEST_STATUS_LABELS,
+                    current_status=new_status,
+                ),
+            )
+        except TelegramBadRequest as exc:
+            if "message is not modified" not in str(exc).lower():
+                logger.warning(
+                    "Failed to edit test request message id=%s err=%s",
+                    request_id,
+                    exc,
+                )
+
+    stats = await _collect_admin_stats_data()
+    summary_text = _format_admin_stats_forms(stats)
+
+    target_chat_id = None
+    if callback.message:
+        target_chat_id = callback.message.chat.id
+    if target_chat_id is None:
+        target_chat_id = callback.from_user.id
+
+    try:
+        await callback.bot.send_message(
+            target_chat_id,
+            summary_text,
+            reply_markup=admin_stats_keyboard(),
+            disable_web_page_preview=True,
+            parse_mode=ParseMode.HTML,
+        )
+    except TelegramBadRequest as exc:
+        logger.warning(
+            "Failed to send updated admin stats to chat=%s err=%s",
+            target_chat_id,
+            exc,
+        )
+
+    await callback.answer("Статус обновлён")
 
 
 @router.message(StateFilter("*"), F.text == ADMIN_DEBUG_BUTTON)
