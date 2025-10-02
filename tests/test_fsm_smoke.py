@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from datetime import date
 
 import pytest
+from aiogram import types as aiogram_types
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -287,6 +288,35 @@ async def test_notify_admins_on_test_cancel(monkeypatch):
 
     await handlers.cancel_handler(message, state)
     assert notifications and "Заявка на тест отменена" in notifications[0]
+
+
+async def test_support_cancel_removes_keyboard(monkeypatch):
+    events: list[tuple[str, dict]] = []
+    user = DummyFromUser(user_id=505)
+    message = DummyMessage(handlers.CANCEL_TEXT, user, events)
+    state = DummyState()
+    await state.set_state(handlers.SupportStates.waiting_question)
+
+    async def fake_get_user_and_admin(_):
+        return {"id": user.id}, False
+
+    support_calls: list[tuple] = []
+
+    async def fake_send_support_section(*args, **kwargs):
+        support_calls.append((args, kwargs))
+
+    monkeypatch.setattr(handlers, "_get_user_and_admin", fake_get_user_and_admin, raising=False)
+    monkeypatch.setattr(handlers, "send_support_section", fake_send_support_section, raising=False)
+
+    await handlers.cancel_handler(message, state)
+
+    assert events, "cancel_handler should send a message before redirecting"
+    text, kwargs = events[0]
+    assert "Вопрос не отправлен" in text
+    reply_markup = kwargs.get("reply_markup")
+    assert isinstance(reply_markup, aiogram_types.ReplyKeyboardRemove)
+    assert reply_markup.remove_keyboard is True
+    assert support_calls, "cancel_handler should forward to support section"
 
 
 async def test_notify_admins_error_path_keeps_flow(monkeypatch):
