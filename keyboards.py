@@ -37,7 +37,12 @@ ADMIN_CONTENT_SUGGEST_MORE = "🔁 Ещё варианты"
 ADMIN_CONTENT_ROLLBACK_PREFIX = "↩️ Откатить"
 ADMIN_CONTENT_EXPORT = "⬇️ Экспорт"
 ADMIN_CONTENT_IMPORT = "⬆️ Импорт"
-ADMIN_USERS_BUTTON = "👥 Пользователи"
+ADMIN_CATEGORY_USERS = "👥 Пользователи"
+ADMIN_CATEGORY_CONTENT = "🧾 Контент"
+ADMIN_CATEGORY_COMMUNICATIONS = "📣 Коммуникации"
+ADMIN_CATEGORY_SERVICE = "🛠️ Служебное"
+
+ADMIN_USERS_BUTTON = "📋 Управление участницами"
 ADMIN_SCHEDULE_BUTTON = "📆 Расписание"
 ADMIN_SCHEDULE_ADD_EVENT = "➕ Добавить событие"
 ADMIN_SCHEDULE_EDIT_EVENT = "✏️ Изменить событие"
@@ -346,20 +351,56 @@ ADMIN_PAYMENTS_MARK_FAILED = "❗ Пометить как ошибку"
 
 def admin_main_keyboard() -> ReplyKeyboardMarkup:
     rows = [
-        [KeyboardButton(text=ADMIN_USERS_BUTTON)],
-        [KeyboardButton(text=ADMIN_SCHEDULE_BUTTON)],
-        [KeyboardButton(text=ADMIN_BROADCAST_BUTTON), KeyboardButton(text=ADMIN_CONTENT_MENU)],
-        [KeyboardButton(text=ADMIN_MATERIALS_BUTTON), KeyboardButton(text=ADMIN_BEHAVIOR_BUTTON)],
-        [KeyboardButton(text=ADMIN_KEYS_BUTTON)],
-        [KeyboardButton(text=ADMIN_SETTINGS_BUTTON), KeyboardButton(text=ADMIN_STATS_BUTTON)],
-        [KeyboardButton(text=ADMIN_DEBUG_BUTTON)],
+        [KeyboardButton(text=ADMIN_CATEGORY_USERS)],
+        [KeyboardButton(text=ADMIN_CATEGORY_CONTENT)],
+        [KeyboardButton(text=ADMIN_CATEGORY_COMMUNICATIONS)],
+        [KeyboardButton(text=ADMIN_CATEGORY_SERVICE)],
         [KeyboardButton(text=BACK_TO_MAIN)],
     ]
     return ReplyKeyboardMarkup(
         keyboard=rows,
         resize_keyboard=True,
-        input_field_placeholder="Админ-панель — выберите раздел",
+        input_field_placeholder="Админ-панель — выберите категорию",
     )
+
+
+def admin_users_category_keyboard() -> ReplyKeyboardMarkup:
+    rows = [
+        [KeyboardButton(text=ADMIN_USERS_BUTTON)],
+        [KeyboardButton(text=ADMIN_PAYMENTS_BUTTON)],
+        [KeyboardButton(text=ADMIN_KEYS_BUTTON)],
+        [KeyboardButton(text=BACK_TO_ADMIN), KeyboardButton(text=BACK_TO_MAIN)],
+    ]
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
+
+
+def admin_content_category_keyboard() -> ReplyKeyboardMarkup:
+    rows = [
+        [KeyboardButton(text=ADMIN_CONTENT_MENU)],
+        [KeyboardButton(text=ADMIN_MATERIALS_BUTTON)],
+        [KeyboardButton(text=ADMIN_BEHAVIOR_BUTTON)],
+        [KeyboardButton(text=BACK_TO_ADMIN), KeyboardButton(text=BACK_TO_MAIN)],
+    ]
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
+
+
+def admin_communications_category_keyboard() -> ReplyKeyboardMarkup:
+    rows = [
+        [KeyboardButton(text=ADMIN_BROADCAST_BUTTON)],
+        [KeyboardButton(text=ADMIN_SCHEDULE_BUTTON)],
+        [KeyboardButton(text=BACK_TO_ADMIN), KeyboardButton(text=BACK_TO_MAIN)],
+    ]
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
+
+
+def admin_service_category_keyboard() -> ReplyKeyboardMarkup:
+    rows = [
+        [KeyboardButton(text=ADMIN_STATS_BUTTON)],
+        [KeyboardButton(text=ADMIN_SETTINGS_BUTTON)],
+        [KeyboardButton(text=ADMIN_DEBUG_BUTTON)],
+        [KeyboardButton(text=BACK_TO_ADMIN), KeyboardButton(text=BACK_TO_MAIN)],
+    ]
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
 
 def admin_materials_keyboard() -> ReplyKeyboardMarkup:
