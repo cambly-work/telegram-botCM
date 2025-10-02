@@ -95,6 +95,25 @@ def test_admin_stats_forms_handles_missing_usernames():
     assert "112233" in text
 
 
+def test_format_admin_test_request_entry_prefers_name_and_escapes():
+    base_ts = _build_base_timestamp()
+    entry = {
+        "id": 42,
+        "status": "waiting",
+        "preferred_name": "Анна <Смирнова>",
+        "username": "anna&co",
+        "tg_user_id": 987654321,
+        "created_at": base_ts,
+        "updated_at": base_ts + timedelta(hours=1),
+    }
+
+    text = handlers._format_admin_test_request_entry(entry)
+
+    assert "#42" in text
+    assert handlers.TEST_REQUEST_STATUS_LABELS["waiting"] in text
+    assert "@anna&amp;co" in text
+
+
 def test_admin_stats_forms_waiting_filter_shows_applicants():
     stats = _default_stats()
 

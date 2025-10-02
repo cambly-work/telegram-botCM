@@ -2321,6 +2321,57 @@ def _format_admin_payment_entry(payment: dict) -> str:
     return f"• <code>{order_id}</code> — {status} ({paid_at})\n  {contacts}"
 
 
+def _format_admin_test_request_entry(entry: dict) -> str:
+    request_id = entry.get("id")
+    id_text = html.escape(str(request_id)) if request_id is not None else "—"
+
+    status = str(entry.get("status") or "")
+    status_label = TEST_REQUEST_STATUS_LABELS.get(status, status or "—")
+    status_label_text = html.escape(status_label)
+
+    title: str | None = None
+    for key in ("preferred_name", "name", "full_name"):
+        value = (entry.get(key) or "").strip()
+        if value:
+            title = html.escape(value)
+            break
+
+    if not title:
+        if request_id is not None:
+            title = f"#{id_text}"
+        else:
+            fallback = entry.get("tg_user_id") or entry.get("user_id")
+            title = html.escape(str(fallback)) if fallback is not None else "Заявка"
+
+    details: list[str] = []
+    if id_text != "—":
+        details.append(f"<code>#{id_text}</code>")
+    else:
+        details.append("<code>—</code>")
+
+    username = (entry.get("username") or "").strip()
+    if username:
+        details.append(html.escape(f"@{username.lstrip('@')}"))
+
+    for key in ("tg_user_id", "user_id"):
+        value = entry.get(key)
+        if value is None:
+            continue
+        escaped = f"<code>{html.escape(str(value))}</code>"
+        if escaped not in details:
+            details.append(escaped)
+
+    created_text = _format_datetime_safe(entry.get("created_at"))
+    updated_text = _format_datetime_safe(entry.get("updated_at") or entry.get("created_at"))
+
+    lines = [
+        f"• <b>{title}</b> — {status_label_text}",
+        "  " + " · ".join(details),
+        f"  Создана: {created_text}; обновлена: {updated_text}",
+    ]
+    return "\n".join(lines)
+
+
 def _render_stats_table(
     headers: list[str],
     rows: list[list[str]],
