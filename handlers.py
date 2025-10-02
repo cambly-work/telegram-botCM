@@ -8406,7 +8406,6 @@ async def admin_behavior_start_receive(message: types.Message, state: FSMContext
         preview,
         parse_mode=ParseMode.HTML,
         disable_web_page_preview=True,
-        reply_markup=markup,
     )
     await state.clear()
     await message.answer(
