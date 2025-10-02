@@ -13071,8 +13071,8 @@ async def admin_stats_forms_apply_filter(message: types.Message, state: FSMConte
 
         keyboard = admin_test_request_status_keyboard(
             test_request_id=request_id_int,
-            statuses=_TEST_REQUEST_STATUS_ORDER,
-            labels=_TEST_REQUEST_STATUS_LABELS,
+            statuses=TEST_REQUEST_STATUS_ORDER,
+            labels=TEST_REQUEST_STATUS_LABELS,
             current_status=str(entry.get("status") or ""),
         )
 
@@ -13150,7 +13150,7 @@ async def admin_stats_test_request_update_status(
         return
 
     new_status = parts[3]
-    if new_status not in _TEST_REQUEST_STATUS_ORDER:
+    if new_status not in TEST_REQUEST_STATUS_ORDER:
         await callback.answer("Неизвестный статус", show_alert=True)
         return
 
@@ -13220,8 +13220,8 @@ async def admin_stats_test_request_update_status(
                 parse_mode=ParseMode.HTML,
                 reply_markup=admin_test_request_status_keyboard(
                     test_request_id=request_id,
-                    statuses=_TEST_REQUEST_STATUS_ORDER,
-                    labels=_TEST_REQUEST_STATUS_LABELS,
+                    statuses=TEST_REQUEST_STATUS_ORDER,
+                    labels=TEST_REQUEST_STATUS_LABELS,
                     current_status=new_status,
                 ),
             )
