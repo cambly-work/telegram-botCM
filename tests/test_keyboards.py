@@ -105,7 +105,7 @@ def test_admin_main_keyboard_layout():
     ]
     flattened = [text for row in rows for text in row]
     assert ADMIN_PAYMENTS_BUTTON not in flattened
-    assert ADMIN_CONTENT_MENU not in flattened
+    assert flattened.count(ADMIN_CONTENT_MENU) == 1
 
 
 def test_admin_materials_keyboard_layout():
@@ -166,7 +166,7 @@ def test_admin_broadcast_segments_keyboard_layout():
     assert rows == [
         [BROADCAST_ALL_BUTTON, BROADCAST_LEADS_BUTTON],
         [BROADCAST_MEMBERS_BUTTON, BROADCAST_EXPIRED_BUTTON],
-        [BROADCAST_KEYS_BUTTON, BROADCAST_PRACTICE_BUTTON],
+        [BROADCAST_KEYS_BUTTON],
         [BACK_TO_BROADCAST, BACK_TO_ADMIN],
         [BACK_TO_MAIN],
     ]
