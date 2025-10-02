@@ -1,6 +1,8 @@
+import asyncio
 import sys
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -140,3 +142,60 @@ def test_admin_stats_forms_filter_empty_message():
 
     assert "Текущий фильтр: <b>Запланировано</b>" in text
     assert "По выбранному фильтру заявки не найдены." in text
+
+
+def test_admin_stats_forms_apply_filter_reports_empty_entries(monkeypatch):
+    breakdown_calls: list[str | None] = []
+
+    async def fake_send_breakdown(message, *, status_filter):
+        breakdown_calls.append(status_filter)
+
+    async def fake_collect_admin_stats_data():
+        return {
+            "forms": {
+                "test_requests": {
+                    "entries": [
+                        {
+                            "id": 101,
+                            "status": "waiting",
+                            "updated_at": None,
+                            "created_at": None,
+                        }
+                    ]
+                }
+            }
+        }
+
+    status_holder = {"value": None}
+
+    def fake_set_filter(admin_id, status):
+        status_holder["value"] = status
+
+    def fake_get_filter(admin_id):
+        return status_holder["value"]
+
+    class DummyMessage:
+        def __init__(self):
+            self.from_user = SimpleNamespace(id=999)
+            self.text = "dummy"
+            self.answers: list[dict[str, object]] = []
+
+        async def answer(self, text, **kwargs):
+            self.answers.append({"text": text, "kwargs": kwargs})
+
+    message = DummyMessage()
+
+    monkeypatch.setattr(handlers, "is_admin_id", lambda user_id: True)
+    monkeypatch.setattr(handlers, "admin_forms_filter_status_from_text", lambda text: (True, "done"))
+    monkeypatch.setattr(handlers, "_set_admin_forms_filter", fake_set_filter)
+    monkeypatch.setattr(handlers, "_get_admin_forms_filter", fake_get_filter)
+    monkeypatch.setattr(handlers, "_send_admin_forms_breakdown", fake_send_breakdown)
+    monkeypatch.setattr(handlers, "_collect_admin_stats_data", fake_collect_admin_stats_data)
+
+    asyncio.run(handlers.admin_stats_forms_apply_filter(message, state=None))
+
+    assert breakdown_calls == ["done"]
+    assert any(
+        "По выбранному фильтру заявки не найдены." in str(call.get("text", ""))
+        for call in message.answers
+    )
