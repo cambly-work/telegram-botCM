@@ -7861,12 +7861,14 @@ async def menu_materials_dynamic_choice(message: types.Message, state: FSMContex
     menu_state = await _materials_get_state(state)
     options: dict[str, dict] = menu_state.get("options", {})
     if not options:
-        return
+        # Skip so that other menu handlers can process unrelated buttons.
+        raise EventSkip()
 
     normalized = _normalize_materials_choice(message.text)
     option = options.get(normalized)
     if not option:
-        return
+        # Skip so that other menu handlers can process unrelated buttons.
+        raise EventSkip()
 
     user, is_admin = await _get_user_and_admin(message)
     await send_materials_category_section(
