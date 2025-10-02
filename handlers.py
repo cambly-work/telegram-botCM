@@ -50,6 +50,10 @@ from keyboards import (
     feedback_keyboard,
     cancel_keyboard,
     admin_main_keyboard,
+    admin_users_category_keyboard,
+    admin_content_category_keyboard,
+    admin_communications_category_keyboard,
+    admin_service_category_keyboard,
     admin_materials_keyboard,
     admin_settings_keyboard,
     admin_content_keyboard,
@@ -97,6 +101,10 @@ from keyboards import (
     ADMIN_CONTENT_ROLLBACK_PREFIX,
     ADMIN_CONTENT_EXPORT,
     ADMIN_CONTENT_IMPORT,
+    ADMIN_CATEGORY_USERS,
+    ADMIN_CATEGORY_CONTENT,
+    ADMIN_CATEGORY_COMMUNICATIONS,
+    ADMIN_CATEGORY_SERVICE,
     ADMIN_USERS_BUTTON,
     ADMIN_MATERIALS_BUTTON,
     ADMIN_SCHEDULE_BUTTON,
@@ -5793,15 +5801,12 @@ async def send_admin_menu(
 ) -> None:
     admin_text_default = (
         "<b>Админ-панель</b>\n\n"
-        "Здесь собраны основные инструменты:\n"
-        "• 👥 Пользователи — сегменты, карточки профилей и управление доступом.\n"
-        "• 📚 Материалы — переход к редактору контента и текстов.\n"
-        "• 📣 Рассылки — отправка сообщений сегментам и управление шаблонами.\n"
-        "• 🎮 Геймификация — сценарии приветствия, онбординг и доступ к оплатам.\n"
-        "• 📊 Статистика — сводка по статусам, прогресс уроков и последние оплаты.\n"
-        "• 🛠️ Диагностика — проверка важных настроек.\n"
-        "• ⚙️ Настройки — управление разделами меню и вспомогательными опциями.\n\n"
-        "Выберите раздел, чтобы открыть инструменты или вернуться в главное меню."
+        "Выберите категорию, чтобы открыть нужные инструменты:\n"
+        f"• {ADMIN_CATEGORY_USERS} — сегменты участниц, подтверждение оплат и управление ключами.\n"
+        f"• {ADMIN_CATEGORY_CONTENT} — тексты экранов, материалы и сценарии бота.\n"
+        f"• {ADMIN_CATEGORY_COMMUNICATIONS} — рассылки и календарь событий.\n"
+        f"• {ADMIN_CATEGORY_SERVICE} — статистика, настройки и диагностика.\n\n"
+        "Кнопка «⬅️ В админку» возвращает к списку категорий."
     )
     admin_text = await get_content("admin.prompts.root", admin_text_default)
     await message.answer(
@@ -5809,6 +5814,101 @@ async def send_admin_menu(
         reply_markup=admin_main_keyboard(),
         disable_web_page_preview=True,
     )
+
+
+async def send_admin_users_category(message: types.Message) -> None:
+    default_text = (
+        f"<b>{ADMIN_CATEGORY_USERS}</b>\n\n"
+        f"• «{ADMIN_USERS_BUTTON}» — перейти к сегментам участниц и карточкам профилей.\n"
+        f"• «{ADMIN_PAYMENTS_BUTTON}» — подтвердить или приостановить доступ вручную.\n"
+        f"• «{ADMIN_KEYS_BUTTON}» — управлять ключами для недель и потоков.\n\n"
+        f"Возвращайся к разделам через «{BACK_TO_ADMIN}» или нажми «{BACK_TO_MAIN}», чтобы выйти."
+    )
+    prompt = await get_content("admin.prompts.category_users", default_text)
+    await message.answer(
+        prompt,
+        reply_markup=admin_users_category_keyboard(),
+        disable_web_page_preview=True,
+    )
+
+
+async def send_admin_content_category(message: types.Message) -> None:
+    default_text = (
+        f"<b>{ADMIN_CATEGORY_CONTENT}</b>\n\n"
+        f"• «{ADMIN_CONTENT_MENU}» — открыть редактор экранов и подсказок бота.\n"
+        f"• «{ADMIN_MATERIALS_BUTTON}» — работать с каталогом материалов и доступами.\n"
+        f"• «{ADMIN_BEHAVIOR_BUTTON}» — настроить сценарии приветствия и онбординг.\n\n"
+        f"Когда закончишь, воспользуйся «{BACK_TO_ADMIN}» для возврата к категориям."
+    )
+    prompt = await get_content("admin.prompts.category_content", default_text)
+    await message.answer(
+        prompt,
+        reply_markup=admin_content_category_keyboard(),
+        disable_web_page_preview=True,
+    )
+
+
+async def send_admin_communications_category(message: types.Message) -> None:
+    default_text = (
+        f"<b>{ADMIN_CATEGORY_COMMUNICATIONS}</b>\n\n"
+        f"• «{ADMIN_BROADCAST_BUTTON}» — подготовить массовую рассылку и управлять шаблонами.\n"
+        f"• «{ADMIN_SCHEDULE_BUTTON}» — вести календарь встреч и напоминаний.\n\n"
+        f"Возврат к списку категорий — кнопка «{BACK_TO_ADMIN}»."
+    )
+    prompt = await get_content("admin.prompts.category_comms", default_text)
+    await message.answer(
+        prompt,
+        reply_markup=admin_communications_category_keyboard(),
+        disable_web_page_preview=True,
+    )
+
+
+async def send_admin_service_category(message: types.Message) -> None:
+    default_text = (
+        f"<b>{ADMIN_CATEGORY_SERVICE}</b>\n\n"
+        f"• «{ADMIN_STATS_BUTTON}» — посмотреть оперативную статистику по пользователям и оплатам.\n"
+        f"• «{ADMIN_SETTINGS_BUTTON}» — включить или скрыть части пользовательского меню.\n"
+        f"• «{ADMIN_DEBUG_BUTTON}» — проверить технические настройки и интеграции.\n\n"
+        f"Нажми «{BACK_TO_ADMIN}», чтобы вернуться к выбору категорий, или «{BACK_TO_MAIN}» для выхода."
+    )
+    prompt = await get_content("admin.prompts.category_service", default_text)
+    await message.answer(
+        prompt,
+        reply_markup=admin_service_category_keyboard(),
+        disable_web_page_preview=True,
+    )
+
+
+@router.message(StateFilter("*"), F.text == ADMIN_CATEGORY_USERS)
+async def admin_open_users_category(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+    await _reset_state_if_needed(state)
+    await send_admin_users_category(message)
+
+
+@router.message(StateFilter("*"), F.text == ADMIN_CATEGORY_CONTENT)
+async def admin_open_content_category(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+    await _reset_state_if_needed(state)
+    await send_admin_content_category(message)
+
+
+@router.message(StateFilter("*"), F.text == ADMIN_CATEGORY_COMMUNICATIONS)
+async def admin_open_communications_category(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+    await _reset_state_if_needed(state)
+    await send_admin_communications_category(message)
+
+
+@router.message(StateFilter("*"), F.text == ADMIN_CATEGORY_SERVICE)
+async def admin_open_service_category(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+    await _reset_state_if_needed(state)
+    await send_admin_service_category(message)
 
 
 def _format_admin_schedule_event(event: dict) -> str:
@@ -9062,7 +9162,7 @@ async def admin_users_menu_entry(message: types.Message, state: FSMContext):
         await _reset_state_if_needed(state)
         await state.set_state(AdminUserStates.choosing_segment)
         await message.answer(
-            "<b>👥 Пользователи</b>\n\n"
+            f"<b>{ADMIN_USERS_BUTTON}</b>\n\n"
             "Выберите сегмент, чтобы посмотреть список участниц и управлять доступом.",
             reply_markup=admin_users_segments_keyboard(),
             disable_web_page_preview=True,

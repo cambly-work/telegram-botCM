@@ -3,6 +3,10 @@ from keyboards import (
     ADMIN_BEHAVIOR_ONBOARDING,
     ADMIN_BEHAVIOR_REGISTRATION,
     ADMIN_BEHAVIOR_START,
+    ADMIN_CATEGORY_USERS,
+    ADMIN_CATEGORY_CONTENT,
+    ADMIN_CATEGORY_COMMUNICATIONS,
+    ADMIN_CATEGORY_SERVICE,
     ADMIN_BROADCAST_BUTTON,
     ADMIN_SCHEDULE_BUTTON,
     ADMIN_BROADCAST_HISTORY_BUTTON,
@@ -53,6 +57,10 @@ from keyboards import (
     admin_broadcast_keyboard,
     admin_broadcast_segments_keyboard,
     admin_main_keyboard,
+    admin_users_category_keyboard,
+    admin_content_category_keyboard,
+    admin_communications_category_keyboard,
+    admin_service_category_keyboard,
     admin_materials_keyboard,
     admin_materials_categories_keyboard,
     admin_payments_keyboard,
@@ -94,18 +102,54 @@ def test_admin_broadcast_keyboard_includes_status_flags():
 def test_admin_main_keyboard_layout():
     rows = _keyboard_texts(admin_main_keyboard())
     assert rows == [
-        [ADMIN_USERS_BUTTON],
-        [ADMIN_SCHEDULE_BUTTON],
-        [ADMIN_BROADCAST_BUTTON, ADMIN_CONTENT_MENU],
-        [ADMIN_MATERIALS_BUTTON, ADMIN_BEHAVIOR_BUTTON],
-        [ADMIN_KEYS_BUTTON],
-        [ADMIN_SETTINGS_BUTTON, ADMIN_STATS_BUTTON],
-        [ADMIN_DEBUG_BUTTON],
+        [ADMIN_CATEGORY_USERS],
+        [ADMIN_CATEGORY_CONTENT],
+        [ADMIN_CATEGORY_COMMUNICATIONS],
+        [ADMIN_CATEGORY_SERVICE],
         [BACK_TO_MAIN],
     ]
     flattened = [text for row in rows for text in row]
     assert ADMIN_PAYMENTS_BUTTON not in flattened
-    assert flattened.count(ADMIN_CONTENT_MENU) == 1
+    assert ADMIN_CONTENT_MENU not in flattened
+
+
+def test_admin_users_category_keyboard_layout():
+    rows = _keyboard_texts(admin_users_category_keyboard())
+    assert rows == [
+        [ADMIN_USERS_BUTTON],
+        [ADMIN_PAYMENTS_BUTTON],
+        [ADMIN_KEYS_BUTTON],
+        [BACK_TO_ADMIN, BACK_TO_MAIN],
+    ]
+
+
+def test_admin_content_category_keyboard_layout():
+    rows = _keyboard_texts(admin_content_category_keyboard())
+    assert rows == [
+        [ADMIN_CONTENT_MENU],
+        [ADMIN_MATERIALS_BUTTON],
+        [ADMIN_BEHAVIOR_BUTTON],
+        [BACK_TO_ADMIN, BACK_TO_MAIN],
+    ]
+
+
+def test_admin_communications_category_keyboard_layout():
+    rows = _keyboard_texts(admin_communications_category_keyboard())
+    assert rows == [
+        [ADMIN_BROADCAST_BUTTON],
+        [ADMIN_SCHEDULE_BUTTON],
+        [BACK_TO_ADMIN, BACK_TO_MAIN],
+    ]
+
+
+def test_admin_service_category_keyboard_layout():
+    rows = _keyboard_texts(admin_service_category_keyboard())
+    assert rows == [
+        [ADMIN_STATS_BUTTON],
+        [ADMIN_SETTINGS_BUTTON],
+        [ADMIN_DEBUG_BUTTON],
+        [BACK_TO_ADMIN, BACK_TO_MAIN],
+    ]
 
 
 def test_admin_materials_keyboard_layout():
