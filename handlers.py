@@ -5796,6 +5796,12 @@ async def send_admin_schedule_menu(
     else:
         lines.extend(["", "Список пуст. Добавьте событие через кнопку ниже."])
 
+    await message.answer(
+        "\n".join(lines),
+        reply_markup=admin_schedule_keyboard(archive_mode=archived),
+        disable_web_page_preview=True,
+    )
+
 async def send_admin_materials_menu(message: types.Message) -> None:
     default_text = (
         "<b>Материалы</b>\n\n"
