@@ -185,6 +185,9 @@ from keyboards import (
 logger = logging.getLogger("handlers")
 
 
+TELEGRAM_MESSAGE_LIMIT = 4096
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Router и хэндлеры
 # ──────────────────────────────────────────────────────────────────────────────
@@ -4234,6 +4237,58 @@ def _progress_line_details(
     return "🔒", "откроется после предыдущего"
 
 
+def _format_weekly_keys_section(
+    lines: Sequence[str],
+    *,
+    header: str,
+    prefix_length: int = 0,
+    leading_break: str = "\n\n",
+    max_length: int = TELEGRAM_MESSAGE_LIMIT,
+    truncation_template: str = "...и ещё {count} недель",
+) -> tuple[str, int]:
+    if not lines:
+        return "", 0
+
+    section_text = f"{leading_break}{header}"
+    if prefix_length + len(section_text) > max_length:
+        return "", len(lines)
+
+    added_lines: list[str] = []
+    index = 0
+    while index < len(lines):
+        candidate_lines = added_lines + [lines[index]]
+        candidate_text = section_text + "\n" + "\n".join(candidate_lines)
+        if prefix_length + len(candidate_text) <= max_length:
+            added_lines.append(lines[index])
+            section_text = candidate_text
+            index += 1
+            continue
+        break
+
+    omitted = len(lines) - index
+    if omitted <= 0:
+        return section_text, 0
+
+    notice = truncation_template.format(count=omitted)
+    if prefix_length + len(section_text + "\n" + notice) <= max_length:
+        return section_text + "\n" + notice, omitted
+
+    while added_lines:
+        added_lines.pop()
+        omitted += 1
+        base_section = f"{leading_break}{header}"
+        if added_lines:
+            base_section += "\n" + "\n".join(added_lines)
+        if prefix_length + len(base_section + "\n" + notice) <= max_length:
+            return base_section + "\n" + notice, omitted
+
+    base_section = f"{leading_break}{header}"
+    if prefix_length + len(base_section + "\n" + notice) <= max_length:
+        return base_section + "\n" + notice, omitted
+
+    return base_section, omitted
+
+
 async def send_profile_overview(
     message: types.Message,
     user: Optional[dict],
@@ -4301,7 +4356,12 @@ async def send_profile_overview(
     )
 
     if keys_lines:
-        profile_text += "\n\n🔑 <b>Ключи недели</b>\n" + "\n".join(keys_lines)
+        keys_block, _ = _format_weekly_keys_section(
+            keys_lines,
+            header="🔑 <b>Ключи недели</b>",
+            prefix_length=len(profile_text),
+        )
+        profile_text += keys_block
 
     keyboard = await build_menu_keyboard(
         user=user_row,
@@ -4720,7 +4780,7 @@ async def send_weekly_keys_overview_message(
     if not keys:
         return False
 
-    lines = ["🔑 Ключи недели:"]
+    lines: list[str] = []
     buttons: list[list[InlineKeyboardButton]] = []
 
     for key in keys:
@@ -4748,7 +4808,13 @@ async def send_weekly_keys_overview_message(
 
         lines.append(" ".join(parts))
 
-    text = "\n".join(lines)
+    text, _ = _format_weekly_keys_section(
+        lines,
+        header="🔑 Ключи недели:",
+        leading_break="",
+    )
+    if not text:
+        text = "🔑 Ключи недели:"
     markup = InlineKeyboardMarkup(inline_keyboard=buttons) if buttons else None
 
     if from_callback and allow_edit and getattr(message, "chat", None):
