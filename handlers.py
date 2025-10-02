@@ -8320,7 +8320,7 @@ async def admin_back_to_behavior(message: types.Message, state: FSMContext):
     await send_admin_behavior_menu(message)
 
 
-@router.message(F.text == ADMIN_BEHAVIOR_BUTTON)
+@router.message(StateFilter("*"), F.text == ADMIN_BEHAVIOR_BUTTON)
 async def admin_behavior_entry(message: types.Message, state: FSMContext):
     if not is_admin_id(message.from_user.id):
         return
@@ -8596,7 +8596,7 @@ async def admin_onboarding_delete_step(message: types.Message, state: FSMContext
     await send_admin_onboarding_menu(message)
 
 
-@router.message(F.text == ADMIN_SCHEDULE_BUTTON)
+@router.message(StateFilter("*"), F.text == ADMIN_SCHEDULE_BUTTON)
 async def admin_schedule_entry(message: types.Message, state: FSMContext):
     if not is_admin_id(message.from_user.id):
         return
@@ -8973,7 +8973,7 @@ async def admin_schedule_receive_link(message: types.Message, state: FSMContext)
         await _finalize_schedule_create(message, state)
 
 
-@router.message(F.text == ADMIN_USERS_BUTTON)
+@router.message(StateFilter("*"), F.text == ADMIN_USERS_BUTTON)
 async def admin_users_menu_entry(message: types.Message, state: FSMContext):
     if not is_admin_id(message.from_user.id):
         return
@@ -9272,7 +9272,7 @@ async def admin_users_progress_receive(message: types.Message, state: FSMContext
     )
 
 
-@router.message(F.text == ADMIN_BROADCAST_BUTTON)
+@router.message(StateFilter("*"), F.text == ADMIN_BROADCAST_BUTTON)
 async def admin_broadcast_menu_entry(message: types.Message, state: FSMContext):
     if not is_admin_id(message.from_user.id):
         return
@@ -9705,7 +9705,7 @@ async def send_admin_materials_menu(message: types.Message) -> None:
     )
 
 
-@router.message(F.text == ADMIN_MATERIALS_BUTTON)
+@router.message(StateFilter("*"), F.text == ADMIN_MATERIALS_BUTTON)
 async def admin_materials_menu(message: types.Message, state: FSMContext):
     if not is_admin_id(message.from_user.id):
         return
@@ -10212,7 +10212,7 @@ async def admin_materials_receive_grant(message: types.Message, state: FSMContex
     )
 
 
-@router.message(F.text == ADMIN_MATERIALS_BUTTON)
+@router.message(StateFilter("*"), F.text == ADMIN_MATERIALS_BUTTON)
 async def admin_materials_menu(message: types.Message, state: FSMContext):
     if not is_admin_id(message.from_user.id):
         return
@@ -10347,7 +10347,7 @@ async def send_admin_keys_menu(message: types.Message) -> None:
     )
 
 
-@router.message(F.text == ADMIN_KEYS_BUTTON)
+@router.message(StateFilter("*"), F.text == ADMIN_KEYS_BUTTON)
 async def admin_keys_menu(message: types.Message, state: FSMContext):
     if not is_admin_id(message.from_user.id):
         return
@@ -10702,7 +10702,7 @@ async def admin_keys_receive_upload(message: types.Message, state: FSMContext):
     )
 
 
-@router.message(F.text == ADMIN_CONTENT_MENU)
+@router.message(StateFilter("*"), F.text == ADMIN_CONTENT_MENU)
 async def admin_content_menu(message: types.Message, state: FSMContext):
     if not is_admin_id(message.from_user.id):
         return
@@ -11938,7 +11938,7 @@ async def admin_content_history_reply(message: types.Message, state: FSMContext)
     )
 
 
-@router.message(F.text == ADMIN_STATS_BUTTON)
+@router.message(StateFilter("*"), F.text == ADMIN_STATS_BUTTON)
 async def admin_stats(message: types.Message, state: FSMContext):
     if not is_admin_id(message.from_user.id):
         return
@@ -12070,7 +12070,7 @@ async def admin_stats_recent_payments(message: types.Message, state: FSMContext)
     )
 
 
-@router.message(F.text == ADMIN_DEBUG_BUTTON)
+@router.message(StateFilter("*"), F.text == ADMIN_DEBUG_BUTTON)
 async def admin_debug(message: types.Message):
     if not is_admin_id(message.from_user.id):
         logger.warning(
@@ -12091,7 +12091,7 @@ async def admin_debug(message: types.Message):
     await message.answer(config_text, reply_markup=admin_main_keyboard(), disable_web_page_preview=True)
 
 
-@router.message(F.text == ADMIN_SETTINGS_BUTTON)
+@router.message(StateFilter("*"), F.text == ADMIN_SETTINGS_BUTTON)
 async def admin_settings_menu(message: types.Message, state: FSMContext):
     if not is_admin_id(message.from_user.id):
         return
@@ -12099,7 +12099,7 @@ async def admin_settings_menu(message: types.Message, state: FSMContext):
     await send_admin_settings(message)
 
 
-@router.message(F.text == ADMIN_PAYMENTS_BUTTON)
+@router.message(StateFilter("*"), F.text == ADMIN_PAYMENTS_BUTTON)
 async def admin_payments_menu(message: types.Message, state: FSMContext):
     if not is_admin_id(message.from_user.id):
         return
@@ -12321,7 +12321,7 @@ async def admin_payments_receive_review(message: types.Message, state: FSMContex
     await send_admin_payments_overview(message)
 
 
-@router.message(F.text == ADMIN_TEXTS_ENTRY)
+@router.message(StateFilter("*"), F.text == ADMIN_TEXTS_ENTRY)
 async def admin_texts_entry(message: types.Message, state: FSMContext):
     if not is_admin_id(message.from_user.id):
         return
