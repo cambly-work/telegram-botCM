@@ -26,6 +26,8 @@ NEXT_LESSON = "➡️ Следующий урок"
 WRITE_FEEDBACK = "📝 Написать отзыв"
 SKIP_FEEDBACK = "Пропустить отзыв"
 CANCEL_TEXT = "Отмена"
+ANALYSIS_BACK_BUTTON = "⬅️ Назад"
+ANALYSIS_CONFIRM_BUTTON = "✅ Отправить заявку"
 ADMIN_TEXTS_ENTRY = "📄 Тексты экранов"
 ADMIN_CONTENT_MENU = "🧾 Контент и тексты"
 ADMIN_CONTENT_VIEW = "🔍 Посмотреть текст"
@@ -334,6 +336,17 @@ def cancel_keyboard(*, extra_buttons: list[str] | None = None) -> ReplyKeyboardM
         keyboard=rows,
         resize_keyboard=True,
     )
+
+
+def analysis_confirm_keyboard() -> ReplyKeyboardMarkup:
+    rows = [
+        [KeyboardButton(text=ANALYSIS_CONFIRM_BUTTON)],
+        [
+            KeyboardButton(text=ANALYSIS_BACK_BUTTON),
+            KeyboardButton(text=CANCEL_TEXT),
+        ],
+    ]
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
 
 def remove_keyboard() -> ReplyKeyboardRemove:
