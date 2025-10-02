@@ -4646,10 +4646,13 @@ async def send_learning_progress_section(
     progress_details = await get_user_progress(user_row["id"])
     next_lesson = await next_lesson_to_deliver(user_row["id"])
 
+    status_map: dict[int, str] = {}
     status_lines: list[str] = []
-    for lesson_num in range(1, 5):
+    for lesson_num in range(1, _LESSON_PROGRESS_TOTAL + 1):
         info = progress_details.get(lesson_num, {})
         status_code = info.get("hw_status")
+        if status_code:
+            status_map[lesson_num] = status_code
         delivered = bool(info.get("delivered"))
         feedback_count = int(info.get("feedback_count") or 0)
         icon, description = _progress_line_details(
@@ -4662,9 +4665,14 @@ async def send_learning_progress_section(
         status_lines.append(f"{icon} Урок {lesson_num}: {description}")
 
     progress_rows = "\n".join(status_lines)
+    progress_bar, completed_count = _build_lesson_progress_bar(status_map)
+    cta_text = _build_lesson_cta(next_lesson)
 
-    if next_lesson == 5:
-        summary = "Ты прошла все 4 урока! Продолжай практики или изучай материалы клуба."
+    if next_lesson == _LESSON_PROGRESS_TOTAL + 1:
+        summary = (
+            f"Ты прошла все {_LESSON_PROGRESS_TOTAL} урока! "
+            "Продолжай практики или изучай материалы клуба."
+        )
         next_label = ""
     else:
         summary = f"Следующий шаг: открой урок {next_lesson} через «Бесплатные уроки»."
@@ -4676,6 +4684,8 @@ async def send_learning_progress_section(
             "<b>Мой прогресс</b>\n"
             "{membership_status_line}\n"
             "{membership_access_line}\n\n"
+            "Прогресс: {progress_bar} {progress_completed}/{progress_total}\n"
+            "{cta_text}\n\n"
             "{progress_rows}\n\n"
             "{summary}"
         ),
@@ -4687,8 +4697,16 @@ async def send_learning_progress_section(
         template,
         progress_rows=progress_rows,
         PROGRESS_ROWS=progress_rows,
+        progress_bar=progress_bar,
+        PROGRESS_BAR=progress_bar,
+        progress_completed=str(completed_count),
+        PROGRESS_COMPLETED=str(completed_count),
+        progress_total=str(_LESSON_PROGRESS_TOTAL),
+        PROGRESS_TOTAL=str(_LESSON_PROGRESS_TOTAL),
         summary=summary,
         SUMMARY=summary,
+        cta_text=cta_text,
+        CTA_TEXT=cta_text,
         next_lesson=next_label,
         NEXT_LESSON=next_label,
         membership_status=membership["summary"],
