@@ -133,7 +133,7 @@ def test_admin_stats_forms_filter_limits_entries():
     stats["forms"]["test_requests"]["entries"].append(
         {
             "id": 6,
-            "status": "done",
+            "status": "archived",
             "updated_at": later_ts,
             "created_at": base_ts,
             "preferred_name": "Сергей Сергеев",
@@ -154,11 +154,11 @@ def test_admin_stats_forms_filter_limits_entries():
         }
     )
 
-    text = handlers._format_admin_stats_forms(stats, status_filter="done")
+    text = handlers._format_admin_stats_forms(stats, status_filter="archived")
 
-    assert "Текущий фильтр: <b>Завершено</b>" in text
+    assert "Текущий фильтр: <b>Архив</b>" in text
     assert "Сергей Сергеев" in text
-    assert "Анна Завершённая" in text
+    assert "Анна Завершённая" not in text
     assert "Иван Иванов" not in text
     assert "Пётр Петров" not in text
     assert "Всего заявок: <b>1</b>" in text
@@ -168,9 +168,9 @@ def test_admin_stats_forms_filter_limits_entries():
 def test_admin_stats_forms_filter_empty_message():
     stats = _default_stats()
 
-    text = handlers._format_admin_stats_forms(stats, status_filter="booked")
+    text = handlers._format_admin_stats_forms(stats, status_filter="archived")
 
-    assert "Текущий фильтр: <b>Запланировано</b>" in text
+    assert "Текущий фильтр: <b>Архив</b>" in text
     assert "По выбранному фильтру заявки не найдены." in text
 
 
@@ -216,7 +216,7 @@ def test_admin_stats_forms_apply_filter_reports_empty_entries(monkeypatch):
     message = DummyMessage()
 
     monkeypatch.setattr(handlers, "is_admin_id", lambda user_id: True)
-    monkeypatch.setattr(handlers, "admin_forms_filter_status_from_text", lambda text: (True, "done"))
+    monkeypatch.setattr(handlers, "admin_forms_filter_status_from_text", lambda text: (True, "archived"))
     monkeypatch.setattr(handlers, "_set_admin_forms_filter", fake_set_filter)
     monkeypatch.setattr(handlers, "_get_admin_forms_filter", fake_get_filter)
     monkeypatch.setattr(handlers, "_send_admin_forms_breakdown", fake_send_breakdown)
@@ -224,7 +224,7 @@ def test_admin_stats_forms_apply_filter_reports_empty_entries(monkeypatch):
 
     asyncio.run(handlers.admin_stats_forms_apply_filter(message, state=None))
 
-    assert breakdown_calls == ["done"]
+    assert breakdown_calls == ["archived"]
     assert any(
         "По выбранному фильтру заявки не найдены." in str(call.get("text", ""))
         for call in message.answers
