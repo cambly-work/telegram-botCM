@@ -9041,10 +9041,14 @@ async def admin_schedule_receive_link(message: types.Message, state: FSMContext)
 
 @router.message(StateFilter("*"), F.text == ADMIN_USERS_BUTTON)
 async def admin_users_menu_entry(message: types.Message, state: FSMContext):
-    if not is_admin_id(message.from_user.id):
-        return
     admin_id = message.from_user.id if message.from_user else None
     button_text = (message.text or "").strip()
+    if not is_admin_id(admin_id):
+        logger.warning(
+            "Unauthorized admin users menu access attempt",
+            extra={"admin_id": admin_id, "button_text": button_text},
+        )
+        return
     logger.info(
         "Admin users menu requested",
         extra={"admin_id": admin_id, "button_text": button_text},
