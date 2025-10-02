@@ -8284,6 +8284,9 @@ async def menu_analysis(message: types.Message, state: FSMContext):
 @router.message(AnalysisStates.waiting_format)
 async def analysis_collect_format(message: types.Message, state: FSMContext):
     text = (message.text or "").strip()
+    if _analysis_normalize_text(text) == _analysis_normalize_text(CANCEL_TEXT):
+        await cancel_handler(message, state)
+        return
     if _analysis_is_back(text):
         await _analysis_send_format_prompt(message)
         return
@@ -8300,6 +8303,9 @@ async def analysis_collect_format(message: types.Message, state: FSMContext):
 @router.message(AnalysisStates.waiting_contact)
 async def analysis_collect_contact(message: types.Message, state: FSMContext):
     text = (message.text or "").strip()
+    if _analysis_normalize_text(text) == _analysis_normalize_text(CANCEL_TEXT):
+        await cancel_handler(message, state)
+        return
     if _analysis_is_back(text):
         await state.set_state(AnalysisStates.waiting_format)
         await _analysis_send_format_prompt(message)
@@ -8317,6 +8323,9 @@ async def analysis_collect_contact(message: types.Message, state: FSMContext):
 @router.message(AnalysisStates.waiting_time)
 async def analysis_collect_time(message: types.Message, state: FSMContext):
     text = (message.text or "").strip()
+    if _analysis_normalize_text(text) == _analysis_normalize_text(CANCEL_TEXT):
+        await cancel_handler(message, state)
+        return
     if _analysis_is_back(text):
         await state.set_state(AnalysisStates.waiting_contact)
         await _analysis_send_contact_prompt(message)
@@ -8334,6 +8343,9 @@ async def analysis_collect_time(message: types.Message, state: FSMContext):
 @router.message(AnalysisStates.waiting_confirm)
 async def analysis_confirm_request(message: types.Message, state: FSMContext):
     text = (message.text or "").strip()
+    if _analysis_normalize_text(text) == _analysis_normalize_text(CANCEL_TEXT):
+        await cancel_handler(message, state)
+        return
     if _analysis_is_back(text):
         await state.set_state(AnalysisStates.waiting_time)
         await _analysis_send_time_prompt(message)
