@@ -1,6 +1,14 @@
 # keyboards.py
 import os
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
+from typing import Mapping, Sequence
+
+from aiogram.types import (
+    ReplyKeyboardMarkup,
+    KeyboardButton,
+    ReplyKeyboardRemove,
+    InlineKeyboardMarkup,
+    InlineKeyboardButton,
+)
 
 # ──────────────────────────────────────────────────────────────────────────────
 # ENV / helpers
@@ -106,6 +114,8 @@ BROADCAST_KEYS_BUTTON = "🔑 Ключи"
 BROADCAST_PRACTICE_BUTTON = "🧘 Практика"
 BROADCAST_TEMPLATES_BUTTON = "🗂 Шаблоны рассылок"
 BROADCAST_TEMPLATE_PREFIX = "🗂 Шаблон: "
+
+ADMIN_TEST_REQUEST_STATUS_PREFIX = "admin:test_request_status"
 
 SEND_BROADCAST_BUTTON = "🚀 Отправить"
 EDIT_BROADCAST_BUTTON = "✏️ Изменить текст"
@@ -448,6 +458,42 @@ def admin_stats_keyboard() -> ReplyKeyboardMarkup:
         [KeyboardButton(text=BACK_TO_ADMIN), KeyboardButton(text=BACK_TO_MAIN)],
     ]
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
+
+
+def build_admin_test_request_status_callback(
+    test_request_id: int,
+    status: str,
+) -> str:
+    return f"{ADMIN_TEST_REQUEST_STATUS_PREFIX}:{test_request_id}:{status}"
+
+
+def admin_test_request_status_keyboard(
+    *,
+    test_request_id: int,
+    statuses: Sequence[str],
+    labels: Mapping[str, str] | None = None,
+    current_status: str | None = None,
+) -> InlineKeyboardMarkup:
+    label_map: Mapping[str, str] = labels or {}
+    inline_rows: list[list[InlineKeyboardButton]] = []
+
+    for status in statuses:
+        label = label_map.get(status, status or "—")
+        prefix = "• " if current_status == status else ""
+        button_text = f"{prefix}{label}"
+        inline_rows.append(
+            [
+                InlineKeyboardButton(
+                    text=button_text,
+                    callback_data=build_admin_test_request_status_callback(
+                        test_request_id,
+                        status,
+                    ),
+                )
+            ]
+        )
+
+    return InlineKeyboardMarkup(inline_keyboard=inline_rows)
 
 
 def admin_users_segments_keyboard() -> ReplyKeyboardMarkup:
