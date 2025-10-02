@@ -121,8 +121,10 @@ BROADCAST_TEMPLATE_PREFIX = "🗂 Шаблон: "
 
 ADMIN_FORMS_FILTER_ALL = "Все"
 ADMIN_FORMS_FILTER_LABEL_TO_STATUS: dict[str, str] = {
-    TEST_REQUEST_STATUS_LABELS.get(status, status): status for status in TEST_REQUEST_STATUS_ORDER
+    TEST_REQUEST_STATUS_LABELS.get(status, status): status
+    for status in TEST_REQUEST_STATUS_ORDER
 }
+ADMIN_TEST_REQUEST_STATUS_PREFIX = "admin:test-request-status"
 
 
 def admin_forms_filter_status_from_text(text: str | None) -> tuple[bool, str | None]:
@@ -492,6 +494,14 @@ def admin_stats_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
 
+_ADMIN_TEST_REQUEST_STATUS_LEGACY_KEYS = {
+    "test_request_id",
+    "statuses",
+    "labels",
+    "current_status",
+}
+
+
 def admin_forms_filter_keyboard(*, active_filter: str | None = None) -> ReplyKeyboardMarkup:
     rows: list[list[KeyboardButton]] = [
         [
@@ -529,6 +539,35 @@ def admin_forms_filter_keyboard(*, active_filter: str | None = None) -> ReplyKey
     rows.append([KeyboardButton(text=BACK_TO_ADMIN), KeyboardButton(text=BACK_TO_MAIN)])
 
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
+
+
+def _admin_test_request_status_keyboard_legacy(
+    *,
+    test_request_id: int,
+    statuses: Sequence[str],
+    labels: Mapping[str, str],
+    current_status: str,
+) -> InlineKeyboardMarkup:
+    buttons: list[list[InlineKeyboardButton]] = []
+    for status in statuses:
+        label = labels.get(status, status)
+        text = f"✅ {label}" if status == current_status else label
+        callback_data = f"{ADMIN_TEST_REQUEST_STATUS_PREFIX}:{test_request_id}:{status}"
+        buttons.append([InlineKeyboardButton(text=text, callback_data=callback_data)])
+
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def admin_test_request_status_keyboard(
+    *args,
+    **kwargs,
+) -> ReplyKeyboardMarkup | InlineKeyboardMarkup:
+    """Compatibility alias for legacy imports and call signatures."""
+
+    if _ADMIN_TEST_REQUEST_STATUS_LEGACY_KEYS.issubset(kwargs):
+        return _admin_test_request_status_keyboard_legacy(**kwargs)
+
+    return admin_forms_filter_keyboard(*args, **kwargs)
 
 
 def admin_users_segments_keyboard() -> ReplyKeyboardMarkup:
