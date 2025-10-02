@@ -89,6 +89,7 @@ def _default_stats() -> dict:
                         "updated_at": later_ts,
                         "created_at": base_ts,
                         "preferred_name": "Иван Иванов",
+                        "birthdate": base_ts.date(),
                         "username": "ivan_test",
                         "tg_user_id": 987654,
                     }
@@ -129,6 +130,7 @@ def test_format_admin_test_request_entry_prefers_name_and_escapes():
         "id": 42,
         "status": "waiting",
         "preferred_name": "Анна <Смирнова>",
+        "birthdate": base_ts.date(),
         "username": "anna&co",
         "tg_user_id": 987654321,
         "created_at": base_ts,
@@ -140,6 +142,7 @@ def test_format_admin_test_request_entry_prefers_name_and_escapes():
     assert "#42" in text
     assert handlers.TEST_REQUEST_STATUS_LABELS["waiting"] in text
     assert "@anna&amp;co" in text
+    assert "Дата рождения: 01.01.2024" in text
 
 
 def test_format_admin_analysis_request_entry_includes_contacts():
@@ -189,10 +192,11 @@ def test_admin_stats_forms_filter_limits_entries():
     stats["forms"]["test_requests"]["entries"].append(
         {
             "id": 6,
-            "status": "done",
+            "status": "archived",
             "updated_at": later_ts,
             "created_at": base_ts,
             "preferred_name": "Сергей Сергеев",
+            "birthdate": base_ts.date(),
             "username": "sergey_done",
             "tg_user_id": 192837,
         }
@@ -210,11 +214,11 @@ def test_admin_stats_forms_filter_limits_entries():
         }
     )
 
-    text = handlers._format_admin_stats_forms(stats, status_filter="done")
+    text = handlers._format_admin_stats_forms(stats, status_filter="archived")
 
-    assert "Фильтр заявок на тестирование: <b>Завершено</b>" in text
+    assert "Текущий фильтр: <b>Архив</b>" in text
     assert "Сергей Сергеев" in text
-    assert "Анна Завершённая" in text
+    assert "Анна Завершённая" not in text
     assert "Иван Иванов" not in text
     assert "Пётр Петров" not in text
     assert "Всего заявок: <b>1</b>" in text
@@ -225,9 +229,9 @@ def test_admin_stats_forms_filter_limits_entries():
 def test_admin_stats_forms_filter_empty_message():
     stats = _default_stats()
 
-    text = handlers._format_admin_stats_forms(stats, status_filter="booked")
+    text = handlers._format_admin_stats_forms(stats, status_filter="archived")
 
-    assert "Фильтр заявок на тестирование: <b>Запланировано</b>" in text
+    assert "Текущий фильтр: <b>Архив</b>" in text
     assert "По выбранному фильтру заявки не найдены." in text
 
 
@@ -273,7 +277,7 @@ def test_admin_stats_forms_apply_filter_reports_empty_entries(monkeypatch):
     message = DummyMessage()
 
     monkeypatch.setattr(handlers, "is_admin_id", lambda user_id: True)
-    monkeypatch.setattr(handlers, "admin_forms_filter_status_from_text", lambda text: (True, "done"))
+    monkeypatch.setattr(handlers, "admin_forms_filter_status_from_text", lambda text: (True, "archived"))
     monkeypatch.setattr(handlers, "_set_admin_forms_filter", fake_set_filter)
     monkeypatch.setattr(handlers, "_get_admin_forms_filter", fake_get_filter)
     monkeypatch.setattr(handlers, "_send_admin_forms_breakdown", fake_send_breakdown)
@@ -281,7 +285,7 @@ def test_admin_stats_forms_apply_filter_reports_empty_entries(monkeypatch):
 
     asyncio.run(handlers.admin_stats_forms_apply_filter(message, state=None))
 
-    assert breakdown_calls == ["done"]
+    assert breakdown_calls == ["archived"]
     assert any(
         "По выбранному фильтру заявки не найдены." in str(call.get("text", ""))
         for call in message.answers

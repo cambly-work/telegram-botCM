@@ -121,12 +121,13 @@ BROADCAST_TEMPLATE_PREFIX = "🗂 Шаблон: "
 
 ADMIN_FORMS_FILTER_ALL = "Все"
 ADMIN_FORMS_TOGGLE_WAITING = "Заявки «В ожидании»"
+ADMIN_FORMS_DELETE_REQUEST = "Удалить"
 ADMIN_FORMS_FILTER_LABEL_TO_STATUS: dict[str, str] = {
     TEST_REQUEST_STATUS_LABELS.get(status, status): status
     for status in TEST_REQUEST_STATUS_ORDER
 }
 ADMIN_TEST_REQUEST_STATUS_PREFIX = "admin:test-request-status"
-ADMIN_ANALYSIS_REQUEST_ACTION_PREFIX = "admin:analysis-request"
+ADMIN_TEST_REQUEST_DELETE_ACTION = "delete"
 
 
 def admin_forms_filter_status_from_text(text: str | None) -> tuple[bool, str | None]:
@@ -134,7 +135,7 @@ def admin_forms_filter_status_from_text(text: str | None) -> tuple[bool, str | N
         return False, None
 
     cleaned = text.strip()
-    for prefix in ("✅", "•"):
+    for prefix in ("✅", "•", "🔥"):
         if cleaned.startswith(prefix):
             cleaned = cleaned[len(prefix) :].strip()
     if cleaned == ADMIN_FORMS_FILTER_ALL:
@@ -511,30 +512,39 @@ _ADMIN_TEST_REQUEST_STATUS_LEGACY_KEYS = {
 
 
 def admin_forms_filter_keyboard(*, active_filter: str | None = None) -> ReplyKeyboardMarkup:
-    toggle_prefix = "✅ " if active_filter == "waiting" else "🔥 "
-    rows: list[list[KeyboardButton]] = [
-        [
-            KeyboardButton(
-                text=("✅ " + ADMIN_FORMS_FILTER_ALL)
-                if active_filter is None
-                else ADMIN_FORMS_FILTER_ALL
-            ),
-            KeyboardButton(text=f"{toggle_prefix}{ADMIN_FORMS_TOGGLE_WAITING}"),
-        ]
-    ]
+    rows: list[list[KeyboardButton]] = []
 
-    labels = [
-        TEST_REQUEST_STATUS_LABELS.get(status, status)
-        for status in TEST_REQUEST_STATUS_ORDER
-        if status != "waiting"
-    ]
-    for idx in range(0, len(labels), 2):
-        chunk = []
-        for label in labels[idx : idx + 2]:
-            status = ADMIN_FORMS_FILTER_LABEL_TO_STATUS.get(label)
-            text = f"✅ {label}" if status == active_filter else label
-            chunk.append(KeyboardButton(text=text))
+    all_button_text = (
+        f"✅ {ADMIN_FORMS_FILTER_ALL}" if active_filter is None else ADMIN_FORMS_FILTER_ALL
+    )
+    first_row: list[KeyboardButton] = [KeyboardButton(text=all_button_text)]
+
+    status_buttons: list[KeyboardButton] = []
+    for status in TEST_REQUEST_STATUS_ORDER:
+        label = TEST_REQUEST_STATUS_LABELS.get(status, status)
+        if status == "waiting" and active_filter != "waiting":
+            prefix = "🔥 "
+        elif status == active_filter:
+            prefix = "✅ "
+        else:
+            prefix = ""
+        status_buttons.append(KeyboardButton(text=f"{prefix}{label}".strip()))
+
+    if status_buttons:
+        first_row.append(status_buttons[0])
+    rows.append(first_row)
+
+    remaining_status_buttons = status_buttons[1:]
+    chunk: list[KeyboardButton] = []
+    for button in remaining_status_buttons:
+        chunk.append(button)
+        if len(chunk) == 2:
+            rows.append(chunk)
+            chunk = []
+    if chunk:
         rows.append(chunk)
+
+    rows.append([KeyboardButton(text=ADMIN_FORMS_DELETE_REQUEST)])
 
     rows.append([KeyboardButton(text=ADMIN_STATS_REFRESH)])
     rows.append(
@@ -615,6 +625,11 @@ def _admin_test_request_status_keyboard_legacy(
         text = f"✅ {label}" if status == current_status else label
         callback_data = f"{ADMIN_TEST_REQUEST_STATUS_PREFIX}:{test_request_id}:{status}"
         buttons.append([InlineKeyboardButton(text=text, callback_data=callback_data)])
+
+    delete_callback = (
+        f"{ADMIN_TEST_REQUEST_STATUS_PREFIX}:{test_request_id}:{ADMIN_TEST_REQUEST_DELETE_ACTION}"
+    )
+    buttons.append([InlineKeyboardButton(text=ADMIN_FORMS_DELETE_REQUEST, callback_data=delete_callback)])
 
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 

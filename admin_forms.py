@@ -5,19 +5,11 @@ from typing import Dict, Iterable
 
 TEST_REQUEST_STATUS_ORDER: list[str] = [
     "waiting",
-    "booked",
-    "in_progress",
-    "done",
-    "cancelled",
     "archived",
 ]
 
 TEST_REQUEST_STATUS_LABELS: Dict[str, str] = {
     "waiting": "В ожидании",
-    "booked": "Запланировано",
-    "in_progress": "В работе",
-    "done": "Завершено",
-    "cancelled": "Отменено",
     "archived": "Архив",
 }
 

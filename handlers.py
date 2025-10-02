@@ -85,6 +85,7 @@ from keyboards import (
     admin_forms_filter_keyboard,
     admin_forms_filter_status_from_text,
     ADMIN_FORMS_TOGGLE_WAITING,
+    ADMIN_FORMS_DELETE_REQUEST,
     BACK_TO_MAIN,
     BACK_TO_LEARNING,
     BACK_TO_MATERIALS,
@@ -200,7 +201,7 @@ from keyboards import (
     ADMIN_STATS_RECENT_PAYMENTS,
     ADMIN_STATS_FORMS_BREAKDOWN,
     ADMIN_TEST_REQUEST_STATUS_PREFIX,
-    ADMIN_ANALYSIS_REQUEST_ACTION_PREFIX,
+    ADMIN_TEST_REQUEST_DELETE_ACTION,
     LEARNING_PROGRESS_BUTTON,
     MATERIALS_CATALOG_BUTTON,
     MATERIALS_PRACTICES_BUTTON,
@@ -2489,9 +2490,29 @@ def _format_admin_test_request_entry(entry: dict) -> str:
     created_text = _format_datetime_safe(entry.get("created_at"))
     updated_text = _format_datetime_safe(entry.get("updated_at") or entry.get("created_at"))
 
+    birthdate_value = entry.get("birthdate")
+    birthdate_display = "—"
+    if isinstance(birthdate_value, date):
+        birthdate_display = _format_birthdate(birthdate_value)
+    elif isinstance(birthdate_value, str):
+        normalized_birthdate = birthdate_value.strip()
+        if normalized_birthdate:
+            try:
+                parsed_birthdate = date.fromisoformat(normalized_birthdate)
+            except ValueError:
+                birthdate_display = normalized_birthdate
+            else:
+                birthdate_display = _format_birthdate(parsed_birthdate)
+    elif birthdate_value is not None:
+        birthdate_display = str(birthdate_value)
+
+    if birthdate_display != "—":
+        birthdate_display = html.escape(birthdate_display)
+
     lines = [
         f"• <b>{title}</b> — {status_label_text}",
         "  " + " · ".join(details),
+        f"  Дата рождения: {birthdate_display}",
         f"  Создана: {created_text}; обновлена: {updated_text}",
     ]
     return "\n".join(lines)
@@ -2630,6 +2651,7 @@ async def _collect_admin_stats_data() -> dict[str, Any]:
                tr.status,
                tr.created_at,
                tr.updated_at,
+               tr.birthdate,
                tr.preferred_name,
                tr.tg_user_id,
                tr.user_id,
@@ -3026,6 +3048,11 @@ def _format_admin_stats_forms(
     active_requests = int(summary.get("active") or 0)
     request_entries = test_requests.get("entries") or []
 
+    archived_slug = "archived"
+    has_archived_requests = any(
+        str(item.get("status") or "").lower() == archived_slug for item in request_entries
+    )
+
     normalized_filter: str | None = None
     if status_filter:
         candidate = str(status_filter).strip().lower()
@@ -3088,7 +3115,11 @@ def _format_admin_stats_forms(
             if str(item.get("status") or "").lower() == normalized_filter
         ]
     else:
-        filtered_requests = list(request_entries)
+        filtered_requests = [
+            item
+            for item in request_entries
+            if str(item.get("status") or "").lower() != archived_slug
+        ]
 
     def _session_status_slug(item: dict[str, Any]) -> str:
         return "done" if item.get("completed_at") is not None else "in_progress"
@@ -3259,15 +3290,14 @@ def _format_admin_stats_forms(
 
     if normalized_filter and not applicant_rows:
         lines.extend(["", "По выбранному фильтру заявки не найдены."])
-    elif not normalized_filter:
-        toggle_hint = f"🔥 {ADMIN_FORMS_TOGGLE_WAITING}"
-        waiting_label = TEST_REQUEST_STATUS_LABELS.get("waiting", "В ожидании")
+    elif not normalized_filter and has_archived_requests:
+        archived_label = TEST_REQUEST_STATUS_LABELS.get("archived", "Архив")
         lines.extend(
             [
                 "",
                 (
-                    f"Используйте кнопку «{toggle_hint}», чтобы показать заявки"
-                    f" на тестирование в статусе «{waiting_label}»."
+                    f"Используйте фильтр «{archived_label}», чтобы посмотреть архив"
+                    f" и при необходимости удалить заявки кнопкой «{ADMIN_FORMS_DELETE_REQUEST}»."
                 ),
             ]
         )
@@ -13481,11 +13511,72 @@ async def admin_stats_forms_apply_filter(message: types.Message, state: FSMConte
     admin_id = message.from_user.id if message.from_user else None
     _set_admin_forms_filter(admin_id, status)
     status_filter = _get_admin_forms_filter(admin_id)
-    stats = await _send_admin_forms_breakdown(message, status_filter=status_filter)
-    if stats is None:
-        stats = await _collect_admin_stats_data()
-    await _send_admin_analysis_request_entries(message, stats)
-    await _send_admin_test_request_entries(message, stats, status_filter=status_filter)
+    await _send_admin_forms_breakdown(message, status_filter=status_filter)
+
+    stats = await _collect_admin_stats_data()
+    forms_data = stats.get("forms") or {}
+    test_requests = forms_data.get("test_requests") or {}
+    entries = test_requests.get("entries") or []
+
+    normalized_filter: str | None = None
+    if status_filter:
+        candidate = str(status_filter).strip().lower()
+        if candidate in _ADMIN_FORMS_ALLOWED_STATUSES:
+            normalized_filter = candidate
+
+    if normalized_filter:
+        entries = [
+            entry
+            for entry in entries
+            if str(entry.get("status") or "").strip().lower() == normalized_filter
+        ]
+    else:
+        entries = [
+            entry
+            for entry in entries
+            if str(entry.get("status") or "").strip().lower() != "archived"
+        ]
+
+    if not entries:
+        empty_text = (
+            "По выбранному фильтру заявки не найдены."
+            if normalized_filter
+            else "Пока нет заявок в базе."
+        )
+        await message.answer(
+            empty_text,
+            disable_web_page_preview=True,
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    rendered = 0
+    for entry in entries:
+        request_id = entry.get("id")
+        if request_id is None:
+            continue
+        try:
+            request_id_int = int(request_id)
+        except (TypeError, ValueError):
+            continue
+
+        keyboard = admin_test_request_status_keyboard(
+            test_request_id=request_id_int,
+            statuses=TEST_REQUEST_STATUS_ORDER,
+            labels=TEST_REQUEST_STATUS_LABELS,
+            current_status=str(entry.get("status") or ""),
+        )
+
+        await message.answer(
+            _format_admin_test_request_entry(entry),
+            reply_markup=keyboard,
+            disable_web_page_preview=True,
+            parse_mode=ParseMode.HTML,
+        )
+
+        rendered += 1
+        if rendered >= _ADMIN_TEST_REQUEST_ENTRIES_LIMIT:
+            break
 
 
 @router.message(F.text == ADMIN_STATS_RECENT_PAYMENTS)
@@ -13550,7 +13641,8 @@ async def admin_stats_test_request_update_status(
         return
 
     new_status = parts[3]
-    if new_status not in TEST_REQUEST_STATUS_ORDER:
+    is_delete_action = new_status == ADMIN_TEST_REQUEST_DELETE_ACTION
+    if not is_delete_action and new_status not in TEST_REQUEST_STATUS_ORDER:
         await callback.answer("Неизвестный статус", show_alert=True)
         return
 
@@ -13563,75 +13655,103 @@ async def admin_stats_test_request_update_status(
         return
 
     previous_status = str(current_row.get("status") or "")
-    if previous_status == new_status:
-        await callback.answer("Статус уже установлен")
-        return
+    ack_text = "Статус обновлён"
 
-    await execute(
-        """
-        UPDATE test_requests
-           SET status=$2,
-               updated_at=NOW()
-         WHERE id=$1
-        """,
-        request_id,
-        new_status,
-    )
+    if is_delete_action:
+        if previous_status.strip().lower() != "archived":
+            await callback.answer("Можно удалить только архивные заявки", show_alert=True)
+            return
 
-    updated_row = await fetchrow(
-        """
-        SELECT tr.id,
-               tr.status,
-               tr.updated_at,
-               tr.created_at,
-               tr.preferred_name,
-               tr.tg_user_id,
-               tr.user_id,
-               u.full_name,
-               u.name,
-               u.username
-          FROM test_requests AS tr
-          LEFT JOIN users AS u ON u.id = tr.user_id
-         WHERE tr.id=$1
-        """,
-        request_id,
-    )
+        await execute("DELETE FROM test_requests WHERE id=$1", request_id)
+        await log_admin_action(
+            callback.from_user.id,
+            "test_request_delete",
+            {
+                "test_request_id": request_id,
+                "previous_status": previous_status,
+            },
+        )
+        if callback.message:
+            try:
+                await callback.message.delete()
+            except TelegramBadRequest as exc:
+                if "message to delete not found" not in str(exc).lower():
+                    logger.warning(
+                        "Failed to delete test request message id=%s err=%s",
+                        request_id,
+                        exc,
+                    )
+        ack_text = "Заявка удалена"
+    else:
+        if previous_status == new_status:
+            await callback.answer("Статус уже установлен")
+            return
 
-    if not updated_row:
-        await callback.answer("Не удалось обновить заявку", show_alert=True)
-        return
+        await execute(
+            """
+            UPDATE test_requests
+               SET status=$2,
+                   updated_at=NOW()
+             WHERE id=$1
+            """,
+            request_id,
+            new_status,
+        )
 
-    updated_request = dict(updated_row)
+        updated_row = await fetchrow(
+            """
+            SELECT tr.id,
+                   tr.status,
+                   tr.updated_at,
+                   tr.created_at,
+                   tr.preferred_name,
+                   tr.tg_user_id,
+                   tr.user_id,
+                   u.full_name,
+                   u.name,
+                   u.username
+              FROM test_requests AS tr
+              LEFT JOIN users AS u ON u.id = tr.user_id
+             WHERE tr.id=$1
+            """,
+            request_id,
+        )
 
-    await log_admin_action(
-        callback.from_user.id,
-        "test_request_status_update",
-        {
-            "test_request_id": request_id,
-            "previous_status": previous_status,
-            "new_status": new_status,
-        },
-    )
+        if not updated_row:
+            await callback.answer("Не удалось обновить заявку", show_alert=True)
+            return
 
-    if callback.message:
-        try:
-            await callback.message.edit_text(
-                _format_admin_test_request_entry(updated_request),
-                parse_mode=ParseMode.HTML,
-                reply_markup=admin_test_request_status_keyboard(
-                    test_request_id=request_id,
-                    statuses=TEST_REQUEST_STATUS_ORDER,
-                    labels=TEST_REQUEST_STATUS_LABELS,
-                    current_status=new_status,
-                ),
-            )
-        except TelegramBadRequest as exc:
-            if "message is not modified" not in str(exc).lower():
-                logger.warning(
-                    "Failed to edit test request message id=%s err=%s",
-                    request_id,
-                    exc,
+        updated_request = dict(updated_row)
+
+        await log_admin_action(
+            callback.from_user.id,
+            "test_request_status_update",
+            {
+                "test_request_id": request_id,
+                "previous_status": previous_status,
+                "new_status": new_status,
+            },
+        )
+
+        if callback.message:
+            try:
+                await callback.message.edit_text(
+                    _format_admin_test_request_entry(updated_request),
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=admin_test_request_status_keyboard(
+                        test_request_id=request_id,
+                        statuses=TEST_REQUEST_STATUS_ORDER,
+                        labels=TEST_REQUEST_STATUS_LABELS,
+                        current_status=new_status,
+                    ),
                 )
+            except TelegramBadRequest as exc:
+                if "message is not modified" not in str(exc).lower():
+                    logger.warning(
+                        "Failed to edit test request message id=%s err=%s",
+                        request_id,
+                        exc,
+                    )
 
     stats = await _collect_admin_stats_data()
     summary_text = _format_admin_stats_forms(stats)
@@ -13657,7 +13777,7 @@ async def admin_stats_test_request_update_status(
             exc,
         )
 
-    await callback.answer("Статус обновлён")
+    await callback.answer(ack_text)
 
 
 @router.callback_query(F.data.startswith(f"{ADMIN_ANALYSIS_REQUEST_ACTION_PREFIX}:"))
