@@ -12090,6 +12090,12 @@ async def admin_stats_recent_payments(message: types.Message, state: FSMContext)
 @router.message(F.text == ADMIN_DEBUG_BUTTON)
 async def admin_debug(message: types.Message):
     if not is_admin_id(message.from_user.id):
+        logger.warning(
+            "Unauthorized admin_debug access: id=%s username=%s button=%s",
+            message.from_user.id,
+            message.from_user.username,
+            message.text,
+        )
         return
     config_text = (
         "<b>🛠️ Диагностика</b>\n\n"
