@@ -2231,6 +2231,28 @@ async def _collect_admin_stats_data() -> dict[str, Any]:
         """
     )
 
+    form_sessions_details_rows = await fetch(
+        """
+        SELECT fs.id,
+               fs.form_slug,
+               fs.started_at,
+               fs.completed_at,
+               fs.reminder_count,
+               fs.user_id,
+               u.full_name,
+               u.name,
+               u.username,
+               u.tg_user_id
+          FROM form_sessions AS fs
+          JOIN users AS u ON u.id = fs.user_id
+         WHERE fs.form_slug IN ($1, $2)
+         ORDER BY fs.started_at DESC
+         LIMIT 50
+        """,
+        FORM_SLUG_ANALYSIS,
+        FORM_SLUG_TEST,
+    )
+
     test_requests_status_rows = await fetch(
         """
         SELECT status, COUNT(*) AS count, MAX(updated_at) AS last_updated
@@ -2249,6 +2271,27 @@ async def _collect_admin_stats_data() -> dict[str, Any]:
         """
     )
 
+    test_requests_details_rows = await fetch(
+        """
+        SELECT tr.id,
+               tr.status,
+               tr.created_at,
+               tr.updated_at,
+               tr.preferred_name,
+               tr.tg_user_id,
+               tr.user_id,
+               u.full_name,
+               u.name,
+               u.username
+          FROM test_requests AS tr
+     LEFT JOIN users AS u ON u.id = tr.user_id
+         ORDER BY tr.updated_at DESC NULLS LAST,
+                  tr.created_at DESC NULLS LAST,
+                  tr.id DESC
+         LIMIT 50
+        """
+    )
+
     return {
         "users": {
             "total": int((total or {}).get("c", 0)),
@@ -2263,12 +2306,14 @@ async def _collect_admin_stats_data() -> dict[str, Any]:
         "payments": [dict(row) for row in payment_stats_rows or []],
         "forms": {
             "sessions": [dict(row) for row in form_sessions_rows or []],
+            "sessions_details": [dict(row) for row in form_sessions_details_rows or []],
             "test_requests": {
                 "statuses": [dict(row) for row in test_requests_status_rows or []],
                 "summary": {
                     "total": int((test_requests_overview or {}).get("total", 0)),
                     "active": int((test_requests_overview or {}).get("active", 0)),
                 },
+                "entries": [dict(row) for row in test_requests_details_rows or []],
             },
         },
         "timestamp": now_utc(),
@@ -2521,6 +2566,8 @@ def _format_admin_stats_forms(stats: dict[str, Any]) -> str:
     summary = test_requests.get("summary") or {}
     total_requests = int(summary.get("total") or 0)
     active_requests = int(summary.get("active") or 0)
+    request_entries = test_requests.get("entries") or []
+    session_entries = forms_data.get("sessions_details") or []
 
     if not total_requests and status_rows:
         total_requests = sum(int(item.get("count") or 0) for item in status_rows)
@@ -2557,6 +2604,108 @@ def _format_admin_stats_forms(stats: dict[str, Any]) -> str:
     updates = [item.get("last_updated") for item in ordered_statuses if item.get("last_updated")]
     last_status_update = max(updates) if updates else None
 
+    applicant_headers = ["Имя", "Ник", "Детали"]
+    applicant_rows: list[list[str]] = []
+
+    def _format_username(value: str | None, tg_user_id: int | None = None) -> str:
+        username = (value or "").strip()
+        if username:
+            return html.escape(f"@{username.lstrip('@')}")
+        if tg_user_id:
+            return html.escape(str(tg_user_id))
+        return "—"
+
+    def _append_request_row(item: dict[str, Any]) -> None:
+        status = str(item.get("status") or "")
+        is_active = status.lower() not in _TEST_REQUEST_CLOSED_STATUSES
+        label = _TEST_REQUEST_STATUS_LABELS.get(status, status or "—")
+        marker = "🔥" if is_active else "✅"
+        timestamp = _format_datetime_safe(item.get("updated_at") or item.get("created_at"))
+
+        preferred = (item.get("preferred_name") or "").strip()
+        name = preferred or (item.get("name") or "").strip() or (item.get("full_name") or "").strip()
+        if not name:
+            name = str(item.get("tg_user_id") or item.get("user_id") or "—")
+
+        details = f"{marker} {label}"
+        if timestamp != "—":
+            details += f" · {timestamp}"
+
+        applicant_rows.append(
+            [
+                html.escape(name),
+                _format_username(item.get("username"), item.get("tg_user_id")),
+                html.escape(details),
+            ]
+        )
+
+    def _append_session_row(item: dict[str, Any]) -> None:
+        slug = str(item.get("form_slug") or "")
+        label = _form_display_label(slug)
+        completed = item.get("completed_at") is not None
+        marker = "✅" if completed else "📝"
+        status_label = "завершена" if completed else "в процессе"
+        reference_time = item.get("completed_at") if completed else item.get("started_at")
+        timestamp = _format_datetime_safe(reference_time)
+
+        name = (item.get("name") or "").strip() or (item.get("full_name") or "").strip()
+        if not name:
+            name = str(item.get("tg_user_id") or item.get("user_id") or "—")
+
+        details = f"{marker} {label} — {status_label}"
+        if timestamp != "—":
+            details += f" · {timestamp}"
+
+        applicant_rows.append(
+            [
+                html.escape(name),
+                _format_username(item.get("username"), item.get("tg_user_id")),
+                html.escape(details),
+            ]
+        )
+
+    def _sort_timestamp(value: Any) -> float:
+        if isinstance(value, datetime):
+            dt = value
+        elif isinstance(value, str):
+            try:
+                dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            except ValueError:
+                return float("-inf")
+        else:
+            return float("-inf")
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        try:
+            return dt.timestamp()
+        except Exception:
+            return float("-inf")
+
+    def _request_sort_key(item: dict[str, Any]) -> tuple[int, float, int]:
+        status = str(item.get("status") or "").lower()
+        is_closed = status in _TEST_REQUEST_CLOSED_STATUSES
+        updated = _sort_timestamp(item.get("updated_at") or item.get("created_at"))
+        identifier = int(item.get("id") or 0)
+        return (1 if is_closed else 0, -updated, -identifier)
+
+    for entry in sorted(request_entries, key=_request_sort_key):
+        _append_request_row(entry)
+
+    def _session_sort_key(item: dict[str, Any]) -> tuple[int, float, int]:
+        completed = item.get("completed_at") is not None
+        started = _sort_timestamp(item.get("started_at"))
+        identifier = int(item.get("id") or 0)
+        return (1 if completed else 0, -started, -identifier)
+
+    for entry in sorted(session_entries, key=_session_sort_key):
+        _append_session_row(entry)
+
+    applicant_table = (
+        _render_stats_table(applicant_headers, applicant_rows, ["left", "left", "left"])
+        if applicant_rows
+        else None
+    )
+
     lines = [
         "<b>🗂 Формы и консультации</b>",
         "",
@@ -2572,6 +2721,9 @@ def _format_admin_stats_forms(stats: dict[str, Any]) -> str:
         lines.extend(["", "По статусам:", *status_lines])
     else:
         lines.extend(["", "Пока нет заявок в базе."])
+
+    if applicant_table:
+        lines.extend(["", "<b>Список заявителей</b>", applicant_table])
 
     timestamp = _format_datetime_safe(stats.get("timestamp"))
     last_status_text = _format_datetime_safe(last_status_update)
