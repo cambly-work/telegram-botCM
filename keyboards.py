@@ -519,7 +519,7 @@ def admin_broadcast_segments_keyboard() -> ReplyKeyboardMarkup:
     rows = [
         [KeyboardButton(text=BROADCAST_ALL_BUTTON), KeyboardButton(text=BROADCAST_LEADS_BUTTON)],
         [KeyboardButton(text=BROADCAST_MEMBERS_BUTTON), KeyboardButton(text=BROADCAST_EXPIRED_BUTTON)],
-        [KeyboardButton(text=BROADCAST_KEYS_BUTTON), KeyboardButton(text=BROADCAST_PRACTICE_BUTTON)],
+        [KeyboardButton(text=BROADCAST_KEYS_BUTTON)],
         [KeyboardButton(text=BACK_TO_BROADCAST), KeyboardButton(text=BACK_TO_ADMIN)],
         [KeyboardButton(text=BACK_TO_MAIN)],
     ]

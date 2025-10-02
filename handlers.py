@@ -12956,9 +12956,47 @@ async def _select_segment_users(segment: str) -> list[dict]:
             f"{base_query} WHERE status='member_expired' OR (access_until IS NOT NULL AND access_until <= NOW())"
         )
     elif segment in {"keys_waiting", "keys_delivered"}:
-        rows = []  # TODO: заполнить данными о выдаче ключей
+        key_status = (
+            USER_KEY_STATUS_AVAILABLE
+            if segment == "keys_waiting"
+            else USER_KEY_STATUS_CLAIMED
+        )
+        rows = await fetch(
+            """
+            SELECT DISTINCT
+                u.tg_user_id,
+                u.name,
+                u.full_name,
+                u.username
+            FROM user_keys uk
+            JOIN users u ON u.id = uk.user_id
+            WHERE uk.status = $1
+              AND u.tg_user_id IS NOT NULL
+            ORDER BY u.tg_user_id
+            """,
+            key_status,
+        )
     elif segment in {"practice_upcoming", "practice_completed"}:
-        rows = []  # TODO: заполнить данными о практике
+        is_upcoming = segment == "practice_upcoming"
+        comparison = ">=" if is_upcoming else "<"
+        rows = await fetch(
+            f"""
+            SELECT DISTINCT
+                u.tg_user_id,
+                u.name,
+                u.full_name,
+                u.username
+            FROM schedule_event_reminders r
+            JOIN users u ON u.id = r.user_id
+            JOIN schedule_events e ON e.id = r.event_id
+            WHERE r.is_cancelled = FALSE
+              AND u.tg_user_id IS NOT NULL
+              AND e.is_archived = FALSE
+              AND LOWER(e.event_type) SIMILAR TO '(practice%|практик%)'
+              AND e.scheduled_at {comparison} NOW()
+            ORDER BY u.tg_user_id
+            """,
+        )
     else:
         rows = []
     return [dict(row) for row in rows] if rows else []
