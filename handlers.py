@@ -1647,9 +1647,9 @@ _PROFILE_STATUS_TITLES: dict[str, str] = {
 }
 
 _MEMBERSHIP_STATUS_LABELS: dict[str, str] = {
-    "lead_funnel": "Funnel",
-    "member_active": "Member Active",
-    "member_expired": "Member Expired",
+    "lead_funnel": "Без подписки",
+    "member_active": "Активный доступ",
+    "member_expired": "Доступ истёк",
 }
 
 _PROGRESS_STATUS_LABELS: dict[str, str] = {
@@ -3897,9 +3897,10 @@ def _format_access_date(value: Any) -> str:
 def _membership_summary(user_row: dict | None) -> dict[str, str]:
     user_row = user_row or {}
     status_code = str(user_row.get("status") or "lead_funnel").lower()
-    status_label = _MEMBERSHIP_STATUS_LABELS.get(
-        status_code,
-        status_code.replace("_", " ").title(),
+    status_label = (
+        _MEMBERSHIP_STATUS_LABELS.get(status_code)
+        or _PROFILE_STATUS_TITLES.get(status_code)
+        or status_code.replace("_", " ").title()
     )
     access_date = _format_access_date(user_row.get("access_until"))
 
@@ -4312,7 +4313,7 @@ async def send_profile_overview(
     ru_status_label = _PROFILE_STATUS_TITLES.get(status_key, "—")
     membership = _membership_summary(user_row)
     status_caption = membership["status_label"]
-    if ru_status_label and ru_status_label != status_caption:
+    if ru_status_label and ru_status_label not in {status_caption, "—"}:
         status_caption = f"{status_caption} ({ru_status_label})"
     access_line = membership["access_line"]
 
