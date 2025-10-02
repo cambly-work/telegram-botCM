@@ -10,6 +10,8 @@ from aiogram.types import (
     InlineKeyboardButton,
 )
 
+from admin_forms import TEST_REQUEST_STATUS_LABELS, TEST_REQUEST_STATUS_ORDER
+
 # ──────────────────────────────────────────────────────────────────────────────
 # ENV / helpers
 # ──────────────────────────────────────────────────────────────────────────────
@@ -117,7 +119,24 @@ BROADCAST_PRACTICE_BUTTON = "🧘 Практика"
 BROADCAST_TEMPLATES_BUTTON = "🗂 Шаблоны рассылок"
 BROADCAST_TEMPLATE_PREFIX = "🗂 Шаблон: "
 
-ADMIN_TEST_REQUEST_STATUS_PREFIX = "admin:test_request_status"
+ADMIN_FORMS_FILTER_ALL = "Все"
+ADMIN_FORMS_FILTER_LABEL_TO_STATUS: dict[str, str] = {
+    TEST_REQUEST_STATUS_LABELS.get(status, status): status for status in TEST_REQUEST_STATUS_ORDER
+}
+
+
+def admin_forms_filter_status_from_text(text: str | None) -> tuple[bool, str | None]:
+    if not text:
+        return False, None
+
+    cleaned = text.strip()
+    for prefix in ("✅", "•"):
+        if cleaned.startswith(prefix):
+            cleaned = cleaned[len(prefix) :].strip()
+    if cleaned == ADMIN_FORMS_FILTER_ALL:
+        return True, None
+    status = ADMIN_FORMS_FILTER_LABEL_TO_STATUS.get(cleaned)
+    return (True, status) if status else (False, None)
 
 SEND_BROADCAST_BUTTON = "🚀 Отправить"
 EDIT_BROADCAST_BUTTON = "✏️ Изменить текст"
@@ -473,40 +492,43 @@ def admin_stats_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
 
-def build_admin_test_request_status_callback(
-    test_request_id: int,
-    status: str,
-) -> str:
-    return f"{ADMIN_TEST_REQUEST_STATUS_PREFIX}:{test_request_id}:{status}"
+def admin_forms_filter_keyboard(*, active_filter: str | None = None) -> ReplyKeyboardMarkup:
+    rows: list[list[KeyboardButton]] = [
+        [
+            KeyboardButton(
+                text=("✅ " + ADMIN_FORMS_FILTER_ALL)
+                if active_filter is None
+                else ADMIN_FORMS_FILTER_ALL
+            )
+        ]
+    ]
 
+    labels = [TEST_REQUEST_STATUS_LABELS.get(status, status) for status in TEST_REQUEST_STATUS_ORDER]
+    for idx in range(0, len(labels), 2):
+        chunk = []
+        for label in labels[idx : idx + 2]:
+            status = ADMIN_FORMS_FILTER_LABEL_TO_STATUS.get(label)
+            text = f"✅ {label}" if status == active_filter else label
+            chunk.append(KeyboardButton(text=text))
+        rows.append(chunk)
 
-def admin_test_request_status_keyboard(
-    *,
-    test_request_id: int,
-    statuses: Sequence[str],
-    labels: Mapping[str, str] | None = None,
-    current_status: str | None = None,
-) -> InlineKeyboardMarkup:
-    label_map: Mapping[str, str] = labels or {}
-    inline_rows: list[list[InlineKeyboardButton]] = []
+    rows.append([KeyboardButton(text=ADMIN_STATS_REFRESH)])
+    rows.append(
+        [
+            KeyboardButton(text=ADMIN_STATS_USERS_BREAKDOWN),
+            KeyboardButton(text=ADMIN_STATS_LESSON_PROGRESS),
+        ]
+    )
+    rows.append(
+        [
+            KeyboardButton(text=ADMIN_STATS_PAYMENTS_BREAKDOWN),
+            KeyboardButton(text=ADMIN_STATS_RECENT_PAYMENTS),
+        ]
+    )
+    rows.append([KeyboardButton(text=ADMIN_STATS_FORMS_BREAKDOWN)])
+    rows.append([KeyboardButton(text=BACK_TO_ADMIN), KeyboardButton(text=BACK_TO_MAIN)])
 
-    for status in statuses:
-        label = label_map.get(status, status or "—")
-        prefix = "• " if current_status == status else ""
-        button_text = f"{prefix}{label}"
-        inline_rows.append(
-            [
-                InlineKeyboardButton(
-                    text=button_text,
-                    callback_data=build_admin_test_request_status_callback(
-                        test_request_id,
-                        status,
-                    ),
-                )
-            ]
-        )
-
-    return InlineKeyboardMarkup(inline_keyboard=inline_rows)
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
 
 def admin_users_segments_keyboard() -> ReplyKeyboardMarkup:
