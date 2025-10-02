@@ -1516,8 +1516,7 @@ async def antitraining_webhook(
                 try:
                     await bot.send_message(
                         tg_user_id,
-                        "❌ Оплата не прошла или оформлён возврат. Доступ приостановлен.\n"
-                        f"Поддержка: {SUPPORT_CONTACT}"
+                        f"❌ Оплата не прошла или оформлён возврат. Доступ приостановлен.\nПоддержка: {SUPPORT_CONTACT}"
                     )
                     break
                 except Exception as e:
