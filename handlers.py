@@ -24,7 +24,7 @@ from aiogram.types import (
 )
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
-from aiogram.filters import Command, CommandObject, CommandStart
+from aiogram.filters import Command, CommandObject, CommandStart, StateFilter
 from aiogram.utils.chat_action import ChatActionSender
 from aiogram.exceptions import TelegramRetryAfter, TelegramBadRequest
 
@@ -7402,63 +7402,63 @@ async def _get_user_and_admin(message: types.Message) -> tuple[Optional[dict], b
     return user, is_admin_id(message.from_user.id)
 
 
-@router.message(F.text == BACK_TO_MAIN)
+@router.message(StateFilter("*"), F.text == BACK_TO_MAIN)
 async def menu_back_to_main(message: types.Message, state: FSMContext):
     await _reset_state_if_needed(state)
     user, is_admin = await _get_user_and_admin(message)
     await send_menu_section(message, user, is_admin, "root")
 
 
-@router.message(F.text == "ℹ️ О клубе")
+@router.message(StateFilter("*"), F.text == "ℹ️ О клубе")
 async def menu_open_info(message: types.Message, state: FSMContext):
     await _reset_state_if_needed(state)
     user, is_admin = await _get_user_and_admin(message)
     await send_menu_section(message, user, is_admin, "info")
 
 
-@router.message(F.text == "🎓 Обучение")
+@router.message(StateFilter("*"), F.text == "🎓 Обучение")
 async def menu_open_learning(message: types.Message, state: FSMContext):
     await _reset_state_if_needed(state)
     user, is_admin = await _get_user_and_admin(message)
     await send_menu_section(message, user, is_admin, "learning")
 
 
-@router.message(F.text == "📦 Материалы")
+@router.message(StateFilter("*"), F.text == "📦 Материалы")
 async def menu_open_materials(message: types.Message, state: FSMContext):
     await _reset_state_if_needed(state)
     user, is_admin = await _get_user_and_admin(message)
     await send_materials_root_section(message, user, is_admin, state=state)
 
 
-@router.message(F.text == "👤 Профиль")
+@router.message(StateFilter("*"), F.text == "👤 Профиль")
 async def menu_open_profile(message: types.Message, state: FSMContext):
     await _reset_state_if_needed(state)
     user, is_admin = await _get_user_and_admin(message)
     await send_menu_section(message, user, is_admin, "profile")
 
 
-@router.message(F.text == "О клубе")
+@router.message(StateFilter("*"), F.text == "О клубе")
 async def info_about(message: types.Message, state: FSMContext):
     await _reset_state_if_needed(state)
     user, is_admin = await _get_user_and_admin(message)
     await send_about_section(message, user, is_admin)
 
 
-@router.message(F.text == "FAQ")
+@router.message(StateFilter("*"), F.text == "FAQ")
 async def info_faq(message: types.Message, state: FSMContext):
     await _reset_state_if_needed(state)
     user, is_admin = await _get_user_and_admin(message)
     await send_faq_section(message, user, is_admin)
 
 
-@router.message(F.text == "Правила")
+@router.message(StateFilter("*"), F.text == "Правила")
 async def info_rules(message: types.Message, state: FSMContext):
     await _reset_state_if_needed(state)
     user, is_admin = await _get_user_and_admin(message)
     await send_rules_section(message, user, is_admin)
 
 
-@router.message(F.text.in_({"💳 Оплата", "🔒 Оплата"}))
+@router.message(StateFilter("*"), F.text.in_({"💳 Оплата", "🔒 Оплата"}))
 async def menu_pay(message: types.Message, state: FSMContext):
     await _reset_state_if_needed(state)
     user, is_admin = await _get_user_and_admin(message)
@@ -7467,14 +7467,14 @@ async def menu_pay(message: types.Message, state: FSMContext):
     await send_pay_section(message, user, is_admin)
 
 
-@router.message(F.text == "🆘 Поддержка")
+@router.message(StateFilter("*"), F.text == "🆘 Поддержка")
 async def menu_support(message: types.Message, state: FSMContext):
     await _reset_state_if_needed(state)
     user, is_admin = await _get_user_and_admin(message)
     await send_support_section(message, user, is_admin)
 
 
-@router.message(F.text == "Бесплатные уроки")
+@router.message(StateFilter("*"), F.text == "Бесплатные уроки")
 async def menu_lessons(message: types.Message, state: FSMContext):
     await _reset_state_if_needed(state)
     user = await get_user_with_id(message.from_user.id)
@@ -7484,7 +7484,7 @@ async def menu_lessons(message: types.Message, state: FSMContext):
     await send_funnel_section(message, user, is_admin)
 
 
-@router.message(F.text == "Окно в Магнетизм")
+@router.message(StateFilter("*"), F.text == "Окно в Магнетизм")
 async def menu_magnetism_window(message: types.Message, state: FSMContext):
     await _reset_state_if_needed(state)
     user = await get_user_with_id(message.from_user.id)
@@ -7495,14 +7495,14 @@ async def menu_magnetism_window(message: types.Message, state: FSMContext):
     await send_magnetism_window_section(message, user, is_admin)
 
 
-@router.message(F.text == "Записаться на разбор")
+@router.message(StateFilter("*"), F.text == "Записаться на разбор")
 async def menu_analysis(message: types.Message, state: FSMContext):
     await _reset_state_if_needed(state)
     user, is_admin = await _get_user_and_admin(message)
     await send_analysis_section(message, user, is_admin)
 
 
-@router.message(F.text == "Пройти тест")
+@router.message(StateFilter("*"), F.text == "Пройти тест")
 async def menu_test(message: types.Message, state: FSMContext):
     await _reset_state_if_needed(state)
     user, is_admin = await _get_user_and_admin(message)
@@ -7719,7 +7719,7 @@ async def test_collect_name(message: types.Message, state: FSMContext):
             )
 
 
-@router.message(F.text == "⚙️ Админка")
+@router.message(StateFilter("*"), F.text == "⚙️ Админка")
 async def menu_admin_entry(message: types.Message, state: FSMContext):
     if not is_admin_id(message.from_user.id):
         return
@@ -7727,21 +7727,21 @@ async def menu_admin_entry(message: types.Message, state: FSMContext):
     await send_admin_menu(message)
 
 
-@router.message(F.text.in_({"Материалы недели", "Материалы недели 🔒"}))
+@router.message(StateFilter("*"), F.text.in_({"Материалы недели", "Материалы недели 🔒"}))
 async def menu_weekly_materials(message: types.Message, state: FSMContext):
     await _reset_state_if_needed(state)
     user, is_admin = await _get_user_and_admin(message)
     await send_weekly_materials_section(message, user, is_admin, state=state)
 
 
-@router.message(F.text == MATERIALS_CATALOG_BUTTON)
+@router.message(StateFilter("*"), F.text == MATERIALS_CATALOG_BUTTON)
 async def menu_materials_catalog(message: types.Message, state: FSMContext):
     await _reset_state_if_needed(state)
     user, is_admin = await _get_user_and_admin(message)
     await send_materials_catalog_section(message, user, is_admin, state=state)
 
 
-@router.message(F.text == BACK_TO_MATERIALS)
+@router.message(StateFilter("*"), F.text == BACK_TO_MATERIALS)
 async def menu_back_to_materials(message: types.Message, state: FSMContext):
     await _reset_state_if_needed(state)
     user, is_admin = await _get_user_and_admin(message)
@@ -7772,14 +7772,14 @@ async def menu_back_to_materials(message: types.Message, state: FSMContext):
     )
 
 
-@router.message(F.text == MATERIALS_PRACTICES_BUTTON)
+@router.message(StateFilter("*"), F.text == MATERIALS_PRACTICES_BUTTON)
 async def menu_materials_practices(message: types.Message, state: FSMContext):
     await _reset_state_if_needed(state)
     user, is_admin = await _get_user_and_admin(message)
     await send_materials_practices_section(message, user, is_admin, state=state)
 
 
-@router.message(F.text == MATERIALS_CHALLENGES_BUTTON)
+@router.message(StateFilter("*"), F.text == MATERIALS_CHALLENGES_BUTTON)
 async def menu_materials_challenges(message: types.Message, state: FSMContext):
     await _reset_state_if_needed(state)
     user, is_admin = await _get_user_and_admin(message)
@@ -7787,6 +7787,7 @@ async def menu_materials_challenges(message: types.Message, state: FSMContext):
 
 
 @router.message(
+    StateFilter("*"),
     F.text.func(lambda text: bool(text and text.strip())),
     F.text.func(lambda text: _normalize_materials_choice(text) != ""),
 )
@@ -7811,14 +7812,14 @@ async def menu_materials_dynamic_choice(message: types.Message, state: FSMContex
     )
 
 
-@router.message(F.text.in_({"Расписание", "Расписание 🔒"}))
+@router.message(StateFilter("*"), F.text.in_({"Расписание", "Расписание 🔒"}))
 async def menu_schedule(message: types.Message, state: FSMContext):
     await _reset_state_if_needed(state)
     user, is_admin = await _get_user_and_admin(message)
     await send_schedule_section(message, user, is_admin)
 
 
-@router.message(F.text == "Мой профиль")
+@router.message(StateFilter("*"), F.text == "Мой профиль")
 async def menu_profile_overview(message: types.Message, state: FSMContext):
     await _reset_state_if_needed(state)
     user, is_admin = await _get_user_and_admin(message)
@@ -7828,7 +7829,7 @@ async def menu_profile_overview(message: types.Message, state: FSMContext):
     await send_profile_overview(message, user, is_admin)
 
 
-@router.message(F.text == "Изменить email")
+@router.message(StateFilter("*"), F.text == "Изменить email")
 async def menu_profile_email(message: types.Message, state: FSMContext):
     await _reset_state_if_needed(state)
     await state.set_state(ProfileStates.waiting_email)
@@ -7838,7 +7839,7 @@ async def menu_profile_email(message: types.Message, state: FSMContext):
     )
 
 
-@router.message(F.text == "Изменить телефон")
+@router.message(StateFilter("*"), F.text == "Изменить телефон")
 async def menu_profile_phone(message: types.Message, state: FSMContext):
     await _reset_state_if_needed(state)
     await state.set_state(ProfileStates.waiting_phone)
@@ -7848,14 +7849,14 @@ async def menu_profile_phone(message: types.Message, state: FSMContext):
     )
 
 
-@router.message(F.text == BACK_TO_LEARNING)
+@router.message(StateFilter("*"), F.text == BACK_TO_LEARNING)
 async def menu_back_to_learning(message: types.Message, state: FSMContext):
     await _reset_state_if_needed(state)
     user, is_admin = await _get_user_and_admin(message)
     await send_menu_section(message, user, is_admin, "learning")
 
 
-@router.message(F.text == BACK_TO_LESSONS)
+@router.message(StateFilter("*"), F.text == BACK_TO_LESSONS)
 async def menu_back_to_lessons(message: types.Message, state: FSMContext):
     await _reset_state_if_needed(state)
     user = await get_user_with_id(message.from_user.id)
