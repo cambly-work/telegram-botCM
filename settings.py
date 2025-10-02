@@ -1,16 +1,26 @@
 """Configuration helpers shared across modules."""
 from __future__ import annotations
 
+import logging
 import os
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 def _admin_ids() -> set[int]:
     """Parse administrator IDs from the environment."""
     ids = os.getenv("ADMIN_IDS", "")
-    try:
-        return {int(value.strip()) for value in ids.split(",") if value.strip()}
-    except Exception:
-        return set()
+    parsed_ids: set[int] = set()
+    for raw_value in ids.split(","):
+        value = raw_value.strip()
+        if not value:
+            continue
+        try:
+            parsed_ids.add(int(value))
+        except ValueError:
+            LOGGER.warning("Invalid ADMIN_IDS token: %r", value)
+    return parsed_ids
 
 
 def _env_str(name: str, default: str = "") -> str:
