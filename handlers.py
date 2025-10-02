@@ -18,6 +18,7 @@ from aiogram import Router, F, types
 from aiogram.enums import ParseMode
 from aiogram.types import (
     ReplyKeyboardMarkup,
+    ReplyKeyboardRemove,
     BufferedInputFile,
     InlineKeyboardMarkup,
     InlineKeyboardButton,
@@ -8159,6 +8160,7 @@ async def cancel_handler(message: types.Message, state: FSMContext):
     if current_state == SupportStates.waiting_question.state:
         await message.answer(
             "Вопрос не отправлен. Можно выбрать канал поддержки ещё раз или вернуться в меню.",
+            reply_markup=ReplyKeyboardRemove(),
         )
         await send_support_section(message, user, is_admin)
         return
