@@ -5818,23 +5818,6 @@ async def send_admin_materials_menu(message: types.Message) -> None:
     )
 
 
-async def send_admin_behavior_menu(message: types.Message) -> None:
-    default_text = (
-        "<b>Геймификация</b>\n\n"
-        "Настрой сценарии, которые поддерживают вовлечение:\n"
-        "• Приветствие при /start и сообщение после регистрации.\n"
-        "• Шаги онбординга для новых участниц.\n"
-        f"• Раздел «{ADMIN_PAYMENTS_BUTTON}» для ручных операций с доступом.\n\n"
-        f"Выбирай нужный блок и возвращайся через «{BACK_TO_ADMIN}», когда всё готово."
-    )
-    text = await get_content("admin.prompts.gamification", default_text)
-    await message.answer(
-        text,
-        reply_markup=admin_schedule_keyboard(archive_mode=archived),
-        disable_web_page_preview=True,
-    )
-
-
 async def _finalize_schedule_create(message: types.Message, state: FSMContext) -> None:
     data = await state.get_data() or {}
     scheduled_iso = data.get("schedule_datetime_iso")
