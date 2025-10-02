@@ -1095,10 +1095,11 @@ async def telegram_webhook(request: Request, secret: Optional[str] = None):
         logger.info("Update %s processed successfully", update_id)
     except Exception as e:
         logger.exception("Ошибка обработки Telegram update %s: %s", update_id, e)
-        await notify_admins(
+        message = (
             f"Исключение при обработке апдейта {update_id}: "
             f"<code>{type(e).__name__}</code>\n{str(e)[:500]}"
         )
+        await notify_admins(message)
         return JSONResponse({"ok": False, "error": str(e)}, status_code=200)
 
     return {"ok": True}
@@ -1449,11 +1450,12 @@ async def antitraining_webhook(
     # Если пользователь не найден
     if not user_row:
         logger.warning("User not found for AT event %s, order %s", event, order_id)
-        await notify_admins(
+        message = (
             f"АТ: событие <b>{event}</b>, но пользователь не найден по email/phone.\n"
             f"email={norm['email'] or '—'}, phone={norm['phone'] or '—'}\n"
             f"order_id={order_id}"
         )
+        await notify_admins(message)
         return {"ok": True, "handled_event": event, "user_found": False}
 
     user_id = user_row["id"]
