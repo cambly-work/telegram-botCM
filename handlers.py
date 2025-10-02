@@ -10303,14 +10303,6 @@ async def admin_materials_receive_grant(message: types.Message, state: FSMContex
     )
 
 
-@router.message(StateFilter("*"), F.text == ADMIN_MATERIALS_BUTTON)
-async def admin_materials_menu(message: types.Message, state: FSMContext):
-    if not is_admin_id(message.from_user.id):
-        return
-    await _reset_state_if_needed(state)
-    await send_admin_materials_menu(message)
-
-
 @router.message(F.text == ADMIN_MATERIALS_REVOKE)
 async def admin_materials_revoke_prompt(message: types.Message, state: FSMContext):
     if not is_admin_id(message.from_user.id):
