@@ -443,8 +443,12 @@ CREATE TABLE IF NOT EXISTS admin_log (
 
 -- 1) Сначала добавляем нужные колонки для текущих хендлеров
 ALTER TABLE admin_log
-  ADD COLUMN IF NOT EXISTS admin_id  BIGINT,
-  ADD COLUMN IF NOT EXISTS action    TEXT,
+  ADD COLUMN IF NOT EXISTS admin_id  BIGINT;
+
+ALTER TABLE admin_log
+  ADD COLUMN IF NOT EXISTS action    TEXT;
+
+ALTER TABLE admin_log
   ADD COLUMN IF NOT EXISTS payload   JSONB;
 
 ALTER TABLE admin_log
