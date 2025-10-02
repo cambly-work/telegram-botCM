@@ -483,12 +483,18 @@ def admin_materials_categories_keyboard(categories: list[str]) -> ReplyKeyboardM
 
 def admin_stats_keyboard() -> ReplyKeyboardMarkup:
     rows = [
-        [KeyboardButton(text=ADMIN_STATS_REFRESH)],
-        [KeyboardButton(text=ADMIN_STATS_USERS_BREAKDOWN)],
-        [KeyboardButton(text=ADMIN_STATS_LESSON_PROGRESS)],
-        [KeyboardButton(text=ADMIN_STATS_PAYMENTS_BREAKDOWN)],
-        [KeyboardButton(text=ADMIN_STATS_RECENT_PAYMENTS)],
-        [KeyboardButton(text=ADMIN_STATS_FORMS_BREAKDOWN)],
+        [
+            KeyboardButton(text=ADMIN_STATS_REFRESH),
+            KeyboardButton(text=ADMIN_STATS_USERS_BREAKDOWN),
+        ],
+        [
+            KeyboardButton(text=ADMIN_STATS_LESSON_PROGRESS),
+            KeyboardButton(text=ADMIN_STATS_PAYMENTS_BREAKDOWN),
+        ],
+        [
+            KeyboardButton(text=ADMIN_STATS_RECENT_PAYMENTS),
+            KeyboardButton(text=ADMIN_STATS_FORMS_BREAKDOWN),
+        ],
         [KeyboardButton(text=BACK_TO_ADMIN), KeyboardButton(text=BACK_TO_MAIN)],
     ]
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
