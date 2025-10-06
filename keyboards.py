@@ -416,6 +416,19 @@ def admin_main_keyboard() -> ReplyKeyboardMarkup:
     )
 
 
+def admin_staff_keyboard() -> ReplyKeyboardMarkup:
+    rows = [
+        [KeyboardButton(text=ADMIN_STATS_BUTTON)],
+        [KeyboardButton(text=ADMIN_PAYMENTS_BUTTON)],
+        [KeyboardButton(text=BACK_TO_MAIN)],
+    ]
+    return ReplyKeyboardMarkup(
+        keyboard=rows,
+        resize_keyboard=True,
+        input_field_placeholder="Раздел для сотрудников",
+    )
+
+
 def admin_users_category_keyboard() -> ReplyKeyboardMarkup:
     rows = [
         [KeyboardButton(text=ADMIN_USERS_BUTTON)],

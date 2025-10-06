@@ -91,6 +91,7 @@ from keyboards import (
     feedback_keyboard,
     cancel_keyboard,
     admin_main_keyboard,
+    admin_staff_keyboard,
     admin_users_category_keyboard,
     admin_content_category_keyboard,
     admin_communications_category_keyboard,
@@ -5644,21 +5645,40 @@ async def send_admin_menu(
     *,
     from_callback: bool = False,
 ) -> None:
-    admin_text_default = (
-        "<b>Админ-панель</b>\n\n"
-        "Выберите категорию, чтобы открыть нужные инструменты:\n"
-        f"• {ADMIN_CATEGORY_USERS} — сегменты участниц (участников), подтверждение оплат и управление ключами.\n"
-        f"• {ADMIN_CATEGORY_CONTENT} — тексты экранов, материалы и сценарии бота.\n"
-        f"• {ADMIN_CATEGORY_COMMUNICATIONS} — рассылки и календарь событий.\n"
-        f"• {ADMIN_CATEGORY_SERVICE} — статистика, настройки и диагностика.\n\n"
-        "Кнопка «⬅️ В админку» возвращает к списку категорий."
-    )
-    admin_text = await get_content("admin.prompts.root", admin_text_default)
-    await message.answer(
-        admin_text,
-        reply_markup=admin_main_keyboard(),
-        disable_web_page_preview=True,
-    )
+    user_id = getattr(getattr(message, "from_user", None), "id", None)
+
+    if is_admin_id(user_id):
+        admin_text_default = (
+            "<b>Админ-панель</b>\n\n"
+            "Выберите категорию, чтобы открыть нужные инструменты:\n"
+            f"• {ADMIN_CATEGORY_USERS} — сегменты участниц (участников), подтверждение оплат и управление ключами.\n"
+            f"• {ADMIN_CATEGORY_CONTENT} — тексты экранов, материалы и сценарии бота.\n"
+            f"• {ADMIN_CATEGORY_COMMUNICATIONS} — рассылки и календарь событий.\n"
+            f"• {ADMIN_CATEGORY_SERVICE} — статистика, настройки и диагностика.\n\n"
+            "Кнопка «⬅️ В админку» возвращает к списку категорий."
+        )
+        admin_text = await get_content("admin.prompts.root", admin_text_default)
+        await message.answer(
+            admin_text,
+            reply_markup=admin_main_keyboard(),
+            disable_web_page_preview=True,
+        )
+        return
+
+    if has_staff_access(user_id):
+        staff_text_default = (
+            "<b>Раздел для сотрудников</b>\n\n"
+            f"• {ADMIN_STATS_BUTTON} — посмотреть сводку показателей.\n"
+            f"• {ADMIN_PAYMENTS_BUTTON} — подтвердить оплаты или продлить доступ.\n\n"
+            f"Вернуться в клиентский интерфейс — «{BACK_TO_MAIN}»."
+        )
+        staff_text = await get_content("admin.prompts.staff_root", staff_text_default)
+        await message.answer(
+            staff_text,
+            reply_markup=admin_staff_keyboard(),
+            disable_web_page_preview=True,
+        )
+        return
 
 
 async def send_admin_users_category(message: types.Message) -> None:
@@ -13275,7 +13295,7 @@ async def admin_texts_receive_value(message: types.Message, state: FSMContext):
 
 @router.message(F.text == BACK_TO_ADMIN)
 async def admin_back(message: types.Message, state: FSMContext):
-    if not is_admin_id(message.from_user.id):
+    if not has_staff_access(message.from_user.id):
         return
     await _reset_state_if_needed(state)
     await send_admin_menu(message)
