@@ -7,6 +7,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 import handlers  # noqa: E402
+from handlers.content import sanitize_html  # noqa: E402
 from handlers.states import AdminContentStates  # noqa: E402
 
 
@@ -128,3 +129,14 @@ def test_admin_content_quick_reply_updates_value(monkeypatch):
         assert "обновлён" in events[0][0]
 
     asyncio.run(run())
+
+
+def test_sanitize_html_preserves_allowed_tags():
+    html = '<a href="https://example.com" class="external">ссылка</a> и <b>жирный</b>'
+    assert (
+        sanitize_html(html)
+        == '<a href="https://example.com">ссылка</a> и <b>жирный</b>'
+    )
+
+    single_quote_html = "<a href='https://example.com' onclick='alert(1)' data-id='1'>link</a>"
+    assert sanitize_html(single_quote_html) == '<a href="https://example.com">link</a>'

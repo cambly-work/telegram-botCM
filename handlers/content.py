@@ -42,21 +42,29 @@ def sanitize_html(text: str) -> str:
         return ""
 
     allowed_tags = {"b", "i", "u", "strong", "em", "code", "a"}
-    tag_re = re.compile(r'<(/?)(\w+)([^>]*)>')
+    tag_re = re.compile(r'<(/?)(\w+)([^>]*)>', re.IGNORECASE)
+    href_re = re.compile(r'href\s*=\s*([\'"])(.*?)\1', re.IGNORECASE)
 
     def replace_tag(match: re.Match[str]) -> str:
         slash, tag, attrs = match.groups()
-        if tag.lower() in allowed_tags:
-            if tag.lower() == "a" and attrs:
-                href_match = re.search(r'href="([^"]*)"', attrs)
-                if href_match:
-                    return f'<{slash}{tag} href="{href_match.group(1)}">'
-            return f'<{slash}{tag}>'
-        return ""
+        tag_lower = tag.lower()
 
-    text = tag_re.sub(replace_tag, text)
-    text = re.sub(r'<[^>]*>', "", text)
-    return text
+        if tag_lower not in allowed_tags:
+            return ""
+
+        if slash:
+            return f"<{slash}{tag_lower}>"
+
+        if tag_lower == "a":
+            href_match = href_re.search(attrs or "")
+            if href_match:
+                href_value = href_match.group(2)
+                return f'<{tag_lower} href="{href_value}">'
+            return f"<{tag_lower}>"
+
+        return f"<{tag_lower}>"
+
+    return tag_re.sub(replace_tag, text)
 
 
 def _load_yaml_content() -> dict:
