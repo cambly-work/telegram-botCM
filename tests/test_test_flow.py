@@ -8,6 +8,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 import handlers  # noqa: E402
+from handlers.states import TestStates  # noqa: E402
 
 
 class DummyState:
@@ -114,7 +115,7 @@ def test_test_flow_sequence(monkeypatch):
 
         await handlers.menu_test(start_message, state)
 
-        assert await state.get_state() == handlers.TestStates.waiting_birthdate.state
+        assert await state.get_state() == TestStates.waiting_birthdate.state
         assert events[0][0] == "user"
         assert "Intro override" in events[0][1]
         assert "Birth prompt" in events[0][1]
@@ -122,7 +123,7 @@ def test_test_flow_sequence(monkeypatch):
         birth_message = DummyMessage("24.08.1992", test_user, events)
         await handlers.test_collect_birthdate(birth_message, state)
 
-        assert await state.get_state() == handlers.TestStates.waiting_name.state
+        assert await state.get_state() == TestStates.waiting_name.state
         assert ("user", "Name prompt") in events
         assert any("Этап: ожидание имени" in note for note in notifications)
 
@@ -185,12 +186,12 @@ def test_test_flow_cancel(monkeypatch):
 
         await handlers.menu_test(start_message, state)
 
-        assert await state.get_state() == handlers.TestStates.waiting_birthdate.state
+        assert await state.get_state() == TestStates.waiting_birthdate.state
 
         birth_message = DummyMessage("24.08.1992", test_user, events)
         await handlers.test_collect_birthdate(birth_message, state)
 
-        assert await state.get_state() == handlers.TestStates.waiting_name.state
+        assert await state.get_state() == TestStates.waiting_name.state
 
         cancel_message = DummyMessage("Отмена", test_user, events)
         await handlers.cancel_handler(cancel_message, state)
@@ -238,7 +239,7 @@ def test_test_flow_cancel_on_name(monkeypatch):
         birth_message = DummyMessage("24.08.1992", test_user, events)
         await handlers.test_collect_birthdate(birth_message, state)
 
-        assert await state.get_state() == handlers.TestStates.waiting_name.state
+        assert await state.get_state() == TestStates.waiting_name.state
 
         cancel_message = DummyMessage(handlers.CANCEL_TEXT, test_user, events)
         await handlers.test_collect_name(cancel_message, state)

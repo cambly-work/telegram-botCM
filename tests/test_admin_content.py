@@ -7,6 +7,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 import handlers  # noqa: E402
+from handlers.states import AdminContentStates  # noqa: E402
 
 
 class DummyState:
@@ -77,7 +78,7 @@ class DummyIncomingMessage:
 def test_admin_content_quick_reply_updates_value(monkeypatch):
     async def run():
         state = DummyState()
-        await state.set_state(handlers.AdminContentStates.waiting_view_key)
+        await state.set_state(AdminContentStates.waiting_view_key)
 
         bot_id = 999
         key = "menu.registration_complete"
@@ -122,7 +123,7 @@ def test_admin_content_quick_reply_updates_value(monkeypatch):
         stored_value = await handlers.get_content(key)
         assert stored_value == "Новый текст регистрации!"
 
-        assert await state.get_state() == handlers.AdminContentStates.waiting_view_key.state
+        assert await state.get_state() == AdminContentStates.waiting_view_key.state
         assert events, "No response message was sent"
         assert "обновлён" in events[0][0]
 

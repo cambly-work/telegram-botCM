@@ -9,6 +9,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 import handlers  # noqa: E402
+from handlers.states import HWStates  # noqa: E402
 
 
 pytestmark = pytest.mark.anyio
@@ -93,7 +94,7 @@ async def test_lesson_done_sets_pending_state(monkeypatch):
 
     await handlers.lesson_mark_done(message, state)
 
-    assert await state.get_state() == handlers.HWStates.waiting_answer.state
+    assert await state.get_state() == HWStates.waiting_answer.state
     assert pending_calls == [(42, 1)]
     assert any("ответ" in text.lower() for _, text in events)
 
@@ -120,7 +121,7 @@ async def test_question_flow_notifies_admins(monkeypatch):
 
     await handlers.lesson_question(ask_message, state)
 
-    assert await state.get_state() == handlers.HWStates.waiting_question.state
+    assert await state.get_state() == HWStates.waiting_question.state
     assert any("Задай вопрос" in text for _, text in events)
 
     notifications: list[str] = []
