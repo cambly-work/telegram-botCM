@@ -248,7 +248,7 @@ async def _resolve_checkout_links(bot: "Bot") -> Dict[str, str]:
 
     checkout_url = _resolve_checkout_url()
     deep_link = await _resolve_deep_link(bot, {"section": "pay"})
-    display_url = deep_link or checkout_url
+    display_url = checkout_url or deep_link
     return {
         "display": display_url,
         "deep_link": deep_link or "",
