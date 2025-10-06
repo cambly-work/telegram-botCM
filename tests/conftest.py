@@ -11,7 +11,7 @@ def _load_handlers_module() -> None:
     if "handlers" in sys.modules:
         return
 
-    spec = importlib.util.spec_from_file_location("handlers", ROOT / "handlers.py")
+    spec = importlib.util.spec_from_file_location("handlers", ROOT / "handlers" / "__init__.py")
     if spec is None or spec.loader is None:
         raise RuntimeError("Cannot load handlers module")
 

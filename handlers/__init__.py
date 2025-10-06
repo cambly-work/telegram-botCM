@@ -1,34 +1,34 @@
-# handlers.py
+"""Main handlers package entry point."""
+
 import asyncio
+import html
 import io
 import json
+import logging
 import math
 import os
 import re
 import shlex
-import yaml
-import logging
 import time
-import html
 from collections import OrderedDict
-from typing import TYPE_CHECKING
-from datetime import datetime, date, timedelta, timezone
-from zoneinfo import ZoneInfo
-from typing import Optional, Iterable, Dict, List, Callable, Awaitable, Any, Sequence
-from aiogram import Router, F, types
+from datetime import date, datetime, timedelta, timezone
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, Iterable, List, Optional, Sequence
+
+import yaml
+from aiogram import F, Router, types
 from aiogram.enums import ParseMode
+from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
+from aiogram.filters import Command, CommandObject, CommandStart, StateFilter
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
+    BufferedInputFile,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
     ReplyKeyboardMarkup,
     ReplyKeyboardRemove,
-    BufferedInputFile,
-    InlineKeyboardMarkup,
-    InlineKeyboardButton,
 )
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import StatesGroup, State
-from aiogram.filters import Command, CommandObject, CommandStart, StateFilter
 from aiogram.utils.chat_action import ChatActionSender
-from aiogram.exceptions import TelegramRetryAfter, TelegramBadRequest
 
 try:
     from aiogram.exceptions import EventSkip
@@ -208,13 +208,42 @@ from keyboards import (
     MATERIALS_PRACTICES_BUTTON,
     MATERIALS_CHALLENGES_BUTTON,
 )
+from .config import (
+    AT_PRODUCT_ID_CLUB,
+    BOT_TIMEZONE,
+    BOT_VERSION,
+    BOT_ZONE,
+    CLUB_CHAT_ID,
+    SUPPORT_CONTACT,
+    TEST_FORM_URL,
+    WELCOME_POST_URL,
+)
+from .constants import (
+    ANALYSIS_REQUEST_CLOSED_STATUSES,
+    ANALYSIS_REQUEST_STATUS_LABELS,
+    ANALYSIS_REQUEST_STATUS_ORDER,
+    FORM_ALIASES,
+    FORM_LABELS,
+    FORM_SLUG_ANALYSIS,
+    FORM_SLUG_TEST,
+    SYSTEM_ADMIN_ACTOR,
+    TELEGRAM_MESSAGE_LIMIT,
+    USER_KEY_STATUS_AVAILABLE,
+    USER_KEY_STATUS_CLAIMED,
+    USER_KEY_STATUS_REVOKED,
+    WEEKLY_KEY_STATUS_ACTIVE,
+    _ADMIN_BROADCAST_SETTINGS_DEFAULTS,
+    _ADMIN_BROADCAST_SETTINGS_LABELS,
+    _ADMIN_SETTINGS_DEFAULTS,
+    _ADMIN_SETTINGS_LABELS,
+    _ADMIN_SETTINGS_STATUS_TEXTS,
+    _FORM_NOTIFY_FLAGS,
+)
 # ──────────────────────────────────────────────────────────────────────────────
 # Логгер
 # ──────────────────────────────────────────────────────────────────────────────
 logger = logging.getLogger("handlers")
 
-
-TELEGRAM_MESSAGE_LIMIT = 4096
 
 if TYPE_CHECKING:  # pragma: no cover - for static analyzers only
     from scheduler import get_scheduler_status as _scheduler_get_status
@@ -231,37 +260,6 @@ _notify_admins_cached: Optional[Callable[[str], Awaitable[None]]] = None
 _BOT_USERNAME_CACHE: Optional[str] = None
 _BOT_USERNAME_LOCK = asyncio.Lock()
 
-
-FORM_SLUG_ANALYSIS = "analysis"
-FORM_SLUG_TEST = "test"
-FORM_LABELS: dict[str, str] = {
-    FORM_SLUG_ANALYSIS: "заявка на разбор",
-    FORM_SLUG_TEST: "тест по уровню",
-}
-FORM_ALIASES: dict[str, str] = {
-    FORM_SLUG_ANALYSIS: FORM_SLUG_ANALYSIS,
-    FORM_SLUG_TEST: FORM_SLUG_TEST,
-    "разбор": FORM_SLUG_ANALYSIS,
-    "анкета": FORM_SLUG_ANALYSIS,
-    "analysis": FORM_SLUG_ANALYSIS,
-    "test": FORM_SLUG_TEST,
-    "тест": FORM_SLUG_TEST,
-    "magnetism-window": "magnetism-window",
-    "magnetism_window": "magnetism-window",
-}
-
-ANALYSIS_REQUEST_STATUS_LABELS: dict[str, str] = OrderedDict(
-    (
-        ("new", "Новая"),
-        ("scheduled", "Запланирована"),
-        ("in_progress", "В работе"),
-        ("done", "Завершена"),
-        ("archived", "В архиве"),
-        ("deleted", "Удалена"),
-    )
-)
-ANALYSIS_REQUEST_STATUS_ORDER: tuple[str, ...] = tuple(ANALYSIS_REQUEST_STATUS_LABELS)
-ANALYSIS_REQUEST_CLOSED_STATUSES: set[str] = {"archived", "deleted"}
 
 _ANALYSIS_DEFAULT_INTRO = (
     "Персональный разбор.\n\n"
@@ -302,34 +300,9 @@ _ANALYSIS_BACK_TOKENS = {
     "назад",
 }
 
-WEEKLY_KEY_STATUS_ACTIVE = "active"
-USER_KEY_STATUS_AVAILABLE = "available"
-USER_KEY_STATUS_CLAIMED = "claimed"
-USER_KEY_STATUS_REVOKED = "revoked"
-SYSTEM_ADMIN_ACTOR = 0
-
-
-router = Router(name="main-router")
 # ──────────────────────────────────────────────────────────────────────────────
 # Конфиг из окружения
 # ──────────────────────────────────────────────────────────────────────────────
-BOT_TIMEZONE = os.getenv("BOT_TIMEZONE", "Europe/Moscow")
-WELCOME_POST_URL = os.getenv("WELCOME_POST_URL", "https://t.me/")
-TEST_FORM_URL = os.getenv(
-    "TEST_FORM_URL",
-    "https://forms.gle/iNcUGfiLGNkLW1dc8",
-)
-SUPPORT_CONTACT = os.getenv("SUPPORT_CONTACT", "@Tokyo_tokyo")
-AT_PRODUCT_ID_CLUB = os.getenv("AT_PRODUCT_ID_CLUB", "")
-CLUB_CHAT_ID = os.getenv("CLUB_CHAT_ID", "")  # ID приватной группы/канала (опц.)
-BOT_VERSION = "1.0.0"
-
-try:
-    BOT_ZONE = ZoneInfo(BOT_TIMEZONE)
-except Exception:  # pragma: no cover - fallback for misconfiguration
-    logger.warning("Invalid BOT_TIMEZONE=%s, falling back to Europe/Moscow", BOT_TIMEZONE)
-    BOT_ZONE = ZoneInfo("Europe/Moscow")
-
 
 _SUPPORT_CHANNELS_CONFIG: tuple[dict[str, str]] = (
     {
@@ -879,7 +852,7 @@ def _format_birthdate(birthdate: date) -> str:
 # Контент: content.yaml + БД content (fallback-логика)
 # ──────────────────────────────────────────────────────────────────────────────
 _CONTENT_CACHE: dict = {}
-_CONTENT_FILE = os.path.join(os.path.dirname(__file__), "content.yaml")
+_CONTENT_FILE = os.path.join(os.path.dirname(os.path.dirname(__file__)), "content.yaml")
 _CONTENT_DB_CACHE: Dict[str, str] = {}
 _CONTENT_LAST_RELOAD = None
 _CONTENT_HISTORY_LIMIT = 5
@@ -1742,54 +1715,6 @@ _MENU_SECTION_PROMPTS: dict[str, tuple[str, str]] = {
         "Раздел «Профиль».\n\nПроверяй контакты, статус доступа и обновляй данные.",
     ),
 }
-
-_ADMIN_SETTINGS_DEFAULTS: dict[str, bool] = {
-    "payments_open": True,
-    "payments_manual_review": False,
-    "show_weekly_materials": True,
-    "show_schedule": True,
-    "notify_registration": True,
-    "notify_form_analysis": True,
-    "notify_form_test": True,
-}
-
-_ADMIN_BROADCAST_SETTINGS_DEFAULTS: dict[str, bool] = {
-    "broadcast_form_reminders_enabled": True,
-    "broadcast_soft_reminders_enabled": True,
-    "broadcast_access_expiry_enabled": True,
-}
-
-_ADMIN_BROADCAST_SETTINGS_LABELS: dict[str, str] = {
-    "broadcast_form_reminders_enabled": "Напоминания анкет",
-    "broadcast_soft_reminders_enabled": "Напоминания уроков",
-    "broadcast_access_expiry_enabled": "Напоминания об окончании доступа",
-}
-
-_ADMIN_SETTINGS_LABELS: dict[str, str] = {
-    "payments_open": "Окно оплаты",
-    "payments_manual_review": "Ручная проверка оплат",
-    "show_weekly_materials": "Материалы недели",
-    "show_schedule": "Расписание",
-    "notify_registration": "Уведомления о регистрациях",
-    "notify_form_analysis": "Уведомления о разборе",
-    "notify_form_test": "Уведомления о тесте",
-}
-
-_ADMIN_SETTINGS_STATUS_TEXTS: dict[str, tuple[str, str]] = {
-    "payments_open": ("открыто", "закрыто"),
-    "payments_manual_review": ("включена", "выключена"),
-    "show_weekly_materials": ("доступны", "скрыты"),
-    "show_schedule": ("показывается", "скрыто"),
-    "notify_registration": ("включены", "выключены"),
-    "notify_form_analysis": ("включены", "выключены"),
-    "notify_form_test": ("включены", "выключены"),
-}
-
-_FORM_NOTIFY_FLAGS: dict[str, str] = {
-    FORM_SLUG_ANALYSIS: "notify_form_analysis",
-    FORM_SLUG_TEST: "notify_form_test",
-}
-
 
 async def _is_form_notification_enabled(slug: str) -> bool:
     flag_key = _FORM_NOTIFY_FLAGS.get(slug)
@@ -3251,7 +3176,7 @@ def _format_admin_stats_forms(
     lines = [
         "<b>🗂 Формы и консультации</b>",
         "",
-        f"Фильтр заявок на тестирование: <b>{html.escape(filter_label)}</b>",
+        f"Текущий фильтр: <b>{html.escape(filter_label)}</b>",
         "Нажмите «Все», чтобы показать все заявки.",
         "",
         "<b>Формы</b>",
