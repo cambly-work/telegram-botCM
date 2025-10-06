@@ -12,7 +12,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from keyboards import CANCEL_TEXT, cancel_keyboard
-from settings import ADMIN_IDS
+from settings import ADMIN_IDS, STAFF_ADMIN_IDS
 
 from .config import SUPPORT_CONTACT
 from .content import get_content
@@ -237,7 +237,7 @@ async def send_support_section(
         for channel in channels
         if channel.get("url")
     ]
-    if ADMIN_IDS:
+    if ADMIN_IDS or STAFF_ADMIN_IDS:
         inline_rows.append(
             [
                 InlineKeyboardButton(
@@ -326,7 +326,10 @@ async def support_receive_question(message: types.Message, state: FSMContext) ->
                 exc,
             )
 
-    for admin_id in ADMIN_IDS:
+    staff_recipients = list(ADMIN_IDS)
+    staff_recipients.extend(staff_id for staff_id in STAFF_ADMIN_IDS if staff_id not in ADMIN_IDS)
+
+    for admin_id in staff_recipients:
         try:
             await message.forward(admin_id)
         except Exception as exc:  # pragma: no cover - logging only

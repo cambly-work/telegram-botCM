@@ -56,7 +56,7 @@ from .content import (
     sanitize_html,
     set_content_value,
 )
-from settings import ADMIN_IDS, YOOMONEY_CHECKOUT_URL
+from settings import ADMIN_IDS, STAFF_ADMIN_IDS, YOOMONEY_CHECKOUT_URL
 from .progress import (
     LESSON_PROGRESS_TOTAL as _LESSON_PROGRESS_TOTAL,
     PROGRESS_STATUS_ICONS as _PROGRESS_STATUS_ICONS,
@@ -360,13 +360,32 @@ _ANALYSIS_BACK_TOKENS = {
 # Конфиг из окружения
 # ──────────────────────────────────────────────────────────────────────────────
 
-def is_admin_id(user_id: int | str | None) -> bool:
+def _coerce_user_id(user_id: int | str | None) -> int | None:
+    """Convert an arbitrary identifier to ``int`` when possible."""
+
     if user_id is None:
-        return False
+        return None
+
     try:
-        return int(user_id) in ADMIN_IDS
+        return int(user_id)
     except (ValueError, TypeError):
+        return None
+
+
+def is_admin_id(user_id: int | str | None) -> bool:
+    normalized = _coerce_user_id(user_id)
+    return normalized in ADMIN_IDS if normalized is not None else False
+
+
+def is_staff_id(user_id: int | str | None) -> bool:
+    normalized = _coerce_user_id(user_id)
+    if normalized is None:
         return False
+    return normalized in ADMIN_IDS or normalized in STAFF_ADMIN_IDS
+
+
+def has_staff_access(user_id: int | str | None) -> bool:
+    return is_staff_id(user_id)
 # ──────────────────────────────────────────────────────────────────────────────
 # Мидлвара для throttling
 # ──────────────────────────────────────────────────────────────────────────────
@@ -12744,6 +12763,21 @@ async def admin_debug(message: types.Message):
             + ("…" if len(admin_ids_sorted) > 10 else "")
         )
     sections.append("\n".join(admin_lines))
+
+    staff_only_ids = sorted(
+        int(staff_id)
+        for staff_id in STAFF_ADMIN_IDS
+        if staff_id not in ADMIN_IDS
+    )
+    if staff_only_ids:
+        staff_lines = [
+            "<b>🧑‍💼 Сотрудники</b>",
+            f"Количество: {len(staff_only_ids)}",
+            "ID: "
+            + ", ".join(html.escape(str(staff_id)) for staff_id in staff_only_ids[:10])
+            + ("…" if len(staff_only_ids) > 10 else ""),
+        ]
+        sections.append("\n".join(staff_lines))
 
     try:
         content_summary = await fetchrow(
