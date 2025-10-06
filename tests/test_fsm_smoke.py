@@ -185,6 +185,32 @@ async def test_registration_smoke_flow(monkeypatch):
     assert execute_calls
 
 
+async def test_registration_cancel_drops_state(monkeypatch):
+    events: list[tuple[str, dict]] = []
+    user = DummyFromUser()
+    message = DummyMessage(handlers.CANCEL_TEXT, user, events)
+    state = DummyState()
+    await state.set_state(RegistrationStates.waiting_name)
+
+    execute_calls: list[tuple] = []
+
+    async def fake_execute(*args, **kwargs):
+        execute_calls.append((args, kwargs))
+
+    monkeypatch.setattr(handlers, "execute", fake_execute, raising=False)
+
+    await handlers.registration_cancel_name(message, state)
+
+    assert await state.get_state() is None
+    assert not execute_calls
+    assert events
+    text, kwargs = events[-1]
+    assert "Регистрация отменена" in text
+    reply_markup = kwargs.get("reply_markup")
+    assert isinstance(reply_markup, aiogram_types.ReplyKeyboardRemove)
+    assert reply_markup.remove_keyboard is True
+
+
 async def test_registration_notifies_admins_when_enabled(monkeypatch):
     events: list[tuple[str, dict]] = []
     user = DummyFromUser(user_id=808, username="newbie")

@@ -6779,6 +6779,20 @@ async def on_start(message: types.Message, state: FSMContext):
         await asyncio.sleep(0.15)
         await message.answer(welcome_text, reply_markup=kb)
 
+# Обработка отмены на этапах регистрации
+async def _cancel_registration(message: types.Message, state: FSMContext) -> None:
+    await state.clear()
+    await message.answer(
+        "Регистрация отменена. Чтобы продолжить, напиши /start.",
+        reply_markup=ReplyKeyboardRemove(),
+    )
+
+
+@router.message(RegistrationStates.waiting_name, F.text.casefold() == CANCEL_TEXT.lower())
+async def registration_cancel_name(message: types.Message, state: FSMContext):
+    await _cancel_registration(message, state)
+
+
 # Обработка ввода имени при регистрации
 @router.message(RegistrationStates.waiting_name, F.text.len() > 0)
 async def registration_receive_name(message: types.Message, state: FSMContext):
@@ -6793,6 +6807,12 @@ async def registration_receive_name(message: types.Message, state: FSMContext):
         "Укажи email для связи:",
         reply_markup=cancel_keyboard()
     )
+
+# Обработка отмены на этапе email при регистрации
+@router.message(RegistrationStates.waiting_email, F.text.casefold() == CANCEL_TEXT.lower())
+async def registration_cancel_email(message: types.Message, state: FSMContext):
+    await _cancel_registration(message, state)
+
 
 # Обработка ввода email при регистрации
 @router.message(RegistrationStates.waiting_email, F.text.len() > 0)
@@ -6815,6 +6835,12 @@ async def registration_receive_email(message: types.Message, state: FSMContext):
         "Укажи номер телефона:",
         reply_markup=cancel_keyboard()
     )
+
+# Обработка отмены на этапе телефона при регистрации
+@router.message(RegistrationStates.waiting_phone, F.text.casefold() == CANCEL_TEXT.lower())
+async def registration_cancel_phone(message: types.Message, state: FSMContext):
+    await _cancel_registration(message, state)
+
 
 # Обработка ввода телефона при регистрации
 @router.message(RegistrationStates.waiting_phone, F.text.len() > 0)
