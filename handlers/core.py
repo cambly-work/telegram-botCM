@@ -26,7 +26,7 @@ from aiogram.types import (
 )
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
-from aiogram.filters import Command, CommandObject, CommandStart, StateFilter
+from aiogram.filters import Command, CommandObject, StateFilter
 from aiogram.utils.chat_action import ChatActionSender
 from aiogram.exceptions import TelegramRetryAfter, TelegramBadRequest
 
@@ -37,6 +37,7 @@ except ImportError:  # aiogram < 3.13.1 compatibility
 from urllib.parse import parse_qs, urlparse, quote_plus, urlencode
 from aiogram.dispatcher.middlewares.base import BaseMiddleware
 from asyncpg import UndefinedColumnError
+
 from admin_forms import (
     TEST_REQUEST_CLOSED_STATUSES,
     TEST_REQUEST_STATUS_LABELS,
@@ -230,6 +231,12 @@ _notify_admins_cached: Optional[Callable[[str], Awaitable[None]]] = None
 
 _BOT_USERNAME_CACHE: Optional[str] = None
 _BOT_USERNAME_LOCK = asyncio.Lock()
+
+# State placeholders will be populated by handlers.user package at import time.
+RegistrationStates: type[StatesGroup] | None = None
+AnalysisStates: type[StatesGroup] | None = None
+HWStates: type[StatesGroup] | None = None
+SupportStates: type[StatesGroup] | None = None
 
 
 FORM_SLUG_ANALYSIS = "analysis"
@@ -1623,29 +1630,6 @@ def now_utc() -> datetime:
 # ──────────────────────────────────────────────────────────────────────────────
 # FSM
 # ──────────────────────────────────────────────────────────────────────────────
-class RegistrationStates(StatesGroup):
-    waiting_name = State()      # ждём имя пользователя
-    waiting_email = State()     # ждём email
-    waiting_phone = State()     # ждём телефон
-
-
-class AnalysisStates(StatesGroup):
-    waiting_format = State()
-    waiting_contact = State()
-    waiting_time = State()
-    waiting_confirm = State()
-
-
-class HWStates(StatesGroup):
-    waiting_answer = State()  # ждём текстовый ответ на ДЗ ({"lesson_num": int})
-    waiting_feedback = State() # ждём обратную связь после урока
-    waiting_question = State() # ждём уточнение вопроса для поддержки
-
-
-class SupportStates(StatesGroup):
-    waiting_question = State()
-
-
 class BroadcastStates(StatesGroup):
     waiting_segment = State()   # ждём выбор сегмента в мастере
     waiting_body = State()      # ждём текст рассылки ({"segment": str})
@@ -4832,7 +4816,6 @@ async def send_support_section(
     )
 
 
-@router.callback_query(F.data == _SUPPORT_QUESTION_CALLBACK)
 async def support_prompt_question(callback: types.CallbackQuery, state: FSMContext) -> None:
     await state.set_state(SupportStates.waiting_question)
     await state.update_data(support_context="menu.support")
@@ -4847,7 +4830,6 @@ async def support_prompt_question(callback: types.CallbackQuery, state: FSMConte
     await callback.answer()
 
 
-@router.message(SupportStates.waiting_question)
 async def support_receive_question(message: types.Message, state: FSMContext) -> None:
     if message.text and message.text.strip().lower() == CANCEL_TEXT.lower():
         await cancel_handler(message, state)
@@ -7572,50 +7554,29 @@ async def send_admin_text_items(message: types.Message, group_title: str) -> Non
     await message.answer(text, reply_markup=keyboard)
 
 async def ensure_user(tg_user: types.User, utm: dict | None = None) -> dict:
-    """
-    Создаёт пользователя при первом входе, либо возвращает его запись.
-    Обновляет username/full_name/utm при необходимости.
-    """
-    row = await fetchrow("SELECT * FROM users WHERE tg_user_id=$1", tg_user.id)
-    if row:
-        # Обновляем UTM, если они предоставлены
-        utm_updates = {}
-        if utm:
-            if 'utm_source' in utm and utm['utm_source']:
-                utm_updates['utm_source'] = utm['utm_source']
-            if 'utm_medium' in utm and utm['utm_medium']:
-                utm_updates['utm_medium'] = utm['utm_medium']
-            if 'utm_campaign' in utm and utm['utm_campaign']:
-                utm_updates['utm_campaign'] = utm['utm_campaign']
-        
-        update_fields = ["username=$2", "full_name=$3", "last_activity_at=NOW()", "updated_at=NOW()"]
-        params = [tg_user.id, tg_user.username, tg_user.full_name]
-        param_count = 3
-        
-        for field, value in utm_updates.items():
-            param_count += 1
-            update_fields.append(f"{field}=${param_count}")
-            params.append(value)
-        
-        await execute(
-            f"UPDATE users SET {', '.join(update_fields)} WHERE tg_user_id=$1",
-            *params
-        )
-        return await fetchrow("SELECT * FROM users WHERE tg_user_id=$1", tg_user.id)
-    
-    utm_source = (utm or {}).get("utm_source")
-    utm_medium = (utm or {}).get("utm_medium")
-    utm_campaign = (utm or {}).get("utm_campaign")
-    
-    await execute(
-        """INSERT INTO users (tg_user_id, username, full_name, utm_source, utm_medium, utm_campaign, created_at, updated_at, last_activity_at)
-           VALUES ($1,$2,$3,$4,$5,$6, NOW(), NOW(), NOW())""",
-        tg_user.id, tg_user.username, tg_user.full_name, utm_source, utm_medium, utm_campaign
-    )
-    
-    created = await fetchrow("SELECT * FROM users WHERE tg_user_id=$1", tg_user.id)
-    logger.info("ensure_user: created user tg_id=%s id=%s", tg_user.id, created["id"])
-    return created
+    from .user.registration import ensure_user as ensure_user_impl
+
+    return await ensure_user_impl(tg_user, utm)
+
+
+def normalize_phone(value: str) -> str:
+    from .user.registration import normalize_phone as normalize_phone_impl
+
+    return normalize_phone_impl(value)
+
+
+def validate_phone(phone: str) -> bool:
+    from .user.registration import validate_phone as validate_phone_impl
+
+    return validate_phone_impl(phone)
+
+
+def validate_email(email: str) -> bool:
+    from .user.registration import validate_email as validate_email_impl
+
+    return validate_email_impl(email)
+
+
 async def is_member(user_row: dict) -> bool:
     if not user_row:
         return False
@@ -7637,18 +7598,6 @@ async def is_member(user_row: dict) -> bool:
         )
 
     return False
-def parse_start_utm(text: Optional[str]) -> dict:
-    if not text or " " not in text:
-        return {}
-    try:
-        _, payload = text.split(" ", 1)
-        # Убираем начальный "/start " если есть
-        if payload.startswith("/start "):
-            payload = payload[7:]
-        qs = parse_qs(payload, keep_blank_values=True)
-        return {k: (v[0] if isinstance(v, list) else v) for k, v in qs.items()}
-    except Exception:
-        return {}
 async def upsert_funnel_delivery(user_id: int, lesson_num: int) -> None:
     row = await fetchrow(
         "SELECT id FROM funnel_progress WHERE user_id=$1 AND lesson_num=$2", user_id, lesson_num
@@ -7892,45 +7841,6 @@ async def generate_invite_link_or_placeholder(bot, chat_id: str) -> str:
         logger.warning("create_chat_invite_link failed: %s", e)
         return "Инвайт будет выслан вручную администратором."
 # ──────────────────────────────────────────────────────────────────────────────
-# Валидации
-# ──────────────────────────────────────────────────────────────────────────────
-_email_re = re.compile(r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$")
-_phone_digits_re = re.compile(r"[^\d+]")
-def normalize_phone(s: str) -> str:
-    s = (s or "").strip()
-    s = _phone_digits_re.sub("", s)
-    
-    # Нормализация российских номеров
-    if s.startswith("8") and len(s) == 11:
-        s = "+7" + s[1:]
-    elif s.startswith("7") and len(s) == 11:
-        s = "+" + s
-    elif len(s) == 10 and s.isdigit():
-        s = "+7" + s
-    
-    # Добавляем + если его нет
-    if not s.startswith("+") and s:
-        s = "+" + s
-    
-    return s
-def validate_phone(phone: str) -> bool:
-    """Проверяет, соответствует ли номер международному формату"""
-    phone = normalize_phone(phone)
-    # Проверяем, что номер начинается с + и содержит только цифры после +
-    if not phone.startswith('+'):
-        return False
-    
-    # Убираем + и проверяем, что остались только цифры
-    digits = phone[1:]
-    if not digits.isdigit():
-        return False
-    
-    # Проверяем минимальную длину номера (включая код страны)
-    return len(digits) >= 7
-def validate_email(email: str) -> bool:
-    """Проверяет валидность email адреса"""
-    return bool(_email_re.match(email))
-# ──────────────────────────────────────────────────────────────────────────────
 # Router и хэндлеры
 # ──────────────────────────────────────────────────────────────────────────────
 @router.my_chat_member()
@@ -7943,160 +7853,6 @@ async def on_my_chat_member(event: types.ChatMemberUpdated):
     except Exception as e:
         logger.error(f"Error in my_chat_member: {e}", exc_info=True)
 # /start — создаём пользователя, захватываем UTM, показываем меню
-@router.message(CommandStart())
-async def on_start(message: types.Message, state: FSMContext):
-    # Проверяем, зарегистрирован ли уже пользователь
-    user = await get_user_with_id(message.from_user.id)
-    
-    # Если пользователь не зарегистрирован, создаем его
-    if not user:
-        utm_params = parse_start_utm(message.text)
-        user_row = await ensure_user(message.from_user, utm=utm_params)
-        user = await get_user_with_id(message.from_user.id)  # ← ДОБАВЬТЕ ЭТУ СТРОКУ
-    
-    # Проверяем, завершена ли регистрация
-    if not user.get("name") or not user.get("email") or not user.get("phone"):
-        # Начинаем процесс регистрации
-        await state.set_state(RegistrationStates.waiting_name)
-        await message.answer(
-            "Добро пожаловать! Для начала нам нужно познакомиться. Как тебя зовут?",
-            reply_markup=cancel_keyboard()
-        )
-        return
-    
-    # Показываем главное меню
-    is_admin = is_admin_id(message.from_user.id)
-    kb = await build_menu_keyboard(user=user, is_admin=is_admin, section="root")
-    
-    welcome_template = await get_content(
-        "menu.start",
-        "Добро пожаловать в CODE: Магнетизм. Это пространство для развития и перемен. Выбери раздел в меню, чтобы начать, {name}!",
-    )
-    display_name = (
-        user.get("name")
-        or user.get("full_name")
-        or message.from_user.full_name
-        or message.from_user.first_name
-        or "друг"
-    )
-    welcome_text = render_content(
-        welcome_template,
-        name=display_name,
-        NAME=display_name,
-    )
-
-    async with ChatActionSender.typing(chat_id=message.chat.id, bot=message.bot):
-        await asyncio.sleep(0.15)
-        await message.answer(welcome_text, reply_markup=kb)
-
-# Обработка ввода имени при регистрации
-@router.message(RegistrationStates.waiting_name, F.text.len() > 0)
-async def registration_receive_name(message: types.Message, state: FSMContext):
-    name = message.text.strip()
-    
-    # Сохраняем имя
-    await execute("UPDATE users SET name=$2, updated_at=NOW() WHERE tg_user_id=$1", message.from_user.id, name)
-    
-    # Переходим к вводу email
-    await state.set_state(RegistrationStates.waiting_email)
-    await message.answer(
-        "Укажи email для связи:",
-        reply_markup=cancel_keyboard()
-    )
-
-# Обработка ввода email при регистрации
-@router.message(RegistrationStates.waiting_email, F.text.len() > 0)
-async def registration_receive_email(message: types.Message, state: FSMContext):
-    email = (message.text or "").strip()
-    
-    if not validate_email(email):
-        await message.answer(
-            "Формат неверный. Пример: name@mail.com",
-            reply_markup=cancel_keyboard()
-        )
-        return
-    
-    # Сохраняем email
-    await execute("UPDATE users SET email=$2, updated_at=NOW() WHERE tg_user_id=$1", message.from_user.id, email)
-    
-    # Переходим к вводу телефона
-    await state.set_state(RegistrationStates.waiting_phone)
-    await message.answer(
-        "Укажи номер телефона:",
-        reply_markup=cancel_keyboard()
-    )
-
-# Обработка ввода телефона при регистрации
-@router.message(RegistrationStates.waiting_phone, F.text.len() > 0)
-async def registration_receive_phone(message: types.Message, state: FSMContext):
-    phone = normalize_phone(message.text or "")
-    
-    if not validate_phone(phone):
-        await message.answer(
-            "Формат неверный. Пример: +79991234567",
-            reply_markup=cancel_keyboard()
-        )
-        return
-    
-    # Сохраняем телефон
-    await execute("UPDATE users SET phone=$2, updated_at=NOW() WHERE tg_user_id=$1", message.from_user.id, phone)
-    
-    # Завершаем регистрацию
-    await state.clear()
-    
-    # Получаем обновленные данные пользователя
-    user = await get_user_with_id(message.from_user.id)
-    is_admin = is_admin_id(message.from_user.id)
-
-    # Показываем главное меню
-    kb = await build_menu_keyboard(user=user, is_admin=is_admin, section="root")
-    
-    completion_template = await get_content(
-        "menu.registration_complete",
-        "Регистрация завершена, {name}!\n\nТеперь тебе доступно:\n- Бесплатные уроки\n- Доступ в клуб\n- Отслеживание прогресса\n\nВыбирай в меню и начинай.",
-    )
-    display_name = (
-        user.get("name")
-        or user.get("full_name")
-        or message.from_user.full_name
-        or message.from_user.first_name
-        or "друг"
-    )
-    completion_text = render_content(
-        completion_template,
-        name=display_name,
-        NAME=display_name,
-    )
-
-    await message.answer(completion_text, reply_markup=kb)
-
-    notify_admins = _get_notify_admins()
-    if notify_admins and await _is_admin_setting_enabled("notify_registration"):
-        card_lines = [
-            "🆕 Новая регистрация",
-            f"tg-id: <code>{message.from_user.id}</code>",
-        ]
-        if user and user.get("id"):
-            card_lines.append(f"user-id: <code>{user['id']}</code>")
-        full_name = user.get("full_name") if user else None
-        if full_name:
-            card_lines.append(f"Имя: {html.escape(full_name)}")
-        if message.from_user.username:
-            card_lines.append(f"Username: @{message.from_user.username}")
-        email = (user or {}).get("email")
-        if email:
-            card_lines.append(f"Email: {html.escape(email)}")
-        if phone:
-            card_lines.append(f"Телефон: {html.escape(phone)}")
-        try:
-            await notify_admins("\n".join(card_lines))
-        except Exception as exc:
-            logger.warning(
-                "registration: notify_admins failed tg_user_id=%s err=%s",
-                message.from_user.id,
-                exc,
-            )
-
 async def _reset_state_if_needed(state: FSMContext) -> bool:
     """Сбрасывает активный FSM-стейт, если он есть."""
     if state is None:
@@ -8118,7 +7874,6 @@ async def _reset_state_if_needed(state: FSMContext) -> bool:
 
 
 
-@router.message(HWStates.waiting_answer, F.text.len() > 0)
 async def hw_receive_answer(message: types.Message, state: FSMContext):
     data = await state.get_data()
     lesson_num = int(data.get("lesson_num", 0) or 0)
@@ -8186,7 +7941,6 @@ async def hw_receive_answer(message: types.Message, state: FSMContext):
 
 
 
-@router.message(HWStates.waiting_feedback, F.text.len() > 0)
 async def feedback_receive_text(message: types.Message, state: FSMContext):
     data = await state.get_data()
     lesson_num = int(data.get("lesson_num", 0) or 0)
@@ -8221,9 +7975,6 @@ async def feedback_receive_text(message: types.Message, state: FSMContext):
         await _send_offer_after_lesson_four(message)
 
 
-@router.message(
-    ProfileStates.waiting_email, F.text.casefold() == CANCEL_TEXT.lower()
-)
 async def profile_cancel_email(message: types.Message, state: FSMContext):
     await state.clear()
 
@@ -8234,7 +7985,6 @@ async def profile_cancel_email(message: types.Message, state: FSMContext):
     await send_profile_overview(message, user, is_admin)
 
 
-@router.message(ProfileStates.waiting_email, F.text.len() > 0)
 async def profile_receive_email(message: types.Message, state: FSMContext):
     email = (message.text or "").strip()
 
@@ -8258,7 +8008,6 @@ async def profile_receive_email(message: types.Message, state: FSMContext):
     await send_profile_overview(message, user, is_admin)
 
 
-@router.message(ProfileStates.waiting_phone, F.text.casefold() == CANCEL_TEXT.lower())
 async def profile_cancel_phone(message: types.Message, state: FSMContext):
     await state.clear()
 
@@ -8269,7 +8018,6 @@ async def profile_cancel_phone(message: types.Message, state: FSMContext):
     await send_profile_overview(message, user, is_admin)
 
 
-@router.message(ProfileStates.waiting_phone, F.text.len() > 0)
 async def profile_receive_phone(message: types.Message, state: FSMContext):
     raw_phone = (message.text or "").strip()
 
@@ -8393,7 +8141,6 @@ async def cmd_schedule_remind_short(message: types.Message, state: FSMContext):
 # ──────────────────────────────────────────────────────────────────────────────
 # Поддержка и помощь
 # ──────────────────────────────────────────────────────────────────────────────
-@router.message(Command("support"))
 async def cmd_support(message: types.Message, state: FSMContext):
     await _reset_state_if_needed(state)
 
@@ -8523,7 +8270,6 @@ async def cmd_id(message: types.Message, state: FSMContext):
     )
 
 
-@router.message(Command("profile"))
 async def cmd_profile(message: types.Message, state: FSMContext):
     await _reset_state_if_needed(state)
 
@@ -8730,14 +8476,12 @@ async def menu_pay(message: types.Message, state: FSMContext):
     await send_pay_section(message, user, is_admin)
 
 
-@router.message(StateFilter("*"), F.text == "🆘 Поддержка")
 async def menu_support(message: types.Message, state: FSMContext):
     await _reset_state_if_needed(state)
     user, is_admin = await _get_user_and_admin(message)
     await send_support_section(message, user, is_admin)
 
 
-@router.message(StateFilter("*"), F.text == "Бесплатные уроки")
 async def menu_lessons(message: types.Message, state: FSMContext):
     await _reset_state_if_needed(state)
     user = await get_user_with_id(message.from_user.id)
@@ -8758,7 +8502,6 @@ async def menu_magnetism_window(message: types.Message, state: FSMContext):
     await send_magnetism_window_section(message, user, is_admin)
 
 
-@router.message(StateFilter("*"), F.text == "Записаться на разбор")
 async def menu_analysis(message: types.Message, state: FSMContext):
     await _reset_state_if_needed(state)
     user, _ = await _get_user_and_admin(message)
@@ -8781,7 +8524,6 @@ async def menu_analysis(message: types.Message, state: FSMContext):
     await _analysis_send_format_prompt(message, include_intro=True)
 
 
-@router.message(AnalysisStates.waiting_format)
 async def analysis_collect_format(message: types.Message, state: FSMContext):
     text = (message.text or "").strip()
     if _analysis_normalize_text(text) == _analysis_normalize_text(CANCEL_TEXT):
@@ -8800,7 +8542,6 @@ async def analysis_collect_format(message: types.Message, state: FSMContext):
     await _analysis_send_contact_prompt(message)
 
 
-@router.message(AnalysisStates.waiting_contact)
 async def analysis_collect_contact(message: types.Message, state: FSMContext):
     text = (message.text or "").strip()
     if _analysis_normalize_text(text) == _analysis_normalize_text(CANCEL_TEXT):
@@ -8820,7 +8561,6 @@ async def analysis_collect_contact(message: types.Message, state: FSMContext):
     await _analysis_send_time_prompt(message)
 
 
-@router.message(AnalysisStates.waiting_time)
 async def analysis_collect_time(message: types.Message, state: FSMContext):
     text = (message.text or "").strip()
     if _analysis_normalize_text(text) == _analysis_normalize_text(CANCEL_TEXT):
@@ -8840,7 +8580,6 @@ async def analysis_collect_time(message: types.Message, state: FSMContext):
     await _analysis_send_confirm_prompt(message, state)
 
 
-@router.message(AnalysisStates.waiting_confirm)
 async def analysis_confirm_request(message: types.Message, state: FSMContext):
     text = (message.text or "").strip()
     if _analysis_normalize_text(text) == _analysis_normalize_text(CANCEL_TEXT):
@@ -8975,7 +8714,6 @@ async def menu_test(message: types.Message, state: FSMContext):
     await message.answer(message_text, reply_markup=cancel_keyboard())
 
 
-@router.message(F.text == LEARNING_PROGRESS_BUTTON)
 async def menu_learning_progress(message: types.Message, state: FSMContext):
     await _reset_state_if_needed(state)
     user, is_admin = await _get_user_and_admin(message)
@@ -9249,7 +8987,6 @@ async def menu_schedule(message: types.Message, state: FSMContext):
     await send_schedule_section(message, user, is_admin)
 
 
-@router.message(StateFilter("*"), F.text == "Мой профиль")
 async def menu_profile_overview(message: types.Message, state: FSMContext):
     await _reset_state_if_needed(state)
     user, is_admin = await _get_user_and_admin(message)
@@ -9259,7 +8996,6 @@ async def menu_profile_overview(message: types.Message, state: FSMContext):
     await send_profile_overview(message, user, is_admin)
 
 
-@router.message(StateFilter("*"), F.text == "Изменить email")
 async def menu_profile_email(message: types.Message, state: FSMContext):
     await _reset_state_if_needed(state)
     await state.set_state(ProfileStates.waiting_email)
@@ -9269,7 +9005,6 @@ async def menu_profile_email(message: types.Message, state: FSMContext):
     )
 
 
-@router.message(StateFilter("*"), F.text == "Изменить телефон")
 async def menu_profile_phone(message: types.Message, state: FSMContext):
     await _reset_state_if_needed(state)
     await state.set_state(ProfileStates.waiting_phone)
@@ -9312,7 +9047,6 @@ async def lessons_select(message: types.Message, state: FSMContext):
     await deliver_lesson(message, user, lesson_num, state)
 
 
-@router.message(F.text == LESSON_DONE)
 async def lesson_mark_done(message: types.Message, state: FSMContext):
     data = await state.get_data()
     lesson_num = int(data.get("active_lesson", 0) or 0)
@@ -9332,7 +9066,6 @@ async def lesson_mark_done(message: types.Message, state: FSMContext):
     )
 
 
-@router.message(F.text == LESSON_SKIP)
 async def lesson_skip(message: types.Message, state: FSMContext):
     data = await state.get_data()
     lesson_num = int(data.get("active_lesson", 0) or 0)
@@ -9362,7 +9095,6 @@ async def lesson_skip(message: types.Message, state: FSMContext):
     )
 
 
-@router.message(F.text == LESSON_QUESTION)
 async def lesson_question(message: types.Message, state: FSMContext):
     data = await state.get_data()
     lesson_num = int(data.get("active_lesson", 0) or 0)
@@ -9383,7 +9115,6 @@ async def lesson_question(message: types.Message, state: FSMContext):
     )
 
 
-@router.message(HWStates.waiting_question, F.text.len() > 0)
 async def lesson_receive_question(message: types.Message, state: FSMContext):
     data = await state.get_data()
     lesson_num = int(data.get("lesson_num", 0) or 0)
@@ -9431,7 +9162,6 @@ async def lesson_receive_question(message: types.Message, state: FSMContext):
     )
     await message.answer(confirm_text, reply_markup=reply)
 
-@router.message(F.text == NEXT_LESSON)
 async def lesson_next(message: types.Message, state: FSMContext):
     data = await state.get_data()
     last_lesson = int(data.get("last_lesson", 0) or 0)
@@ -9448,7 +9178,6 @@ async def lesson_next(message: types.Message, state: FSMContext):
     await deliver_lesson(message, user, next_lesson_num, state)
 
 
-@router.message(HWStates.waiting_feedback, F.text == WRITE_FEEDBACK)
 async def feedback_request_text(message: types.Message, state: FSMContext):
     await message.answer(
         "Поделись впечатлением от урока одним сообщением.",
@@ -9456,7 +9185,6 @@ async def feedback_request_text(message: types.Message, state: FSMContext):
     )
 
 
-@router.message(HWStates.waiting_feedback, F.text == SKIP_FEEDBACK)
 async def feedback_skip(message: types.Message, state: FSMContext):
     data = await state.get_data()
     lesson_num = int(data.get("lesson_num", 0) or 0)
@@ -9477,7 +9205,6 @@ async def feedback_skip(message: types.Message, state: FSMContext):
         await _send_offer_after_lesson_four(message)
 
 
-@router.message(HWStates.waiting_feedback, F.text.in_(list(FEEDBACK_OPTIONS.keys())))
 async def feedback_quick_choice(message: types.Message, state: FSMContext):
     data = await state.get_data()
     lesson_num = int(data.get("lesson_num", 0) or 0)
