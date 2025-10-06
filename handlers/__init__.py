@@ -43,6 +43,7 @@ from admin_forms import (
     get_status_label,
 )
 from db import fetchrow, fetch, execute, transaction
+from utils import normalize_phone
 from .content import (
     _CONTENT_DB_CACHE,
     _CONTENT_HISTORY_LIMIT,
@@ -7289,24 +7290,6 @@ async def generate_invite_link_or_placeholder(bot, chat_id: str) -> str:
 # Валидации
 # ──────────────────────────────────────────────────────────────────────────────
 _email_re = re.compile(r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$")
-_phone_digits_re = re.compile(r"[^\d+]")
-def normalize_phone(s: str) -> str:
-    s = (s or "").strip()
-    s = _phone_digits_re.sub("", s)
-    
-    # Нормализация российских номеров
-    if s.startswith("8") and len(s) == 11:
-        s = "+7" + s[1:]
-    elif s.startswith("7") and len(s) == 11:
-        s = "+" + s
-    elif len(s) == 10 and s.isdigit():
-        s = "+7" + s
-    
-    # Добавляем + если его нет
-    if not s.startswith("+") and s:
-        s = "+" + s
-    
-    return s
 def validate_phone(phone: str) -> bool:
     """Проверяет, соответствует ли номер международному формату"""
     phone = normalize_phone(phone)

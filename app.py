@@ -7,7 +7,6 @@ import io
 import json
 import logging
 import os
-import re
 import urllib.error
 import urllib.request
 from typing import Optional, Any, Dict, List, Literal
@@ -27,6 +26,7 @@ from aiogram import Bot, Dispatcher, types
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from settings import ADMIN_IDS, YOOMONEY_WEBHOOK_SECRET
+from utils import normalize_phone
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Конфиг/окружение
@@ -355,26 +355,6 @@ async def set_webhook(max_retries: int = MAX_RETRIES) -> bool:
     logger.error("Failed to set webhook after %d attempts", max_retries)
     await notify_admins(f"❌ Не удалось установить вебхук после {max_retries} попыток")
     return False
-
-
-def normalize_phone(phone: str) -> str:
-    """Нормализация телефонного номера для сравнения"""
-    if not phone:
-        return ""
-    
-    # Убираем все нецифровые символы, кроме +
-    phone = re.sub(r"[^\d+]", "", phone)
-    
-    # Нормализация российских номеров
-    if phone.startswith("8") and len(phone) == 11:
-        phone = "+7" + phone[1:]
-    elif phone.startswith("7") and len(phone) == 11:
-        phone = "+" + phone
-    elif len(phone) == 10:
-        phone = "+7" + phone
-    
-    return phone
-
 # ──────────────────────────────────────────────────────────────────────────────
 # Lifespan
 # ──────────────────────────────────────────────────────────────────────────────
