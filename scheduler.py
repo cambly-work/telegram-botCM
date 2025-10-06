@@ -25,13 +25,12 @@ from keyboards import lesson_keyboard
 # переиспользуем минимум логики из handlers, чтобы не дублировать
 from handlers import (
     _ADMIN_BROADCAST_SETTINGS_DEFAULTS,
-    _load_yaml_content,
     upsert_funnel_delivery,
     FORM_LABELS,
-    get_content,
     get_bool_setting,
     _resolve_checkout_links,
 )
+from handlers.content import _load_yaml_content, get_content
 
 logger = logging.getLogger("scheduler")
 
