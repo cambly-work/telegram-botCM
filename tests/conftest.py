@@ -1,4 +1,4 @@
-import importlib.util
+import importlib
 import sys
 from pathlib import Path
 
@@ -11,25 +11,7 @@ def _load_handlers_module() -> None:
     if "handlers" in sys.modules:
         return
 
-    spec = importlib.util.spec_from_file_location("handlers", ROOT / "handlers.py")
-    if spec is None or spec.loader is None:
-        raise RuntimeError("Cannot load handlers module")
-
-    module = importlib.util.module_from_spec(spec)
-
-    class _StubRouter:
-        def __getattr__(self, _name):
-            def decorator(*_args, **_kwargs):
-                def wrapper(func):
-                    return func
-
-                return wrapper
-
-            return decorator
-
-    module.__dict__["router"] = _StubRouter()
-    sys.modules["handlers"] = module
-    spec.loader.exec_module(module)
+    importlib.import_module("handlers")
 
 
 _load_handlers_module()
