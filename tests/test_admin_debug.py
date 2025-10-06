@@ -78,3 +78,49 @@ def test_has_staff_access_for_roles(monkeypatch):
     assert handlers.has_staff_access(2002) is True
 
     assert handlers.has_staff_access(3003) is False
+
+
+def test_menu_admin_entry_accepts_staff(monkeypatch):
+    called = {}
+
+    async def fake_send_admin_menu(message, *, from_callback=False):
+        called["message"] = message
+        called["from_callback"] = from_callback
+
+    monkeypatch.setattr(handlers, "send_admin_menu", fake_send_admin_menu)
+    monkeypatch.setattr(handlers, "has_staff_access", lambda user_id: user_id == 2002)
+
+    message = SimpleNamespace(from_user=SimpleNamespace(id=2002))
+
+    asyncio.run(handlers.menu_admin_entry(message, state=None))
+
+    assert called.get("message") is message
+    assert called.get("from_callback") is False
+
+
+def test_staff_user_gets_admin_flag_in_menu(monkeypatch):
+    captured: dict[str, object] = {}
+
+    async def fake_get_user_with_id(user_id):
+        assert user_id == 2002
+        return {"id": 1, "name": "Staff", "email": "staff@example.com", "phone": "+79991234567"}
+
+    async def fake_send_menu_section(message, user, is_admin, section, *, from_callback=False):
+        captured["message"] = message
+        captured["user"] = user
+        captured["is_admin"] = is_admin
+        captured["section"] = section
+        captured["from_callback"] = from_callback
+
+    monkeypatch.setattr(handlers, "get_user_with_id", fake_get_user_with_id)
+    monkeypatch.setattr(handlers, "send_menu_section", fake_send_menu_section)
+    monkeypatch.setattr(handlers, "has_staff_access", lambda user_id: user_id == 2002)
+
+    message = SimpleNamespace(from_user=SimpleNamespace(id=2002))
+
+    asyncio.run(handlers.menu_open_info(message, state=None))
+
+    assert captured.get("user", {}).get("name") == "Staff"
+    assert captured.get("is_admin") is True
+    assert captured.get("section") == "info"
+    assert captured.get("from_callback") is False

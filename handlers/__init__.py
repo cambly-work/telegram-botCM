@@ -5019,10 +5019,11 @@ async def send_materials_root_section(
     from_callback: bool = False,
 ) -> None:
     user_row = user or await get_user_with_id(message.from_user.id)
+    full_admin = is_admin_id(message.from_user.id)
     keyboard, _ = await _build_materials_keyboard(
         user_row,
         submenu=None,
-        is_admin=is_admin,
+        is_admin=full_admin,
     )
     await _materials_reset_state(state)
 
@@ -5209,10 +5210,11 @@ async def send_materials_catalog_section(
     from_callback: bool = False,
 ) -> None:
     user_row = user or await get_user_with_id(message.from_user.id)
+    full_admin = is_admin_id(message.from_user.id)
     keyboard, options = await _build_materials_keyboard(
         user_row,
         submenu="catalog",
-        is_admin=is_admin,
+        is_admin=full_admin,
     )
     await _materials_update_state(state, stack=["catalog"], options=options)
 
@@ -5281,6 +5283,7 @@ async def send_materials_category_section(
     from_callback: bool = False,
 ) -> None:
     user_row = user or await get_user_with_id(message.from_user.id)
+    full_admin = is_admin_id(message.from_user.id)
     category = await get_material_category_by_slug(category_slug)
 
     if not category:
@@ -5291,7 +5294,7 @@ async def send_materials_category_section(
         keyboard, options = await _build_materials_keyboard(
             user_row,
             submenu="catalog",
-            is_admin=is_admin,
+            is_admin=full_admin,
         )
         await _materials_update_state(state, stack=["catalog"], options=options)
         await answer_with_main_menu(
@@ -5310,14 +5313,14 @@ async def send_materials_category_section(
     has_access = await user_has_material_access(
         user_row,
         category,
-        is_admin=is_admin,
+        is_admin=full_admin,
     )
 
     if not has_access:
         keyboard, options = await _build_materials_keyboard(
             user_row,
             submenu=submenu,
-            is_admin=is_admin,
+            is_admin=full_admin,
         )
         await _materials_update_state(state, stack=stack, options=options)
         locked_key = f"{category['content_key']}.locked"
@@ -5342,7 +5345,7 @@ async def send_materials_category_section(
         keyboard, options = await _build_materials_keyboard(
             user_row,
             submenu=submenu_slug,
-            is_admin=is_admin,
+            is_admin=full_admin,
         )
         stack_with_current = stack + [submenu_slug]
         await _materials_update_state(state, stack=stack_with_current, options=options)
@@ -5364,7 +5367,7 @@ async def send_materials_category_section(
     keyboard, options = await _build_materials_keyboard(
         user_row,
         submenu=submenu,
-        is_admin=is_admin,
+        is_admin=full_admin,
     )
     await _materials_update_state(state, stack=stack, options=options)
 
@@ -6755,8 +6758,8 @@ async def on_start(message: types.Message, state: FSMContext):
         return
     
     # Показываем главное меню
-    is_admin = is_admin_id(message.from_user.id)
-    kb = await build_menu_keyboard(user=user, is_admin=is_admin, section="root")
+    has_admin_access = has_staff_access(message.from_user.id)
+    kb = await build_menu_keyboard(user=user, is_admin=has_admin_access, section="root")
     
     welcome_template = await get_content(
         "menu.start",
@@ -6862,10 +6865,10 @@ async def registration_receive_phone(message: types.Message, state: FSMContext):
     
     # Получаем обновленные данные пользователя
     user = await get_user_with_id(message.from_user.id)
-    is_admin = is_admin_id(message.from_user.id)
+    has_admin_access = has_staff_access(message.from_user.id)
 
     # Показываем главное меню
-    kb = await build_menu_keyboard(user=user, is_admin=is_admin, section="root")
+    kb = await build_menu_keyboard(user=user, is_admin=has_admin_access, section="root")
     
     completion_template = await get_content(
         "menu.registration_complete",
@@ -7044,10 +7047,10 @@ async def profile_cancel_email(message: types.Message, state: FSMContext):
     await state.clear()
 
     user = await get_user_with_id(message.from_user.id)
-    is_admin = is_admin_id(message.from_user.id)
+    has_admin_access = has_staff_access(message.from_user.id)
 
     await message.answer("Изменение email отменено.")
-    await send_profile_overview(message, user, is_admin)
+    await send_profile_overview(message, user, has_admin_access)
 
 
 @router.message(ProfileStates.waiting_email, F.text.len() > 0)
@@ -7070,8 +7073,8 @@ async def profile_receive_email(message: types.Message, state: FSMContext):
 
     await message.answer("Email обновлён ✅")
     user = await get_user_with_id(message.from_user.id)
-    is_admin = is_admin_id(message.from_user.id)
-    await send_profile_overview(message, user, is_admin)
+    has_admin_access = has_staff_access(message.from_user.id)
+    await send_profile_overview(message, user, has_admin_access)
 
 
 @router.message(ProfileStates.waiting_phone, F.text.casefold() == CANCEL_TEXT.lower())
@@ -7079,10 +7082,10 @@ async def profile_cancel_phone(message: types.Message, state: FSMContext):
     await state.clear()
 
     user = await get_user_with_id(message.from_user.id)
-    is_admin = is_admin_id(message.from_user.id)
+    has_admin_access = has_staff_access(message.from_user.id)
 
     await message.answer("Изменение телефона отменено.")
-    await send_profile_overview(message, user, is_admin)
+    await send_profile_overview(message, user, has_admin_access)
 
 
 @router.message(ProfileStates.waiting_phone, F.text.len() > 0)
@@ -7106,8 +7109,8 @@ async def profile_receive_phone(message: types.Message, state: FSMContext):
 
     await message.answer("Телефон обновлён ✅")
     user = await get_user_with_id(message.from_user.id)
-    is_admin = is_admin_id(message.from_user.id)
-    await send_profile_overview(message, user, is_admin)
+    has_admin_access = has_staff_access(message.from_user.id)
+    await send_profile_overview(message, user, has_admin_access)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -7213,19 +7216,19 @@ async def cmd_schedule_remind_short(message: types.Message, state: FSMContext):
 async def cmd_support(message: types.Message, state: FSMContext):
     await _reset_state_if_needed(state)
 
-    is_admin = is_admin_id(message.from_user.id)
+    has_admin_access = has_staff_access(message.from_user.id)
     user = await get_user_with_id(message.from_user.id)
     await message.answer(
         f"Поддержка.\n\n"
         f"Если есть вопросы или сложности — пиши сюда: {SUPPORT_CONTACT}. Мы отвечаем лично и максимально быстро.",
-        reply_markup=await build_menu_keyboard(user=user, is_admin=is_admin, section="root"),
+        reply_markup=await build_menu_keyboard(user=user, is_admin=has_admin_access, section="root"),
     )
 
 @router.message(Command("form_done"))
 async def cmd_form_done(message: types.Message, command: CommandObject, state: FSMContext):
     await _reset_state_if_needed(state)
 
-    is_admin = is_admin_id(message.from_user.id)
+    has_admin_access = has_staff_access(message.from_user.id)
     raw_arg = (command.args or "").strip() if command else ""
     slug = resolve_form_slug(raw_arg) if raw_arg else FORM_SLUG_ANALYSIS
 
@@ -7233,7 +7236,7 @@ async def cmd_form_done(message: types.Message, command: CommandObject, state: F
     if not user_row:
         user_row = await ensure_user(message.from_user)
 
-    keyboard = await build_menu_keyboard(user=user_row, is_admin=is_admin, section="root")
+    keyboard = await build_menu_keyboard(user=user_row, is_admin=has_admin_access, section="root")
 
     if raw_arg and not slug:
         await message.answer(
@@ -7328,14 +7331,14 @@ async def cmd_id(message: types.Message, state: FSMContext):
 
     uid = message.from_user.id
     uname = f"@{message.from_user.username}" if message.from_user.username else "—"
-    is_admin = is_admin_id(message.from_user.id)
+    has_admin_access = has_staff_access(message.from_user.id)
     user = await get_user_with_id(message.from_user.id)
     await message.answer(
         f"Твои данные:\n\n"
         f"Telegram ID: <code>{uid}</code>\n"
         f"Username: {uname}\n\n"
         f"Эти данные могут понадобиться при обращении в поддержку.",
-        reply_markup=await build_menu_keyboard(user=user, is_admin=is_admin, section="root"),
+        reply_markup=await build_menu_keyboard(user=user, is_admin=has_admin_access, section="root"),
     )
 
 
@@ -7344,15 +7347,15 @@ async def cmd_profile(message: types.Message, state: FSMContext):
     await _reset_state_if_needed(state)
 
     user = await get_user_with_id(message.from_user.id)
-    is_admin = is_admin_id(message.from_user.id)
-    await send_profile_overview(message, user, is_admin)
+    has_admin_access = has_staff_access(message.from_user.id)
+    await send_profile_overview(message, user, has_admin_access)
 
 
 @router.message(Command("help"))
 async def cmd_help(message: types.Message, state: FSMContext):
     await _reset_state_if_needed(state)
 
-    is_admin = is_admin_id(message.from_user.id)
+    has_admin_access = has_staff_access(message.from_user.id)
     user = await get_user_with_id(message.from_user.id)
     await message.answer(
         "Справка по боту.\n\n"
@@ -7368,7 +7371,7 @@ async def cmd_help(message: types.Message, state: FSMContext):
         "Оплата доступа\n"
         "Правила клуба\n"
         "Тест и разбор",
-        reply_markup=await build_menu_keyboard(user=user, is_admin=is_admin, section="root"),
+        reply_markup=await build_menu_keyboard(user=user, is_admin=has_admin_access, section="root"),
     )
 
 
@@ -7414,11 +7417,11 @@ async def cmd_form_done(
         FORM_SLUG=slug,
     )
 
-    is_admin = is_admin_id(message.from_user.id)
+    has_admin_access = has_staff_access(message.from_user.id)
     await answer_with_main_menu(
         message,
         user,
-        is_admin,
+        has_admin_access,
         confirmation_text,
         section="learning",
     )
@@ -7431,14 +7434,14 @@ async def cmd_id(message: types.Message, state: FSMContext):
 
     uid = message.from_user.id
     uname = f"@{message.from_user.username}" if message.from_user.username else "—"
-    is_admin = is_admin_id(message.from_user.id)
+    has_admin_access = has_staff_access(message.from_user.id)
     user = await get_user_with_id(message.from_user.id)
     await message.answer(
         f"Твои данные:\n\n"
         f"Telegram ID: <code>{uid}</code>\n"
         f"Username: {uname}\n\n"
         f"Эти данные могут понадобиться при обращении в поддержку.",
-        reply_markup=await build_menu_keyboard(user=user, is_admin=is_admin, section="root"),
+        reply_markup=await build_menu_keyboard(user=user, is_admin=has_admin_access, section="root"),
     )
 
 
@@ -7447,15 +7450,15 @@ async def cmd_profile(message: types.Message, state: FSMContext):
     await _reset_state_if_needed(state)
 
     user = await get_user_with_id(message.from_user.id)
-    is_admin = is_admin_id(message.from_user.id)
-    await send_profile_overview(message, user, is_admin)
+    has_admin_access = has_staff_access(message.from_user.id)
+    await send_profile_overview(message, user, has_admin_access)
 
 
 @router.message(Command("help"))
 async def cmd_help(message: types.Message, state: FSMContext):
     await _reset_state_if_needed(state)
 
-    is_admin = is_admin_id(message.from_user.id)
+    has_admin_access = has_staff_access(message.from_user.id)
     user = await get_user_with_id(message.from_user.id)
     await message.answer(
         "Справка по боту.\n\n"
@@ -7471,14 +7474,16 @@ async def cmd_help(message: types.Message, state: FSMContext):
         "Оплата доступа\n"
         "Правила клуба\n"
         "Тест и разбор",
-        reply_markup=await build_menu_keyboard(user=user, is_admin=is_admin, section="root"),
+        reply_markup=await build_menu_keyboard(user=user, is_admin=has_admin_access, section="root"),
     )
 # ──────────────────────────────────────────────────────────────────────────────
 # Навигация по меню
 # ──────────────────────────────────────────────────────────────────────────────
 async def _get_user_and_admin(message: types.Message) -> tuple[Optional[dict], bool]:
+    """Return the DB user row together with the admin menu access flag."""
+
     user = await get_user_with_id(message.from_user.id)
-    return user, is_admin_id(message.from_user.id)
+    return user, has_staff_access(message.from_user.id)
 
 
 @router.message(StateFilter("*"), F.text == BACK_TO_MAIN)
@@ -7559,19 +7564,19 @@ async def menu_lessons(message: types.Message, state: FSMContext):
     user = await get_user_with_id(message.from_user.id)
     if not user:
         user = await ensure_user(message.from_user)
-    is_admin = is_admin_id(message.from_user.id)
-    await send_funnel_section(message, user, is_admin)
+    has_admin_access = has_staff_access(message.from_user.id)
+    await send_funnel_section(message, user, has_admin_access)
 
 
 @router.message(StateFilter("*"), F.text == "Окно в Магнетизм")
 async def menu_magnetism_window(message: types.Message, state: FSMContext):
     await _reset_state_if_needed(state)
     user = await get_user_with_id(message.from_user.id)
-    is_admin = is_admin_id(message.from_user.id)
+    has_admin_access = has_staff_access(message.from_user.id)
     if not user:
         await message.answer("Перезапусти /start, чтобы загрузить профиль.")
         return
-    await send_magnetism_window_section(message, user, is_admin)
+    await send_magnetism_window_section(message, user, has_admin_access)
 
 
 @router.message(StateFilter("*"), F.text == "Записаться на разбор")
@@ -7965,7 +7970,7 @@ async def test_collect_name(message: types.Message, state: FSMContext):
 
 @router.message(StateFilter("*"), F.text == "⚙️ Админка")
 async def menu_admin_entry(message: types.Message, state: FSMContext):
-    if not is_admin_id(message.from_user.id):
+    if not has_staff_access(message.from_user.id):
         return
     await _reset_state_if_needed(state)
     await send_admin_menu(message)
@@ -8108,8 +8113,8 @@ async def menu_back_to_lessons(message: types.Message, state: FSMContext):
     user = await get_user_with_id(message.from_user.id)
     if not user:
         user = await ensure_user(message.from_user)
-    is_admin = is_admin_id(message.from_user.id)
-    await send_funnel_section(message, user, is_admin)
+    has_admin_access = has_staff_access(message.from_user.id)
+    await send_funnel_section(message, user, has_admin_access)
 
 
 @router.message(F.text.regexp(r"^[✅⏳🔒] Урок (\d)"))
@@ -8169,7 +8174,7 @@ async def lesson_skip(message: types.Message, state: FSMContext):
     }
     reply = await build_menu_keyboard(
         user=user,
-        is_admin=is_admin_id(message.from_user.id),
+        is_admin=has_staff_access(message.from_user.id),
         section="learning",
     )
     await message.answer(
