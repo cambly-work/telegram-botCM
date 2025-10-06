@@ -9,6 +9,8 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 import handlers  # noqa: E402
+import handlers.profile as profile_handlers  # noqa: E402
+from handlers.profile import _membership_summary, send_profile_overview  # noqa: E402
 from handlers.states import HWStates  # noqa: E402
 
 
@@ -143,7 +145,7 @@ async def test_question_flow_notifies_admins(monkeypatch):
 
 
 def test_membership_summary_uses_russian_labels():
-    summary = handlers._membership_summary(
+    summary = _membership_summary(
         {
             "status": "member_active",
             "access_until": datetime(2024, 1, 31, tzinfo=timezone.utc),
@@ -177,9 +179,9 @@ async def test_send_profile_overview_formats_status_without_duplicates(monkeypat
         return []
 
     monkeypatch.setattr(handlers, "build_menu_keyboard", fake_keyboard)
-    monkeypatch.setattr(handlers, "list_weekly_keys_for_user", fake_weekly_keys)
+    monkeypatch.setattr(profile_handlers, "list_weekly_keys_for_user", fake_weekly_keys)
 
-    await handlers.send_profile_overview(message, user_row, False)
+    await send_profile_overview(message, user_row, False)
 
     assert events, "profile overview should send a message"
     profile_text = events[-1][1]

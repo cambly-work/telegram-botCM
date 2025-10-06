@@ -1,4 +1,5 @@
-from handlers import TELEGRAM_MESSAGE_LIMIT, _format_weekly_keys_section
+from handlers.constants import TELEGRAM_MESSAGE_LIMIT
+from handlers.profile import _format_weekly_keys_section
 
 
 def test_weekly_keys_section_truncates_with_notice():
