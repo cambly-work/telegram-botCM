@@ -19,7 +19,6 @@ __all__ = [
     "_CONTENT_DB_CACHE",
     "_CONTENT_FILE",
     "_CONTENT_HISTORY_LIMIT",
-    "_CONTENT_LAST_RELOAD",
     "_get_yaml_value",
     "_load_yaml_content",
     "get_content",
@@ -34,7 +33,6 @@ __all__ = [
 _CONTENT_CACHE: dict = {}
 _CONTENT_FILE = os.path.join(os.path.dirname(os.path.dirname(__file__)), "content.yaml")
 _CONTENT_DB_CACHE: Dict[str, str] = {}
-_CONTENT_LAST_RELOAD = None
 _CONTENT_HISTORY_LIMIT = 5
 
 
@@ -108,7 +106,12 @@ async def get_content_with_source(key: str, default: str = "") -> tuple[str, str
     if key in _CONTENT_DB_CACHE:
         return _CONTENT_DB_CACHE[key], "db"
 
-    row = await fetchrow("SELECT value FROM content WHERE key=$1", key)
+    try:
+        row = await fetchrow("SELECT value FROM content WHERE key=$1", key)
+    except AssertionError as exc:
+        if str(exc) != "DB pool is not initialized":
+            raise
+        row = None
     if row and row.get("value"):
         value = row["value"]
         _CONTENT_DB_CACHE[key] = value
