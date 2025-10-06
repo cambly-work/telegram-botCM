@@ -143,6 +143,7 @@ async def test_registration_smoke_flow(monkeypatch):
 
     monkeypatch.setattr(handlers, "get_user_with_id", fake_get_user, raising=False)
     monkeypatch.setattr(handlers, "is_admin_id", lambda _: False, raising=False)
+    monkeypatch.setattr(handlers, "has_staff_access", lambda _: False, raising=False)
 
     async def fake_build_menu_keyboard(*_, **__):
         return "MENU_KB"
@@ -217,6 +218,7 @@ async def test_registration_notifies_admins_when_enabled(monkeypatch):
     monkeypatch.setattr(handlers, "execute", fake_execute, raising=False)
     monkeypatch.setattr(handlers, "get_user_with_id", fake_get_user, raising=False)
     monkeypatch.setattr(handlers, "is_admin_id", lambda _: False, raising=False)
+    monkeypatch.setattr(handlers, "has_staff_access", lambda _: False, raising=False)
     monkeypatch.setattr(handlers, "get_content", fake_get_content, raising=False)
     monkeypatch.setattr(handlers, "render_content", fake_render_content, raising=False)
     monkeypatch.setattr(handlers, "_get_notify_admins", lambda: fake_notify, raising=False)
@@ -260,6 +262,7 @@ async def test_registration_notifications_disabled(monkeypatch):
     monkeypatch.setattr(handlers, "execute", fake_execute, raising=False)
     monkeypatch.setattr(handlers, "get_user_with_id", fake_get_user, raising=False)
     monkeypatch.setattr(handlers, "is_admin_id", lambda _: False, raising=False)
+    monkeypatch.setattr(handlers, "has_staff_access", lambda _: False, raising=False)
     monkeypatch.setattr(handlers, "get_content", fake_get_content, raising=False)
     monkeypatch.setattr(handlers, "render_content", fake_render_content, raising=False)
     monkeypatch.setattr(handlers, "_get_notify_admins", lambda: fake_notify, raising=False)
@@ -524,6 +527,7 @@ async def test_form_done_notifications_enabled(monkeypatch):
     monkeypatch.setattr(handlers, "mark_form_completed", fake_mark_form_completed, raising=False)
     monkeypatch.setattr(handlers, "get_user_with_id", fake_get_user, raising=False)
     monkeypatch.setattr(handlers, "is_admin_id", lambda _: False, raising=False)
+    monkeypatch.setattr(handlers, "has_staff_access", lambda _: False, raising=False)
     monkeypatch.setattr(handlers, "get_bool_setting", fake_get_bool_setting, raising=False)
     monkeypatch.setattr(handlers, "get_content", fake_get_content, raising=False)
     monkeypatch.setattr(handlers, "render_content", fake_render_content, raising=False)
@@ -585,6 +589,7 @@ async def test_form_done_notifications_disabled(monkeypatch):
     monkeypatch.setattr(handlers, "mark_form_completed", fake_mark_form_completed, raising=False)
     monkeypatch.setattr(handlers, "get_user_with_id", fake_get_user, raising=False)
     monkeypatch.setattr(handlers, "is_admin_id", lambda _: False, raising=False)
+    monkeypatch.setattr(handlers, "has_staff_access", lambda _: False, raising=False)
     monkeypatch.setattr(handlers, "get_bool_setting", fake_get_bool_setting, raising=False)
     monkeypatch.setattr(handlers, "get_content", fake_get_content, raising=False)
     monkeypatch.setattr(handlers, "render_content", fake_render_content, raising=False)
@@ -714,6 +719,7 @@ async def test_admin_broadcast_edit_transition(monkeypatch):
     await state.update_data(segment="lead_funnel")
 
     monkeypatch.setattr(handlers, "is_admin_id", lambda user_id: True, raising=False)
+    monkeypatch.setattr(handlers, "has_staff_access", lambda user_id: True, raising=False)
 
     await handlers.admin_broadcast_edit(message, state)
     assert await state.get_state() == BroadcastStates.waiting_body.state
@@ -730,6 +736,7 @@ async def test_admin_broadcast_change_segment_transition(monkeypatch):
     await state.set_state(BroadcastStates.waiting_confirm)
 
     monkeypatch.setattr(handlers, "is_admin_id", lambda user_id: True, raising=False)
+    monkeypatch.setattr(handlers, "has_staff_access", lambda user_id: True, raising=False)
 
     await handlers.admin_broadcast_change_segment(message, state)
     assert await state.get_state() == BroadcastStates.waiting_segment.state
@@ -746,6 +753,7 @@ async def test_admin_broadcast_save_template_transition(monkeypatch):
     await state.update_data(segment="all", body="Текст", placeholders={}, cta_description=None, cta_buttons=None)
 
     monkeypatch.setattr(handlers, "is_admin_id", lambda user_id: True, raising=False)
+    monkeypatch.setattr(handlers, "has_staff_access", lambda user_id: True, raising=False)
 
     async def fake_upsert(title, segment, body, **kwargs):
         return {"title": title, "segment": segment, **kwargs}

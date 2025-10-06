@@ -277,6 +277,7 @@ def test_admin_stats_forms_apply_filter_reports_empty_entries(monkeypatch):
     message = DummyMessage()
 
     monkeypatch.setattr(handlers, "is_admin_id", lambda user_id: True)
+    monkeypatch.setattr(handlers, "has_staff_access", lambda user_id: True)
     monkeypatch.setattr(handlers, "admin_forms_filter_status_from_text", lambda text: (True, "archived"))
     monkeypatch.setattr(handlers, "_set_admin_forms_filter", fake_set_filter)
     monkeypatch.setattr(handlers, "_get_admin_forms_filter", fake_get_filter)
