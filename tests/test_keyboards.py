@@ -60,6 +60,7 @@ from keyboards import (
     admin_broadcast_keyboard,
     admin_broadcast_segments_keyboard,
     admin_main_keyboard,
+    admin_staff_keyboard,
     admin_users_category_keyboard,
     admin_content_category_keyboard,
     admin_communications_category_keyboard,
@@ -112,6 +113,16 @@ def test_admin_main_keyboard_layout():
     flattened = [text for row in rows for text in row]
     assert ADMIN_PAYMENTS_BUTTON not in flattened
     assert ADMIN_CONTENT_MENU not in flattened
+    assert ADMIN_STATS_BUTTON not in flattened
+
+
+def test_admin_staff_keyboard_layout():
+    rows = _keyboard_texts(admin_staff_keyboard())
+    assert rows == [
+        [ADMIN_STATS_BUTTON],
+        [ADMIN_PAYMENTS_BUTTON],
+        [BACK_TO_MAIN],
+    ]
 
 
 def test_admin_users_category_keyboard_layout():
