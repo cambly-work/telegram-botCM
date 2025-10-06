@@ -7,6 +7,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 import handlers  # noqa: E402
+from handlers.states import AdminContentStates  # noqa: E402
 
 
 class DummyState:
@@ -86,7 +87,7 @@ def test_admin_text_preview_shows_fresh_content(monkeypatch):
         await handlers.admin_texts_edit_prompt(edit_message, state)
 
         assert reset_calls, "сброс состояния должен выполняться"
-        assert await state.get_state() == handlers.AdminContentStates.waiting_value.state
+        assert await state.get_state() == AdminContentStates.waiting_value.state
 
         state_data = await state.get_data()
         assert state_data["content_key"] == expected_key

@@ -11,6 +11,14 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 import handlers  # noqa: E402
+from handlers.states import (  # noqa: E402
+    AnalysisStates,
+    BroadcastStates,
+    HWStates,
+    RegistrationStates,
+    SupportStates,
+    TestStates,
+)
 
 
 pytestmark = pytest.mark.anyio
@@ -152,21 +160,21 @@ async def test_registration_smoke_flow(monkeypatch):
     monkeypatch.setattr(handlers, "render_content", fake_render_content, raising=False)
 
     await handlers.registration_receive_name(message, state)
-    assert await state.get_state() == handlers.RegistrationStates.waiting_email.state
+    assert await state.get_state() == RegistrationStates.waiting_email.state
     assert any("Укажи email" in text for text, _ in events)
 
     message.text = "непочта"
     await handlers.registration_receive_email(message, state)
-    assert await state.get_state() == handlers.RegistrationStates.waiting_email.state
+    assert await state.get_state() == RegistrationStates.waiting_email.state
     assert any("Формат неверный" in text for text, _ in events)
 
     message.text = "user@example.com"
     await handlers.registration_receive_email(message, state)
-    assert await state.get_state() == handlers.RegistrationStates.waiting_phone.state
+    assert await state.get_state() == RegistrationStates.waiting_phone.state
 
     message.text = "12345"
     await handlers.registration_receive_phone(message, state)
-    assert await state.get_state() == handlers.RegistrationStates.waiting_phone.state
+    assert await state.get_state() == RegistrationStates.waiting_phone.state
     assert any("Пример: +79991234567" in text for text, _ in events)
 
     message.text = "+7 (999) 123-45-67"
@@ -181,7 +189,7 @@ async def test_registration_notifies_admins_when_enabled(monkeypatch):
     user = DummyFromUser(user_id=808, username="newbie")
     message = DummyMessage("+79991234567", user, events)
     state = DummyState()
-    await state.set_state(handlers.RegistrationStates.waiting_phone)
+    await state.set_state(RegistrationStates.waiting_phone)
 
     notifications: list[str] = []
 
@@ -224,7 +232,7 @@ async def test_registration_notifications_disabled(monkeypatch):
     user = DummyFromUser(user_id=909, username="quiet")
     message = DummyMessage("+79991234567", user, events)
     state = DummyState()
-    await state.set_state(handlers.RegistrationStates.waiting_phone)
+    await state.set_state(RegistrationStates.waiting_phone)
 
     notifications: list[str] = []
 
@@ -267,7 +275,7 @@ async def test_hw_answer_to_feedback_transition(monkeypatch):
     user = DummyFromUser()
     message = DummyMessage("Ответ по уроку", user, events)
     state = DummyState()
-    await state.set_state(handlers.HWStates.waiting_answer)
+    await state.set_state(HWStates.waiting_answer)
     await state.update_data(lesson_num=1)
 
     async def fake_get_user(_):
@@ -284,7 +292,7 @@ async def test_hw_answer_to_feedback_transition(monkeypatch):
     monkeypatch.setattr(handlers, "grant_weekly_key", fake_grant_weekly_key, raising=False)
 
     await handlers.hw_receive_answer(message, state)
-    assert await state.get_state() == handlers.HWStates.waiting_feedback.state
+    assert await state.get_state() == HWStates.waiting_feedback.state
     assert any("Твой ответ" in text for text, _ in events)
 
 
@@ -293,7 +301,7 @@ async def test_hw_feedback_custom_text(monkeypatch):
     user = DummyFromUser()
     message = DummyMessage("Очень полезно", user, events)
     state = DummyState()
-    await state.set_state(handlers.HWStates.waiting_feedback)
+    await state.set_state(HWStates.waiting_feedback)
     await state.update_data(lesson_num=2)
 
     async def fake_get_user(_):
@@ -315,7 +323,7 @@ async def test_notify_admins_on_test_request(monkeypatch):
     user = DummyFromUser(user_id=202, username="applicant")
     message = DummyMessage("Аня", user, events)
     state = DummyState()
-    await state.set_state(handlers.TestStates.waiting_name)
+    await state.set_state(TestStates.waiting_name)
     await state.update_data(test_birthdate=date(1990, 5, 1).isoformat(), test_form_slug="test", test_user_id=42)
 
     async def fake_get_user_and_admin(_):
@@ -361,7 +369,7 @@ async def test_notify_admins_on_test_cancel(monkeypatch):
     user = DummyFromUser(user_id=303)
     message = DummyMessage("Отмена", user, events)
     state = DummyState()
-    await state.set_state(handlers.TestStates.waiting_birthdate)
+    await state.set_state(TestStates.waiting_birthdate)
     await state.update_data(test_birthdate=date(1995, 1, 20).isoformat(), test_user_id=777)
 
     async def fake_get_user_and_admin(_):
@@ -391,7 +399,7 @@ async def test_test_notifications_disabled(monkeypatch):
     user = DummyFromUser(user_id=404, username="candidate")
     message = DummyMessage("Аня", user, events)
     state = DummyState()
-    await state.set_state(handlers.TestStates.waiting_name)
+    await state.set_state(TestStates.waiting_name)
     await state.update_data(
         test_birthdate=date(1992, 8, 24).isoformat(), test_form_slug="test", test_user_id=42
     )
@@ -440,7 +448,7 @@ async def test_test_cancel_notifications_disabled(monkeypatch):
     user = DummyFromUser(user_id=505)
     message = DummyMessage("Отмена", user, events)
     state = DummyState()
-    await state.set_state(handlers.TestStates.waiting_birthdate)
+    await state.set_state(TestStates.waiting_birthdate)
     await state.update_data(test_birthdate=date(1990, 1, 1).isoformat(), test_user_id=99)
 
     notifications: list[str] = []
@@ -593,7 +601,7 @@ async def test_support_cancel_removes_keyboard(monkeypatch):
     user = DummyFromUser(user_id=505)
     message = DummyMessage(handlers.CANCEL_TEXT, user, events)
     state = DummyState()
-    await state.set_state(handlers.SupportStates.waiting_question)
+    await state.set_state(SupportStates.waiting_question)
 
     async def fake_get_user_and_admin(_):
         return {"id": user.id}, False
@@ -620,19 +628,19 @@ async def test_support_cancel_removes_keyboard(monkeypatch):
 @pytest.mark.parametrize(
     ("state_obj", "handler", "existing_data"),
     [
-        (handlers.AnalysisStates.waiting_format, handlers.analysis_collect_format, {}),
+        (AnalysisStates.waiting_format, handlers.analysis_collect_format, {}),
         (
-            handlers.AnalysisStates.waiting_contact,
+            AnalysisStates.waiting_contact,
             handlers.analysis_collect_contact,
             {"analysis_format": "Zoom"},
         ),
         (
-            handlers.AnalysisStates.waiting_time,
+            AnalysisStates.waiting_time,
             handlers.analysis_collect_time,
             {"analysis_format": "Zoom", "analysis_contact": "@user"},
         ),
         (
-            handlers.AnalysisStates.waiting_confirm,
+            AnalysisStates.waiting_confirm,
             handlers.analysis_confirm_request,
             {
                 "analysis_format": "Zoom",
@@ -679,7 +687,7 @@ async def test_notify_admins_error_path_keeps_flow(monkeypatch):
     user = DummyFromUser(user_id=404, username="student")
     message = DummyMessage("Вопрос по уроку", user, events)
     state = DummyState()
-    await state.set_state(handlers.HWStates.waiting_question)
+    await state.set_state(HWStates.waiting_question)
     await state.update_data(lesson_num=3)
 
     async def fake_get_user(_):
@@ -702,13 +710,13 @@ async def test_admin_broadcast_edit_transition(monkeypatch):
     admin = DummyFromUser(user_id=1, username="admin")
     message = DummyMessage(handlers.EDIT_BROADCAST_BUTTON, admin, events)
     state = DummyState()
-    await state.set_state(handlers.BroadcastStates.waiting_confirm)
+    await state.set_state(BroadcastStates.waiting_confirm)
     await state.update_data(segment="lead_funnel")
 
     monkeypatch.setattr(handlers, "is_admin_id", lambda user_id: True, raising=False)
 
     await handlers.admin_broadcast_edit(message, state)
-    assert await state.get_state() == handlers.BroadcastStates.waiting_body.state
+    assert await state.get_state() == BroadcastStates.waiting_body.state
     data = await state.get_data()
     assert data.get("interactive") is True
     assert any("Пришли новый текст" in text for text, _ in events)
@@ -719,12 +727,12 @@ async def test_admin_broadcast_change_segment_transition(monkeypatch):
     admin = DummyFromUser(user_id=1, username="admin")
     message = DummyMessage(handlers.CHANGE_BROADCAST_SEGMENT_BUTTON, admin, events)
     state = DummyState()
-    await state.set_state(handlers.BroadcastStates.waiting_confirm)
+    await state.set_state(BroadcastStates.waiting_confirm)
 
     monkeypatch.setattr(handlers, "is_admin_id", lambda user_id: True, raising=False)
 
     await handlers.admin_broadcast_change_segment(message, state)
-    assert await state.get_state() == handlers.BroadcastStates.waiting_segment.state
+    assert await state.get_state() == BroadcastStates.waiting_segment.state
     data = await state.get_data()
     assert data.get("change_segment") is True
 
@@ -734,7 +742,7 @@ async def test_admin_broadcast_save_template_transition(monkeypatch):
     admin = DummyFromUser(user_id=1, username="admin")
     message = DummyMessage("Черновик рассылки", admin, events)
     state = DummyState()
-    await state.set_state(handlers.BroadcastStates.waiting_template_title)
+    await state.set_state(BroadcastStates.waiting_template_title)
     await state.update_data(segment="all", body="Текст", placeholders={}, cta_description=None, cta_buttons=None)
 
     monkeypatch.setattr(handlers, "is_admin_id", lambda user_id: True, raising=False)
@@ -749,7 +757,7 @@ async def test_admin_broadcast_save_template_transition(monkeypatch):
     monkeypatch.setattr(handlers, "log_admin_action", fake_log, raising=False)
 
     await handlers.admin_broadcast_save_template(message, state)
-    assert await state.get_state() == handlers.BroadcastStates.waiting_confirm.state
+    assert await state.get_state() == BroadcastStates.waiting_confirm.state
     data = await state.get_data()
     assert data.get("template_title") == "Черновик рассылки"
     assert any("Шаблон сохранён" in text for text, _ in events)

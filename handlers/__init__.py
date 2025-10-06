@@ -20,7 +20,6 @@ from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
 from aiogram.filters import Command, CommandObject, CommandStart, StateFilter
 from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
     BufferedInputFile,
     InlineKeyboardButton,
@@ -65,6 +64,22 @@ from .progress import (
     _collect_progress_details,
     get_user_progress,
     sync_user_progress,
+)
+from .states import (
+    AdminBehaviorStates,
+    AdminContentStates,
+    AdminMaterialsStates,
+    AdminPaymentsStates,
+    AdminScheduleStates,
+    AdminUserStates,
+    AdminWeeklyKeysStates,
+    AnalysisStates,
+    BroadcastStates,
+    HWStates,
+    ProfileStates,
+    RegistrationStates,
+    SupportStates,
+    TestStates,
 )
 
 from keyboards import (
@@ -1433,103 +1448,6 @@ def _flatten_yaml_keys(src: Any, prefix: str = "") -> Iterable[str]:
             yield prefix
 def now_utc() -> datetime:
     return datetime.now(timezone.utc)
-# ──────────────────────────────────────────────────────────────────────────────
-# FSM
-# ──────────────────────────────────────────────────────────────────────────────
-class RegistrationStates(StatesGroup):
-    waiting_name = State()      # ждём имя пользователя
-    waiting_email = State()     # ждём email
-    waiting_phone = State()     # ждём телефон
-
-
-class AnalysisStates(StatesGroup):
-    waiting_format = State()
-    waiting_contact = State()
-    waiting_time = State()
-    waiting_confirm = State()
-
-
-class HWStates(StatesGroup):
-    waiting_answer = State()  # ждём текстовый ответ на ДЗ ({"lesson_num": int})
-    waiting_feedback = State() # ждём обратную связь после урока
-    waiting_question = State() # ждём уточнение вопроса для поддержки
-
-
-class SupportStates(StatesGroup):
-    waiting_question = State()
-
-
-class BroadcastStates(StatesGroup):
-    waiting_segment = State()   # ждём выбор сегмента в мастере
-    waiting_body = State()      # ждём текст рассылки ({"segment": str})
-    waiting_confirm = State()   # подтверждение рассылки
-    waiting_template_title = State()  # название шаблона
-    waiting_template_delete = State() # выбор шаблона для удаления
-class ProfileStates(StatesGroup):
-    waiting_email = State()
-    waiting_phone = State()
-
-
-class AdminContentStates(StatesGroup):
-    waiting_value = State()
-    waiting_custom_key = State()
-    waiting_custom_value = State()
-    waiting_view_key = State()
-    waiting_history_key = State()
-    waiting_history_choice = State()
-    waiting_import_file = State()
-
-
-class AdminBehaviorStates(StatesGroup):
-    waiting_start_text = State()
-    waiting_registration_text = State()
-    waiting_onboarding_text = State()
-    waiting_onboarding_delete = State()
-
-
-class AdminScheduleStates(StatesGroup):
-    waiting_week = State()
-    waiting_datetime = State()
-    waiting_type = State()
-    waiting_description = State()
-    waiting_link = State()
-    waiting_event_id_edit = State()
-    waiting_event_id_archive = State()
-    waiting_event_id_restore = State()
-
-
-class AdminUserStates(StatesGroup):
-    choosing_segment = State()
-    browsing_users = State()
-    viewing_user = State()
-    waiting_contacts = State()
-    waiting_progress = State()
-
-
-class AdminPaymentsStates(StatesGroup):
-    waiting_access_user = State()
-    waiting_revoke_user = State()
-    waiting_payment_review = State()
-
-
-class AdminMaterialsStates(StatesGroup):
-    waiting_create_payload = State()
-    waiting_update_payload = State()
-    waiting_delete_slug = State()
-    waiting_delete_confirm = State()
-    waiting_grant_payload = State()
-    waiting_revoke_payload = State()
-
-
-class AdminWeeklyKeysStates(StatesGroup):
-    waiting_bulk_payload = State()
-    waiting_revoke_payload = State()
-    waiting_upload_payload = State()
-
-
-class TestStates(StatesGroup):
-    waiting_birthdate = State()
-    waiting_name = State()
 # ──────────────────────────────────────────────────────────────────────────────
 # Улучшенные клавиатуры
 # ──────────────────────────────────────────────────────────────────────────────
