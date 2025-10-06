@@ -36,6 +36,17 @@ _CONTENT_DB_CACHE: Dict[str, str] = {}
 _CONTENT_HISTORY_LIMIT = 5
 
 
+def _should_cache_db_value(key: str) -> bool:
+    """Return True if the value for the key should be cached in memory."""
+
+    # Administrative flags under ``settings.*`` are frequently toggled from the
+    # admin panel. They may be changed by another process, so caching would keep
+    # stale values around (for example, ``settings.payments_open`` would remain
+    # ``false`` for other workers). These keys are inexpensive to read from the
+    # database, therefore we always fetch them directly.
+    return not key.startswith("settings.")
+
+
 def sanitize_html(text: str) -> str:
     """Allow only safe HTML tags and strip other attributes."""
     if not text:
@@ -111,7 +122,7 @@ def _get_yaml_value(key: str, default: str = "") -> tuple[str, bool]:
 
 async def get_content_with_source(key: str, default: str = "") -> tuple[str, str]:
     """Return content value along with its source (database or YAML)."""
-    if key in _CONTENT_DB_CACHE:
+    if _should_cache_db_value(key) and key in _CONTENT_DB_CACHE:
         return _CONTENT_DB_CACHE[key], "db"
 
     try:
@@ -122,7 +133,8 @@ async def get_content_with_source(key: str, default: str = "") -> tuple[str, str
         row = None
     if row and row.get("value"):
         value = row["value"]
-        _CONTENT_DB_CACHE[key] = value
+        if _should_cache_db_value(key):
+            _CONTENT_DB_CACHE[key] = value
         return value, "db"
 
     yaml_value, _ = _get_yaml_value(key, default)
@@ -180,7 +192,10 @@ async def set_content_value(key: str, value: str, *, updated_by: int | None = No
             value,
         )
 
-    _CONTENT_DB_CACHE[key] = value
+    if _should_cache_db_value(key):
+        _CONTENT_DB_CACHE[key] = value
+    else:
+        _CONTENT_DB_CACHE.pop(key, None)
     logger.info("content: set key=%s len=%s", key, len(value or ""))
 
 
