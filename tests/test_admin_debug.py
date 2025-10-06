@@ -65,3 +65,16 @@ def test_admin_debug_includes_extended_metrics(monkeypatch):
     assert "Последнее обновление" in text
     assert "👥 Пользователи" in text
     assert captured.get("kwargs", {}).get("disable_web_page_preview") is True
+
+
+def test_has_staff_access_for_roles(monkeypatch):
+    monkeypatch.setattr(handlers, "ADMIN_IDS", {1001})
+    monkeypatch.setattr(handlers, "STAFF_ADMIN_IDS", {2002})
+
+    assert handlers.is_admin_id(1001) is True
+    assert handlers.has_staff_access(1001) is True
+
+    assert handlers.is_admin_id(2002) is False
+    assert handlers.has_staff_access(2002) is True
+
+    assert handlers.has_staff_access(3003) is False
