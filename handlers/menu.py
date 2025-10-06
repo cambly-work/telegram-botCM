@@ -5,6 +5,7 @@ from typing import Any, Dict, Optional, TYPE_CHECKING
 
 from aiogram import types
 from aiogram.types import ReplyKeyboardMarkup
+import yaml
 
 from keyboards import (
     info_menu_keyboard,
@@ -255,6 +256,26 @@ async def _resolve_checkout_links(bot: "Bot") -> Dict[str, str]:
     }
 
 
+def _normalize_pay_template(template: str, fallback: str) -> str:
+    """Return a valid payment template, ignoring structured YAML dumps."""
+
+    if not template or not template.strip():
+        return fallback
+
+    try:
+        parsed = yaml.safe_load(template)
+    except yaml.YAMLError:
+        return template
+
+    if parsed is None:
+        return fallback
+
+    if isinstance(parsed, dict) and set(parsed) == {"closed"}:
+        return fallback
+
+    return template
+
+
 async def send_pay_section(
     message: types.Message,
     user: Optional[dict],
@@ -296,15 +317,14 @@ async def send_pay_section(
         )
         return
 
-    pay_template = await get_content(
-        "menu.pay",
-        (
-            "Доступ в клуб CODE: Магнетизм.\n\n"
-            "Тариф: Полный доступ — 2690₽ (единовременно).\n\n"
-            "Ссылка на оплату: {checkout_url}\n\n"
-            "После оплаты бот автоматически активирует доступ."
-        ),
+    pay_default = (
+        "Доступ в клуб CODE: Магнетизм.\n\n"
+        "Тариф: Полный доступ — 2690₽ (единовременно).\n\n"
+        "Ссылка на оплату: {checkout_url}\n\n"
+        "После оплаты бот автоматически активирует доступ."
     )
+    pay_template_raw = await get_content("menu.pay", pay_default)
+    pay_template = _normalize_pay_template(pay_template_raw, pay_default)
     pay_text = render_content(
         pay_template,
         checkout_url=checkout_url,
