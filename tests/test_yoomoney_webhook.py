@@ -23,6 +23,7 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 if "handlers" not in sys.modules:
     handlers_stub = types.ModuleType("handlers")
+    handlers_stub.__path__ = []  # type: ignore[attr-defined]
     handlers_stub.router = Router(name="test-router")
 
     def _tz_aware_msk(dt):
@@ -36,10 +37,17 @@ if "handlers" not in sys.modules:
 
     handlers_stub.tz_aware_msk = _tz_aware_msk
     handlers_stub.upsert_funnel_delivery = _noop_async
-    handlers_stub._load_yaml_content = _load_yaml_content_stub
     handlers_stub.FORM_LABELS = {}
 
+    handlers_content_stub = types.ModuleType("handlers.content")
+    handlers_content_stub._load_yaml_content = _load_yaml_content_stub
+    handlers_content_stub.get_content = lambda *_args, **_kwargs: ""
+
+    handlers_stub._load_yaml_content = handlers_content_stub._load_yaml_content
+    handlers_stub.get_content = handlers_content_stub.get_content
+
     sys.modules.setdefault("handlers", handlers_stub)
+    sys.modules.setdefault("handlers.content", handlers_content_stub)
 
 import app as app_module  # noqa: E402  pylint: disable=wrong-import-position
 
