@@ -12182,7 +12182,7 @@ async def admin_content_history_reply(message: types.Message, state: FSMContext)
 
 @router.message(StateFilter("*"), F.text == ADMIN_STATS_BUTTON)
 async def admin_stats(message: types.Message, state: FSMContext):
-    if not is_admin_id(message.from_user.id):
+    if not has_staff_access(message.from_user.id):
         return
     await _reset_state_if_needed(state)
 
@@ -12198,7 +12198,7 @@ async def admin_stats(message: types.Message, state: FSMContext):
 
 @router.message(F.text == ADMIN_STATS_REFRESH)
 async def admin_stats_refresh(message: types.Message, state: FSMContext):
-    if not is_admin_id(message.from_user.id):
+    if not has_staff_access(message.from_user.id):
         return
     await _reset_state_if_needed(state)
 
@@ -12214,7 +12214,7 @@ async def admin_stats_refresh(message: types.Message, state: FSMContext):
 
 @router.message(F.text == ADMIN_STATS_USERS_BREAKDOWN)
 async def admin_stats_users_breakdown(message: types.Message, state: FSMContext):
-    if not is_admin_id(message.from_user.id):
+    if not has_staff_access(message.from_user.id):
         return
     await _reset_state_if_needed(state)
 
@@ -12230,7 +12230,7 @@ async def admin_stats_users_breakdown(message: types.Message, state: FSMContext)
 
 @router.message(F.text == ADMIN_STATS_LESSON_PROGRESS)
 async def admin_stats_lessons_breakdown(message: types.Message, state: FSMContext):
-    if not is_admin_id(message.from_user.id):
+    if not has_staff_access(message.from_user.id):
         return
     await _reset_state_if_needed(state)
 
@@ -12246,7 +12246,7 @@ async def admin_stats_lessons_breakdown(message: types.Message, state: FSMContex
 
 @router.message(F.text == ADMIN_STATS_PAYMENTS_BREAKDOWN)
 async def admin_stats_payments_breakdown(message: types.Message, state: FSMContext):
-    if not is_admin_id(message.from_user.id):
+    if not has_staff_access(message.from_user.id):
         return
     await _reset_state_if_needed(state)
 
@@ -12262,7 +12262,7 @@ async def admin_stats_payments_breakdown(message: types.Message, state: FSMConte
 
 @router.message(F.text == ADMIN_STATS_FORMS_BREAKDOWN)
 async def admin_stats_forms_breakdown(message: types.Message, state: FSMContext):
-    if not is_admin_id(message.from_user.id):
+    if not has_staff_access(message.from_user.id):
         return
     await _reset_state_if_needed(state)
     admin_id = message.from_user.id if message.from_user else None
@@ -12276,7 +12276,7 @@ async def admin_stats_forms_breakdown(message: types.Message, state: FSMContext)
 
 @router.message(StateFilter("*"), F.text.func(_is_admin_forms_waiting_toggle))
 async def admin_stats_forms_toggle_waiting(message: types.Message, state: FSMContext):
-    if not is_admin_id(message.from_user.id):
+    if not has_staff_access(message.from_user.id):
         return
     await _reset_state_if_needed(state)
     admin_id = message.from_user.id if message.from_user else None
@@ -12293,7 +12293,7 @@ async def admin_stats_forms_toggle_waiting(message: types.Message, state: FSMCon
 
 @router.message(StateFilter("*"), F.text.func(_is_admin_forms_filter_text))
 async def admin_stats_forms_apply_filter(message: types.Message, state: FSMContext):
-    if not is_admin_id(message.from_user.id):
+    if not has_staff_access(message.from_user.id):
         return
     valid, status = admin_forms_filter_status_from_text(message.text)
     if not valid:
@@ -12372,7 +12372,7 @@ async def admin_stats_forms_apply_filter(message: types.Message, state: FSMConte
 
 @router.message(F.text == ADMIN_STATS_RECENT_PAYMENTS)
 async def admin_stats_recent_payments(message: types.Message, state: FSMContext):
-    if not is_admin_id(message.from_user.id):
+    if not has_staff_access(message.from_user.id):
         return
     await _reset_state_if_needed(state)
 
@@ -12410,7 +12410,7 @@ async def admin_stats_recent_payments(message: types.Message, state: FSMContext)
 async def admin_stats_test_request_update_status(
     callback: types.CallbackQuery,
 ):
-    if not is_admin_id(callback.from_user.id):
+    if not has_staff_access(callback.from_user.id):
         await callback.answer("Недостаточно прав", show_alert=True)
         return
 
@@ -12573,7 +12573,7 @@ async def admin_stats_test_request_update_status(
 
 @router.callback_query(F.data.startswith(f"{ADMIN_ANALYSIS_REQUEST_ACTION_PREFIX}:"))
 async def admin_stats_analysis_request_update_status(callback: types.CallbackQuery):
-    if not is_admin_id(callback.from_user.id):
+    if not has_staff_access(callback.from_user.id):
         await callback.answer("Недостаточно прав", show_alert=True)
         return
 
@@ -12882,7 +12882,7 @@ async def admin_settings_menu(message: types.Message, state: FSMContext):
 
 @router.message(StateFilter("*"), F.text == ADMIN_PAYMENTS_BUTTON)
 async def admin_payments_menu(message: types.Message, state: FSMContext):
-    if not is_admin_id(message.from_user.id):
+    if not has_staff_access(message.from_user.id):
         return
     await _reset_state_if_needed(state)
     await send_admin_payments_overview(message)
@@ -12890,7 +12890,7 @@ async def admin_payments_menu(message: types.Message, state: FSMContext):
 
 @router.message(F.text.in_({ADMIN_PAYMENTS_OPEN_WINDOW, ADMIN_PAYMENTS_CLOSE_WINDOW}))
 async def admin_payments_toggle_window(message: types.Message, state: FSMContext):
-    if not is_admin_id(message.from_user.id):
+    if not has_staff_access(message.from_user.id):
         return
     await _reset_state_if_needed(state)
 
@@ -12906,7 +12906,7 @@ async def admin_payments_toggle_window(message: types.Message, state: FSMContext
 
 @router.message(F.text == ADMIN_PAYMENTS_SHOW_LATEST)
 async def admin_payments_show_latest(message: types.Message, state: FSMContext):
-    if not is_admin_id(message.from_user.id):
+    if not has_staff_access(message.from_user.id):
         return
     await _reset_state_if_needed(state)
     await send_admin_payments_overview(message)
@@ -12914,7 +12914,7 @@ async def admin_payments_show_latest(message: types.Message, state: FSMContext):
 
 @router.message(F.text == ADMIN_PAYMENTS_CONFIRM_ACCESS)
 async def admin_payments_prompt_grant(message: types.Message, state: FSMContext):
-    if not is_admin_id(message.from_user.id):
+    if not has_staff_access(message.from_user.id):
         return
     await _reset_state_if_needed(state)
     await state.set_state(AdminPaymentsStates.waiting_access_user)
@@ -12928,7 +12928,7 @@ async def admin_payments_prompt_grant(message: types.Message, state: FSMContext)
 
 @router.message(F.text == ADMIN_PAYMENTS_REVOKE_ACCESS)
 async def admin_payments_prompt_revoke(message: types.Message, state: FSMContext):
-    if not is_admin_id(message.from_user.id):
+    if not has_staff_access(message.from_user.id):
         return
     await _reset_state_if_needed(state)
     await state.set_state(AdminPaymentsStates.waiting_revoke_user)
@@ -12939,7 +12939,7 @@ async def admin_payments_prompt_revoke(message: types.Message, state: FSMContext
 
 @router.message(F.text.in_({ADMIN_PAYMENTS_MARK_PAID, ADMIN_PAYMENTS_MARK_FAILED}))
 async def admin_payments_prompt_review(message: types.Message, state: FSMContext):
-    if not is_admin_id(message.from_user.id):
+    if not has_staff_access(message.from_user.id):
         return
     await _reset_state_if_needed(state)
 
@@ -12953,7 +12953,7 @@ async def admin_payments_prompt_review(message: types.Message, state: FSMContext
 
 @router.message(AdminPaymentsStates.waiting_access_user, F.text)
 async def admin_payments_receive_access(message: types.Message, state: FSMContext):
-    if not is_admin_id(message.from_user.id):
+    if not has_staff_access(message.from_user.id):
         return
 
     text = (message.text or "").strip()
@@ -13002,7 +13002,7 @@ async def admin_payments_receive_access(message: types.Message, state: FSMContex
 
 @router.message(AdminPaymentsStates.waiting_revoke_user, F.text)
 async def admin_payments_receive_revoke(message: types.Message, state: FSMContext):
-    if not is_admin_id(message.from_user.id):
+    if not has_staff_access(message.from_user.id):
         return
 
     text = (message.text or "").strip()
@@ -13033,7 +13033,7 @@ async def admin_payments_receive_revoke(message: types.Message, state: FSMContex
 
 @router.message(AdminPaymentsStates.waiting_payment_review, F.text)
 async def admin_payments_receive_review(message: types.Message, state: FSMContext):
-    if not is_admin_id(message.from_user.id):
+    if not has_staff_access(message.from_user.id):
         return
 
     data = await state.get_data()

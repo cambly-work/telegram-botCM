@@ -59,6 +59,7 @@ def test_admin_text_preview_shows_fresh_content(monkeypatch):
         admin_user = DummyFromUser(user_id=42)
 
         monkeypatch.setattr(handlers, "is_admin_id", lambda user_id: True)
+        monkeypatch.setattr(handlers, "has_staff_access", lambda user_id: True)
 
         reset_calls: list[bool] = []
 

@@ -108,6 +108,7 @@ def test_admin_content_quick_reply_updates_value(monkeypatch):
             return None
 
         monkeypatch.setattr(handlers, "is_admin_id", lambda user_id: True)
+        monkeypatch.setattr(handlers, "has_staff_access", lambda user_id: True)
         monkeypatch.setattr(handlers, "set_content_value", fake_set_content_value)
         monkeypatch.setattr(handlers, "get_content", fake_get_content)
         monkeypatch.setattr(handlers, "log_admin_action", fake_log_admin_action)
