@@ -29,7 +29,10 @@ class ThrottleMiddleware(BaseMiddleware):
                 is_admin = (
                     hasattr(event, "from_user")
                     and event.from_user
-                    and event.from_user.id in settings.ADMIN_IDS
+                    and (
+                        event.from_user.id in settings.ADMIN_IDS
+                        or event.from_user.id in settings.STAFF_ADMIN_IDS
+                    )
                 )
                 if not is_admin:
                     warning_text = (

@@ -95,3 +95,30 @@ def test_admin_ids_handles_multiple_numbers_in_single_token():
         else:
             os.environ["ADMIN_IDS"] = original_admin_ids
         importlib.reload(settings_module)
+
+
+def test_staff_admin_ids_are_parsed_independently():
+    """STAFF_ADMIN_IDS should be parsed with the same rules as admin IDs."""
+    import settings as settings_module
+
+    original_admin_ids = os.environ.get("ADMIN_IDS")
+    original_staff_ids = os.environ.get("STAFF_ADMIN_IDS")
+    os.environ["ADMIN_IDS"] = "101"
+    os.environ["STAFF_ADMIN_IDS"] = "202 extra=303"
+
+    importlib.reload(settings_module)
+    try:
+        assert settings_module.ADMIN_IDS == {101}
+        assert settings_module.STAFF_ADMIN_IDS == {202, 303}
+        assert settings_module._parse_ids("404, 505") == {404, 505}
+    finally:
+        if original_admin_ids is None:
+            os.environ.pop("ADMIN_IDS", None)
+        else:
+            os.environ["ADMIN_IDS"] = original_admin_ids
+
+        if original_staff_ids is None:
+            os.environ.pop("STAFF_ADMIN_IDS", None)
+        else:
+            os.environ["STAFF_ADMIN_IDS"] = original_staff_ids
+        importlib.reload(settings_module)

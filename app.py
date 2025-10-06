@@ -25,7 +25,7 @@ from pydantic import BaseModel, Field, field_validator
 from aiogram import Bot, Dispatcher, types
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
-from settings import ADMIN_IDS, YOOMONEY_WEBHOOK_SECRET
+from settings import ADMIN_IDS, STAFF_ADMIN_IDS, YOOMONEY_WEBHOOK_SECRET
 from utils import normalize_phone
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -261,15 +261,18 @@ async def notify_admins(text: str, max_retries: int = MAX_RETRIES) -> None:
         logger.info("Skipping admin notification (disabled): %s", text)
         return
 
-    if not ADMIN_IDS:
-        logger.warning("No admin IDs configured")
+    recipients = list(ADMIN_IDS)
+    recipients.extend(staff_id for staff_id in STAFF_ADMIN_IDS if staff_id not in ADMIN_IDS)
+
+    if not recipients:
+        logger.warning("No admin or staff IDs configured")
         return
-    
-    for admin_id in ADMIN_IDS:
+
+    for admin_id in recipients:
         for attempt in range(max_retries):
             try:
                 await bot.send_message(admin_id, f"⚠️ <b>Alert</b>\n{text}")
-                logger.info("Notification sent to admin %s", admin_id)
+                logger.info("Notification sent to admin/staff %s", admin_id)
                 break
             except Exception as e:
                 logger.warning("Attempt %d failed to send notification to %s: %s", 
