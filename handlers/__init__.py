@@ -242,6 +242,7 @@ from keyboards import (
     MATERIALS_CATALOG_BUTTON,
     MATERIALS_PRACTICES_BUTTON,
     MATERIALS_CHALLENGES_BUTTON,
+    materials_menu_keyboard,
 )
 from .menu import (
     _MENU_SECTION_PROMPTS,
