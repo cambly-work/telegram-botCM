@@ -6388,46 +6388,36 @@ async def ensure_user(tg_user: types.User, utm: dict | None = None) -> dict:
     Создаёт пользователя при первом входе, либо возвращает его запись.
     Обновляет username/full_name/utm при необходимости.
     """
-    row = await fetchrow("SELECT * FROM users WHERE tg_user_id=$1", tg_user.id)
-    if row:
-        # Обновляем UTM, если они предоставлены
-        utm_updates = {}
-        if utm:
-            if 'utm_source' in utm and utm['utm_source']:
-                utm_updates['utm_source'] = utm['utm_source']
-            if 'utm_medium' in utm and utm['utm_medium']:
-                utm_updates['utm_medium'] = utm['utm_medium']
-            if 'utm_campaign' in utm and utm['utm_campaign']:
-                utm_updates['utm_campaign'] = utm['utm_campaign']
-        
-        update_fields = ["username=$2", "full_name=$3", "last_activity_at=NOW()", "updated_at=NOW()"]
-        params = [tg_user.id, tg_user.username, tg_user.full_name]
-        param_count = 3
-        
-        for field, value in utm_updates.items():
-            param_count += 1
-            update_fields.append(f"{field}=${param_count}")
-            params.append(value)
-        
-        await execute(
-            f"UPDATE users SET {', '.join(update_fields)} WHERE tg_user_id=$1",
-            *params
-        )
-        return await fetchrow("SELECT * FROM users WHERE tg_user_id=$1", tg_user.id)
-    
     utm_source = (utm or {}).get("utm_source")
     utm_medium = (utm or {}).get("utm_medium")
     utm_campaign = (utm or {}).get("utm_campaign")
-    
-    await execute(
-        """INSERT INTO users (tg_user_id, username, full_name, utm_source, utm_medium, utm_campaign, created_at, updated_at, last_activity_at)
-           VALUES ($1,$2,$3,$4,$5,$6, NOW(), NOW(), NOW())""",
-        tg_user.id, tg_user.username, tg_user.full_name, utm_source, utm_medium, utm_campaign
+
+    row = await fetchrow(
+        """
+        INSERT INTO users (tg_user_id, username, full_name, utm_source, utm_medium, utm_campaign, created_at, updated_at, last_activity_at)
+        VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW(), NOW())
+        ON CONFLICT (tg_user_id) DO UPDATE SET
+            username = EXCLUDED.username,
+            full_name = EXCLUDED.full_name,
+            updated_at = NOW(),
+            last_activity_at = NOW(),
+            utm_source = COALESCE(EXCLUDED.utm_source, users.utm_source),
+            utm_medium = COALESCE(EXCLUDED.utm_medium, users.utm_medium),
+            utm_campaign = COALESCE(EXCLUDED.utm_campaign, users.utm_campaign)
+        RETURNING *
+        """,
+        tg_user.id,
+        tg_user.username,
+        tg_user.full_name,
+        utm_source,
+        utm_medium,
+        utm_campaign,
     )
-    
-    created = await fetchrow("SELECT * FROM users WHERE tg_user_id=$1", tg_user.id)
-    logger.info("ensure_user: created user tg_id=%s id=%s", tg_user.id, created["id"])
-    return created
+
+    if row and row["created_at"] == row["updated_at"]:
+        logger.info("ensure_user: created user tg_id=%s id=%s", tg_user.id, row["id"])
+
+    return row
 async def is_member(user_row: dict) -> bool:
     if not user_row:
         return False
