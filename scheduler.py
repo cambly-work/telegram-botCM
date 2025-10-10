@@ -76,33 +76,47 @@ def _msk_str(dt: datetime) -> str:
     return local.strftime("%d.%m.%Y %H:%M ") + label
 
 
-async def _send_with_retries(bot: Bot, chat_id: int, text: str, reply_markup=None, max_attempts: int = 3) -> bool:
-    """
-    Безопасная отправка сообщения с экспоненциальной задержкой между попытками.
-    Возвращает True при успехе.
-    """
+async def _send_with_retries(
+    bot: Bot,
+    chat_id: int,
+    text: str,
+    reply_markup=None,
+    max_attempts: int = 3,
+) -> bool:
+    """Безопасная отправка сообщения с экспоненциальной задержкой между попытками."""
+
     delay = 0.8
-    attempt = 1
-    while True:
+
+    for attempt in range(1, max_attempts + 1):
         try:
             await bot.send_message(chat_id, text, reply_markup=reply_markup)
             return True
-        except RetryAfterTypes as e:
+        except RetryAfterTypes as exc:
             # Telegram просит подождать (Flood control)
-            wait_for = getattr(e, "timeout", delay)
-            logger.warning("Flood control: waiting %.2fs (attempt %s/%s)", wait_for, attempt, max_attempts)
-            await asyncio.sleep(float(wait_for))
-        except tg_exc.TelegramBadRequest as e:
-            # Часто: chat not found / bot blocked / can't initiate conversation
-            logger.warning("BadRequest when sending to %s: %s", chat_id, e)
-            return False
-        except Exception as e:
-            logger.warning("Send attempt %s failed for %s: %s", attempt, chat_id, e)
+            wait_for = float(getattr(exc, "timeout", delay))
+            logger.warning(
+                "Flood control: waiting %.2fs (attempt %s/%s)",
+                wait_for,
+                attempt,
+                max_attempts,
+            )
             if attempt >= max_attempts:
-                return False
+                logger.warning("Max attempts reached for %s after RetryAfter", chat_id)
+                break
+            await asyncio.sleep(wait_for)
+        except tg_exc.TelegramBadRequest as exc:
+            # Часто: chat not found / bot blocked / can't initiate conversation
+            logger.warning("BadRequest when sending to %s: %s", chat_id, exc)
+            return False
+        except Exception as exc:  # pragma: no cover - defensive log
+            logger.warning("Send attempt %s failed for %s: %s", attempt, chat_id, exc)
+            if attempt >= max_attempts:
+                break
             await asyncio.sleep(delay)
-        attempt += 1
+
         delay *= 2
+
+    return False
 
 
 async def next_lesson_to_deliver(user_id: int) -> int:
