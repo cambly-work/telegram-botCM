@@ -256,31 +256,57 @@ def compute_hmac_sha256(secret: str, body_bytes: bytes) -> str:
 
 
 async def notify_admins(text: str, max_retries: int = MAX_RETRIES) -> None:
-    """Отправка уведомления всем администраторам с повторными попытками"""
+    """Отправка уведомлений администраторам без блокировки основного сценария."""
     if SKIP_ADMIN_NOTIFICATIONS:
         logger.info("Skipping admin notification (disabled): %s", text)
         return
 
-    recipients = list(ADMIN_IDS)
-    recipients.extend(staff_id for staff_id in STAFF_ADMIN_IDS if staff_id not in ADMIN_IDS)
+    recipients = list(dict.fromkeys([
+        *ADMIN_IDS,
+        *(staff_id for staff_id in STAFF_ADMIN_IDS if staff_id not in ADMIN_IDS),
+    ]))
 
     if not recipients:
         logger.warning("No admin or staff IDs configured")
         return
 
-    for admin_id in recipients:
-        for attempt in range(max_retries):
+    semaphore = asyncio.Semaphore(3)
+
+    async def _send_to_admin(admin_id: int) -> None:
+        attempt = 1
+        while attempt <= max_retries:
             try:
-                await bot.send_message(admin_id, f"⚠️ <b>Alert</b>\n{text}")
+                async with semaphore:
+                    await bot.send_message(admin_id, f"⚠️ <b>Alert</b>\n{text}")
                 logger.info("Notification sent to admin/staff %s", admin_id)
-                break
-            except Exception as e:
-                logger.warning("Attempt %d failed to send notification to %s: %s", 
-                              attempt + 1, admin_id, e)
-                if attempt == max_retries - 1:
-                    logger.error("Failed to send notification to admin %s after %d attempts", 
-                                admin_id, max_retries)
-                await asyncio.sleep(RETRY_DELAY * (attempt + 1))
+                return
+            except Exception as e:  # pragma: no cover - network/runtime issues
+                logger.warning(
+                    "Attempt %d failed to send notification to %s: %s",
+                    attempt,
+                    admin_id,
+                    e,
+                )
+                if attempt >= max_retries:
+                    logger.error(
+                        "Failed to send notification to admin %s after %d attempts",
+                        admin_id,
+                        max_retries,
+                    )
+                    return
+                await asyncio.sleep(RETRY_DELAY * attempt)
+                attempt += 1
+
+    send_tasks = [asyncio.create_task(_send_to_admin(admin_id)) for admin_id in recipients]
+    if send_tasks:
+        results = await asyncio.gather(*send_tasks, return_exceptions=True)
+        for admin_id, result in zip(recipients, results):
+            if isinstance(result, Exception):  # pragma: no cover - defensive logging
+                logger.error(
+                    "Unhandled error sending notification to admin %s: %s",
+                    admin_id,
+                    result,
+                )
 
 
 def now_utc() -> datetime:
