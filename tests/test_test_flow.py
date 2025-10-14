@@ -109,7 +109,7 @@ def test_test_flow_sequence(monkeypatch):
         monkeypatch.setattr(handlers, "mark_form_started", fake_mark_form_started)
         monkeypatch.setattr(handlers, "upsert_test_request", fake_upsert_test_request)
         monkeypatch.setattr(handlers, "get_content", fake_get_content)
-        monkeypatch.setattr(handlers, "cancel_keyboard", lambda: "CANCEL")
+        monkeypatch.setattr(handlers, "cancel_keyboard", lambda **_: "CANCEL")
         state = DummyState()
         start_message = DummyMessage("Пройти тест", test_user, events)
 
@@ -177,7 +177,7 @@ def test_test_flow_cancel(monkeypatch):
         monkeypatch.setattr(handlers, "_get_user_and_admin", fake_get_user_and_admin)
         monkeypatch.setattr(handlers, "build_menu_keyboard", fake_build_menu_keyboard)
         monkeypatch.setattr(handlers, "get_content", fake_get_content)
-        monkeypatch.setattr(handlers, "cancel_keyboard", lambda: "CANCEL")
+        monkeypatch.setattr(handlers, "cancel_keyboard", lambda **_: "CANCEL")
         monkeypatch.setattr(handlers, "_get_notify_admins", lambda: fake_notify_admins)
         monkeypatch.setattr(handlers, "_notify_admins_cached", None, raising=False)
 
@@ -229,7 +229,7 @@ def test_test_flow_cancel_on_name(monkeypatch):
         monkeypatch.setattr(handlers, "_get_user_and_admin", fake_get_user_and_admin)
         monkeypatch.setattr(handlers, "build_menu_keyboard", fake_build_menu_keyboard)
         monkeypatch.setattr(handlers, "get_content", fake_get_content)
-        monkeypatch.setattr(handlers, "cancel_keyboard", lambda: "CANCEL")
+        monkeypatch.setattr(handlers, "cancel_keyboard", lambda **_: "CANCEL")
 
         state = DummyState()
         start_message = DummyMessage("Пройти тест", test_user, events)

@@ -324,6 +324,12 @@ def test_cancel_keyboard_contains_cancel_button():
     assert any(CANCEL_TEXT in row for row in rows)
 
 
+def test_cancel_keyboard_allows_custom_text():
+    custom = "Пропустить"
+    rows = _keyboard_texts(cancel_keyboard(cancel_text=custom))
+    assert any(custom in row for row in rows)
+
+
 def test_analysis_confirm_keyboard_contains_cancel_button():
     rows = _keyboard_texts(analysis_confirm_keyboard())
     assert any(CANCEL_TEXT in row for row in rows)

@@ -317,6 +317,50 @@ async def send_pay_section(
         )
         return
 
+    user_row = user or {}
+    missing_contacts: list[str] = []
+    buttons_hint_parts: list[str] = []
+    if not user_row.get("email"):
+        missing_contacts.append("email")
+        buttons_hint_parts.append("«Изменить email»")
+    if not user_row.get("phone"):
+        missing_contacts.append("номер телефона")
+        buttons_hint_parts.append("«Изменить телефон»")
+
+    if missing_contacts:
+        if len(missing_contacts) == 1:
+            missing_text = missing_contacts[0]
+        else:
+            missing_text = " и ".join(missing_contacts)
+        buttons_hint = " и ".join(buttons_hint_parts)
+        missing_list = "\n".join(f"• {item}" for item in missing_contacts)
+        missing_template = await get_content(
+            "menu.pay.missing_contacts",
+            (
+                "Оплата недоступна без контактов. "
+                "Добавь {missing_contacts} в разделе «Профиль». "
+                "Используй {buttons_hint}, чтобы заполнить данные."
+            ),
+        )
+        notice = render_content(
+            missing_template,
+            missing_contacts=missing_text,
+            MISSING_CONTACTS=missing_text,
+            missing_contacts_list=missing_list,
+            MISSING_CONTACTS_LIST=missing_list,
+            buttons_hint=buttons_hint,
+            BUTTONS_HINT=buttons_hint,
+        )
+        await answer_with_main_menu(
+            message,
+            user,
+            is_admin,
+            notice,
+            section="root",
+            from_callback=from_callback,
+        )
+        return
+
     pay_default = (
         "Доступ в клуб CODE: Магнетизм.\n\n"
         "Тариф: Полный доступ — 2690₽ (единовременно).\n\n"
