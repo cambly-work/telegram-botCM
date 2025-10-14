@@ -72,6 +72,7 @@ class AdminUserStates(StatesGroup):
     viewing_user = State()
     waiting_contacts = State()
     waiting_progress = State()
+    waiting_delete_confirm = State()
 
 
 class AdminPaymentsStates(StatesGroup):
