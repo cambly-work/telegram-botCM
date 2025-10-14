@@ -12,8 +12,14 @@ WORKDIR /app
 
 RUN set -eux; \
     printf 'Acquire::Retries "5";\nAcquire::http::Timeout "30";\n' > /etc/apt/apt.conf.d/80-retries; \
-    sed -ri "s|http://deb.debian.org/debian|${DEBIAN_MIRROR}|g" /etc/apt/sources.list; \
-    sed -ri "s|http://security.debian.org/debian-security|${DEBIAN_SECURITY_MIRROR}|g" /etc/apt/sources.list; \
+    if [ -f /etc/apt/sources.list ]; then \
+        sed -ri "s|https?://deb.debian.org/debian|${DEBIAN_MIRROR}|g" /etc/apt/sources.list; \
+        sed -ri "s|https?://security.debian.org/debian-security|${DEBIAN_SECURITY_MIRROR}|g" /etc/apt/sources.list; \
+    fi; \
+    if [ -f /etc/apt/sources.list.d/debian.sources ]; then \
+        sed -ri "s|https?://deb.debian.org/debian|${DEBIAN_MIRROR}|g" /etc/apt/sources.list.d/debian.sources; \
+        sed -ri "s|https?://security.debian.org/debian-security|${DEBIAN_SECURITY_MIRROR}|g" /etc/apt/sources.list.d/debian.sources; \
+    fi; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
         build-essential \
