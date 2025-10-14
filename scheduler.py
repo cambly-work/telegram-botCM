@@ -34,6 +34,18 @@ from handlers.content import _load_yaml_content, get_content
 
 logger = logging.getLogger("scheduler")
 
+
+def _configure_apscheduler_logging():
+    """Снижает уровень подробных логов APScheduler до WARNING."""
+
+    for name in (
+        "apscheduler",
+        "apscheduler.executors.default",
+        "apscheduler.scheduler",
+        "apscheduler.jobstores.default",
+    ):
+        logging.getLogger(name).setLevel(logging.WARNING)
+
 scheduler: Optional[AsyncIOScheduler] = None
 
 # Напоминания о событиях не должны бесконечно висеть, если бот был офлайн или
@@ -621,6 +633,8 @@ async def setup_scheduler(bot: Bot, timezone_name: str, time_send_lessons: str):
         hh, mm = map(int, time_send_lessons.split(":"))
     except Exception:
         hh, mm = 10, 0  # дефолт 10:00
+
+    _configure_apscheduler_logging()
 
     scheduler = AsyncIOScheduler(timezone=timezone_name)
 
