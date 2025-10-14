@@ -82,6 +82,9 @@ async def _send_with_retries(
     text: str,
     reply_markup=None,
     max_attempts: int = 3,
+    *,
+    per_attempt_timeout: float = 30.0,
+    request_timeout: Optional[float] = None,
 ) -> bool:
     """Безопасная отправка сообщения с экспоненциальной задержкой между попытками."""
 
@@ -89,7 +92,14 @@ async def _send_with_retries(
 
     for attempt in range(1, max_attempts + 1):
         try:
-            await bot.send_message(chat_id, text, reply_markup=reply_markup)
+            send_kwargs = {"reply_markup": reply_markup}
+            if request_timeout is not None:
+                send_kwargs["request_timeout"] = request_timeout
+
+            await asyncio.wait_for(
+                bot.send_message(chat_id, text, **send_kwargs),
+                timeout=per_attempt_timeout,
+            )
             return True
         except RetryAfterTypes as exc:
             # Telegram просит подождать (Flood control)
@@ -104,10 +114,19 @@ async def _send_with_retries(
                 logger.warning("Max attempts reached for %s after RetryAfter", chat_id)
                 break
             await asyncio.sleep(wait_for)
+        except asyncio.TimeoutError:
+            logger.warning(
+                "Send attempt %s timed out for %s after %.1fs",
+                attempt,
+                chat_id,
+                per_attempt_timeout,
+            )
         except tg_exc.TelegramBadRequest as exc:
             # Часто: chat not found / bot blocked / can't initiate conversation
             logger.warning("BadRequest when sending to %s: %s", chat_id, exc)
             return False
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:  # pragma: no cover - defensive log
             logger.warning("Send attempt %s failed for %s: %s", attempt, chat_id, exc)
             if attempt >= max_attempts:
@@ -321,6 +340,21 @@ async def job_form_reminders(bot: Bot):
 
 
 async def job_schedule_event_reminders(bot: Bot):
+    """Напоминания за час до события из расписания (с ограничением по времени)."""
+    timeout_seconds = 55
+    try:
+        await asyncio.wait_for(
+            _job_schedule_event_reminders_once(bot),
+            timeout=timeout_seconds,
+        )
+    except asyncio.TimeoutError:
+        logger.error(
+            "[job_schedule_event_reminders] timed out after %ss; will retry on the next tick",
+            timeout_seconds,
+        )
+
+
+async def _job_schedule_event_reminders_once(bot: Bot):
     """Напоминания за час до события из расписания."""
     rows = await fetch(
         """
@@ -370,7 +404,15 @@ async def job_schedule_event_reminders(bot: Bot):
             message_lines.append(f"Ссылка: {link}")
 
         try:
-            ok = await _send_with_retries(bot, tg_user_id, "\n".join(message_lines))
+            ok = await _send_with_retries(
+                bot,
+                tg_user_id,
+                "\n".join(message_lines),
+                per_attempt_timeout=20.0,
+                request_timeout=20.0,
+            )
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:  # pragma: no cover - defensive log
             logger.warning(
                 "[job_schedule_event_reminders] send exception user_id=%s event_id=%s err=%s",
