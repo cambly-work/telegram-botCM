@@ -85,7 +85,7 @@ class DummyChatActionSender:
 
 @pytest.fixture(autouse=True)
 def patch_common(monkeypatch):
-    monkeypatch.setattr(handlers, "cancel_keyboard", lambda: "CANCEL", raising=False)
+    monkeypatch.setattr(handlers, "cancel_keyboard", lambda **_: "CANCEL", raising=False)
     monkeypatch.setattr(handlers, "lesson_actions_keyboard", lambda: "LESSON_ACTIONS", raising=False)
     monkeypatch.setattr(handlers, "feedback_keyboard", lambda: "FEEDBACK", raising=False)
     monkeypatch.setattr(handlers, "after_lesson_keyboard", lambda: "AFTER_LESSON", raising=False)
@@ -163,6 +163,7 @@ async def test_registration_smoke_flow(monkeypatch):
     await handlers.registration_receive_name(message, state)
     assert await state.get_state() == RegistrationStates.waiting_email.state
     assert any("Укажи email" in text for text, _ in events)
+    assert any("можно пропустить" in text for text, _ in events)
 
     message.text = "непочта"
     await handlers.registration_receive_email(message, state)
@@ -183,6 +184,54 @@ async def test_registration_smoke_flow(monkeypatch):
     assert await state.get_state() is None
     assert any("Регистрация завершена" in text for text, _ in events)
     assert execute_calls
+
+
+async def test_registration_skip_optional_contacts(monkeypatch):
+    events: list[tuple[str, dict]] = []
+    user = DummyFromUser()
+    message = DummyMessage(handlers.SKIP_TEXT, user, events)
+    state = DummyState()
+    await state.set_state(RegistrationStates.waiting_email)
+
+    execute_calls: list[tuple] = []
+
+    async def fake_execute(*args, **kwargs):
+        execute_calls.append((args, kwargs))
+
+    async def fake_get_user(_):
+        return {"id": 1, "name": "Анна", "email": None, "phone": None}
+
+    async def fake_get_content(key, fallback):
+        return fallback
+
+    def fake_render_content(template: str, **kwargs):
+        return template
+
+    async def fake_is_admin_setting_enabled(key: str) -> bool:
+        return False
+
+    monkeypatch.setattr(handlers, "execute", fake_execute, raising=False)
+    monkeypatch.setattr(handlers, "get_user_with_id", fake_get_user, raising=False)
+    monkeypatch.setattr(handlers, "has_staff_access", lambda _: False, raising=False)
+
+    async def fake_build_menu_keyboard(*args, **kwargs):
+        return "MENU_KB"
+
+    monkeypatch.setattr(handlers, "build_menu_keyboard", fake_build_menu_keyboard, raising=False)
+    monkeypatch.setattr(handlers, "get_content", fake_get_content, raising=False)
+    monkeypatch.setattr(handlers, "render_content", fake_render_content, raising=False)
+    monkeypatch.setattr(handlers, "_get_notify_admins", lambda: None, raising=False)
+    monkeypatch.setattr(handlers, "_is_admin_setting_enabled", fake_is_admin_setting_enabled, raising=False)
+
+    await handlers.registration_skip_email(message, state)
+    assert await state.get_state() == RegistrationStates.waiting_phone.state
+    assert any("номер телефона" in text for text, _ in events)
+
+    message.text = handlers.SKIP_TEXT
+    await handlers.registration_skip_phone(message, state)
+    assert await state.get_state() is None
+    assert not execute_calls
+    assert any("Регистрация завершена" in text for text, _ in events)
 
 
 async def test_registration_cancel_drops_state(monkeypatch):

@@ -90,7 +90,7 @@ async def test_lesson_done_sets_pending_state(monkeypatch):
         pending_calls.append((user_id, lesson_num))
 
     monkeypatch.setattr(handlers, "mark_lesson_in_progress", fake_mark_in_progress)
-    monkeypatch.setattr(handlers, "cancel_keyboard", lambda: "CANCEL")
+    monkeypatch.setattr(handlers, "cancel_keyboard", lambda **_: "CANCEL")
 
     await handlers.lesson_mark_done(message, state)
 
@@ -116,7 +116,7 @@ async def test_question_flow_notifies_admins(monkeypatch):
         return None
 
     monkeypatch.setattr(handlers, "mark_lesson_in_progress", fake_mark_in_progress)
-    monkeypatch.setattr(handlers, "cancel_keyboard", lambda: "CANCEL")
+    monkeypatch.setattr(handlers, "cancel_keyboard", lambda **_: "CANCEL")
     monkeypatch.setattr(handlers, "lesson_actions_keyboard", lambda: "ACTIONS")
 
     await handlers.lesson_question(ask_message, state)

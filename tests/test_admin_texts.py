@@ -79,8 +79,8 @@ def test_admin_text_preview_shows_fresh_content(monkeypatch):
 
         monkeypatch.setattr(handlers, "get_content", fake_get_content)
 
-        def fake_cancel_keyboard(*, extra_buttons=None):
-            return {"buttons": tuple(extra_buttons or [])}
+        def fake_cancel_keyboard(*, extra_buttons=None, cancel_text=None):
+            return {"buttons": tuple(extra_buttons or []), "cancel": cancel_text}
 
         monkeypatch.setattr(handlers, "cancel_keyboard", fake_cancel_keyboard)
 

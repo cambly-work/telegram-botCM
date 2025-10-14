@@ -36,6 +36,7 @@ NEXT_LESSON = "➡️ Следующий урок"
 WRITE_FEEDBACK = "📝 Написать отзыв"
 SKIP_FEEDBACK = "Пропустить отзыв"
 CANCEL_TEXT = "Отмена"
+SKIP_TEXT = "Пропустить"
 ANALYSIS_BACK_BUTTON = "⬅️ Назад"
 ANALYSIS_CONFIRM_BUTTON = "✅ Отправить заявку"
 ADMIN_TEXTS_ENTRY = "📄 Тексты экранов"
@@ -362,11 +363,13 @@ def feedback_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
 
-def cancel_keyboard(*, extra_buttons: list[str] | None = None) -> ReplyKeyboardMarkup:
+def cancel_keyboard(
+    *, extra_buttons: list[str] | None = None, cancel_text: str = CANCEL_TEXT
+) -> ReplyKeyboardMarkup:
     rows: list[list[KeyboardButton]] = []
     if extra_buttons:
         rows.append([KeyboardButton(text=btn) for btn in extra_buttons])
-    rows.append([KeyboardButton(text=CANCEL_TEXT)])
+    rows.append([KeyboardButton(text=cancel_text)])
     return ReplyKeyboardMarkup(
         keyboard=rows,
         resize_keyboard=True,
