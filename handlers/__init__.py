@@ -17,7 +17,11 @@ from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, Iterable, List
 import yaml
 from aiogram import F, Router, types
 from aiogram.enums import ParseMode
-from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
+from aiogram.exceptions import (
+    TelegramBadRequest,
+    TelegramForbiddenError,
+    TelegramRetryAfter,
+)
 from aiogram.filters import Command, CommandObject, CommandStart, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import (
@@ -6723,6 +6727,11 @@ async def on_my_chat_member(event: types.ChatMemberUpdated):
         await event.bot.send_message(
             event.from_user.id,
             "Привет! Напиши /start, чтобы открыть меню"
+        )
+    except TelegramForbiddenError:
+        logger.info(
+            "User %s blocked the bot, skipping welcome message",
+            getattr(event.from_user, "id", "unknown"),
         )
     except Exception as e:
         logger.error(f"Error in my_chat_member: {e}", exc_info=True)
