@@ -224,7 +224,10 @@ from keyboards import (
     ADMIN_USERS_GRANT_ACCESS,
     ADMIN_USERS_REVOKE_ACCESS,
     ADMIN_USERS_UPDATE_CONTACTS,
+    ADMIN_USERS_DELETE_USER,
+    ADMIN_USERS_CONFIRM_DELETE,
     ADMIN_USERS_EDIT_PROGRESS,
+    admin_user_delete_confirm_keyboard,
     admin_stats_keyboard,
     admin_payments_keyboard,
     ADMIN_PAYMENTS_OPEN_WINDOW,
@@ -7492,45 +7495,65 @@ async def cmd_help(message: types.Message, state: FSMContext):
 # ──────────────────────────────────────────────────────────────────────────────
 # Навигация по меню
 # ──────────────────────────────────────────────────────────────────────────────
-async def _get_user_and_admin(message: types.Message) -> tuple[Optional[dict], bool]:
+async def _get_user_and_admin(
+    message: types.Message,
+    *,
+    require_user: bool = False,
+) -> tuple[Optional[dict], bool]:
     """Return the DB user row together with the admin menu access flag."""
 
     user = await get_user_with_id(message.from_user.id)
-    return user, has_staff_access(message.from_user.id)
+    is_admin = has_staff_access(message.from_user.id)
+
+    if require_user and not user:
+        await message.answer("Перезапусти /start, чтобы загрузить профиль.")
+        return None, is_admin
+
+    return user, is_admin
 
 
 @router.message(StateFilter("*"), F.text == BACK_TO_MAIN)
 async def menu_back_to_main(message: types.Message, state: FSMContext):
     await _reset_state_if_needed(state)
-    user, is_admin = await _get_user_and_admin(message)
+    user, is_admin = await _get_user_and_admin(message, require_user=True)
+    if not user:
+        return
     await send_menu_section(message, user, is_admin, "root")
 
 
 @router.message(StateFilter("*"), F.text == "ℹ️ О клубе")
 async def menu_open_info(message: types.Message, state: FSMContext):
     await _reset_state_if_needed(state)
-    user, is_admin = await _get_user_and_admin(message)
+    user, is_admin = await _get_user_and_admin(message, require_user=True)
+    if not user:
+        return
     await send_menu_section(message, user, is_admin, "info")
 
 
 @router.message(StateFilter("*"), F.text == "🎓 Обучение")
 async def menu_open_learning(message: types.Message, state: FSMContext):
     await _reset_state_if_needed(state)
-    user, is_admin = await _get_user_and_admin(message)
+    user, is_admin = await _get_user_and_admin(message, require_user=True)
+    if not user:
+        return
     await send_menu_section(message, user, is_admin, "learning")
 
 
 @router.message(StateFilter("*"), F.text == "📦 Материалы")
 async def menu_open_materials(message: types.Message, state: FSMContext):
     await _reset_state_if_needed(state)
-    user, is_admin = await _get_user_and_admin(message)
+    user, is_admin = await _get_user_and_admin(message, require_user=True)
+    if not user:
+        return
     await send_materials_root_section(message, user, is_admin, state=state)
 
 
 @router.message(StateFilter("*"), F.text == "👤 Профиль")
 async def menu_open_profile(message: types.Message, state: FSMContext):
     await _reset_state_if_needed(state)
-    user, is_admin = await _get_user_and_admin(message)
+    user, is_admin = await _get_user_and_admin(message, require_user=True)
+    if not user:
+        return
     await send_menu_section(message, user, is_admin, "profile")
 
 
@@ -7558,16 +7581,18 @@ async def info_rules(message: types.Message, state: FSMContext):
 @router.message(StateFilter("*"), F.text.in_({"💳 Оплата", "🔒 Оплата"}))
 async def menu_pay(message: types.Message, state: FSMContext):
     await _reset_state_if_needed(state)
-    user, is_admin = await _get_user_and_admin(message)
+    user, is_admin = await _get_user_and_admin(message, require_user=True)
     if not user:
-        user = await ensure_user(message.from_user)
+        return
     await send_pay_section(message, user, is_admin)
 
 
 @router.message(StateFilter("*"), F.text == "🆘 Поддержка")
 async def menu_support(message: types.Message, state: FSMContext):
     await _reset_state_if_needed(state)
-    user, is_admin = await _get_user_and_admin(message)
+    user, is_admin = await _get_user_and_admin(message, require_user=True)
+    if not user:
+        return
     await send_support_section(message, user, is_admin)
 
 
@@ -9333,6 +9358,7 @@ async def admin_users_open_card(message: types.Message, state: FSMContext):
 
 @router.message(AdminUserStates.viewing_user, F.text == ADMIN_USERS_BACK_TO_LIST)
 @router.message(AdminUserStates.waiting_contacts, F.text == ADMIN_USERS_BACK_TO_LIST)
+@router.message(AdminUserStates.waiting_delete_confirm, F.text == ADMIN_USERS_BACK_TO_LIST)
 async def admin_users_back_to_list(message: types.Message, state: FSMContext):
     if not is_admin_id(message.from_user.id):
         return
@@ -9348,6 +9374,7 @@ async def admin_users_back_to_list(message: types.Message, state: FSMContext):
 @router.message(AdminUserStates.browsing_users, F.text == ADMIN_USERS_BACK_TO_SEGMENTS)
 @router.message(AdminUserStates.viewing_user, F.text == ADMIN_USERS_BACK_TO_SEGMENTS)
 @router.message(AdminUserStates.waiting_contacts, F.text == ADMIN_USERS_BACK_TO_SEGMENTS)
+@router.message(AdminUserStates.waiting_delete_confirm, F.text == ADMIN_USERS_BACK_TO_SEGMENTS)
 async def admin_users_back_to_segments(message: types.Message, state: FSMContext):
     if not is_admin_id(message.from_user.id):
         return
@@ -9405,6 +9432,90 @@ async def admin_users_revoke_access(message: types.Message, state: FSMContext):
         {"user_id": user_id, "source": "menu"},
     )
     await _show_admin_user_card(message, state, user_id=user_id, notice="Доступ отозван")
+
+
+@router.message(AdminUserStates.viewing_user, F.text == ADMIN_USERS_DELETE_USER)
+async def admin_users_prompt_delete(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+
+    data = await state.get_data()
+    user_id = data.get("selected_user_id")
+    if not user_id:
+        await message.answer(
+            "Не удалось определить пользователя. Вернись к списку и выбери карточку заново."
+        )
+        return
+
+    user = await _fetch_user_by_id(user_id)
+    if not user:
+        await message.answer("Пользователь уже удалён.")
+        segment = data.get("segment")
+        page = data.get("page", 1)
+        if segment:
+            await _show_admin_users_list(
+                message,
+                state,
+                segment=segment,
+                page=int(page),
+                notice="Пользователь не найден",
+            )
+        else:
+            await state.clear()
+        return
+
+    display_name = html.escape(_admin_user_display_name(user))
+    username = html.escape(_admin_user_username(user))
+    tg_id = html.escape(str(user.get("tg_user_id") or "—"))
+
+    await state.set_state(AdminUserStates.waiting_delete_confirm)
+    await message.answer(
+        (
+            f"<b>Удаление пользователя #{user_id}</b>\n\n"
+            f"Имя: {display_name}\n"
+            f"Telegram: <code>{tg_id}</code> {username}\n\n"
+            "Это действие необратимо. Подтверди, если нужно полностью удалить пользователя из бота."
+        ),
+        reply_markup=admin_user_delete_confirm_keyboard(),
+        parse_mode=ParseMode.HTML,
+        disable_web_page_preview=True,
+    )
+
+
+@router.message(AdminUserStates.waiting_delete_confirm, F.text == ADMIN_USERS_CONFIRM_DELETE)
+async def admin_users_confirm_delete(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+
+    data = await state.get_data() or {}
+    user_id = data.get("selected_user_id")
+    segment = data.get("segment")
+    page = int(data.get("page", 1))
+
+    if not user_id:
+        await state.clear()
+        await message.answer("Не удалось определить пользователя. Вернись в раздел и попробуй снова.")
+        return
+
+    await execute("DELETE FROM users WHERE id=$1", user_id)
+    await log_admin_action(
+        message.from_user.id,
+        "delete_user",
+        {"user_id": user_id, "source": "menu"},
+    )
+
+    notice = "Пользователь удалён 🗑️"
+    if segment:
+        await _show_admin_users_list(
+            message,
+            state,
+            segment=segment,
+            page=page,
+            notice=notice,
+        )
+    else:
+        await state.clear()
+        await message.answer(notice)
 
 
 @router.message(AdminUserStates.viewing_user, F.text == ADMIN_USERS_UPDATE_CONTACTS)
@@ -14294,6 +14405,7 @@ async def fallback(message: types.Message, state: FSMContext):
         AdminMaterialsStates.waiting_delete_confirm,
         AdminMaterialsStates.waiting_grant_payload,
         AdminMaterialsStates.waiting_revoke_payload,
+        AdminUserStates.waiting_delete_confirm,
     ):
         return
 

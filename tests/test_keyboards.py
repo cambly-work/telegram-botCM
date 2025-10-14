@@ -36,6 +36,10 @@ from keyboards import (
     ADMIN_STATS_BUTTON,
     ADMIN_USERS_BUTTON,
     ADMIN_USERS_EDIT_PROGRESS,
+    ADMIN_USERS_BACK_TO_LIST,
+    ADMIN_USERS_BACK_TO_SEGMENTS,
+    ADMIN_USERS_DELETE_USER,
+    ADMIN_USERS_CONFIRM_DELETE,
     BACK_TO_ADMIN,
     BACK_TO_BROADCAST,
     BACK_TO_BEHAVIOR,
@@ -70,6 +74,7 @@ from keyboards import (
     admin_payments_keyboard,
     admin_settings_keyboard,
     admin_user_card_keyboard,
+    admin_user_delete_confirm_keyboard,
 )
 
 
@@ -317,6 +322,20 @@ def test_profile_menu_keyboard_adds_progress_button():
 def test_admin_user_card_keyboard_contains_progress_control():
     rows = _keyboard_texts(admin_user_card_keyboard())
     assert ADMIN_USERS_EDIT_PROGRESS in rows[1]
+
+
+def test_admin_user_card_keyboard_contains_delete_button():
+    rows = _keyboard_texts(admin_user_card_keyboard())
+    flattened = [text for row in rows for text in row]
+    assert ADMIN_USERS_DELETE_USER in flattened
+    assert [ADMIN_USERS_BACK_TO_LIST, ADMIN_USERS_BACK_TO_SEGMENTS] in rows
+
+
+def test_admin_user_delete_confirm_keyboard_layout():
+    rows = _keyboard_texts(admin_user_delete_confirm_keyboard())
+    assert rows[0] == [ADMIN_USERS_CONFIRM_DELETE]
+    assert rows[1] == [ADMIN_USERS_BACK_TO_LIST, ADMIN_USERS_BACK_TO_SEGMENTS]
+    assert rows[2] == [BACK_TO_ADMIN, BACK_TO_MAIN]
 
 
 def test_cancel_keyboard_contains_cancel_button():

@@ -73,6 +73,8 @@ ADMIN_USERS_BACK_TO_LIST = "📋 К списку"
 ADMIN_USERS_GRANT_ACCESS = "✅ Выдать доступ"
 ADMIN_USERS_REVOKE_ACCESS = "🚫 Отозвать доступ"
 ADMIN_USERS_UPDATE_CONTACTS = "✏️ Обновить контакты"
+ADMIN_USERS_DELETE_USER = "🗑️ Удалить пользователя"
+ADMIN_USERS_CONFIRM_DELETE = "✅ Подтвердить удаление"
 ADMIN_MATERIALS_BUTTON = "📚 Материалы"
 ADMIN_BROADCAST_BUTTON = "📣 Рассылки"
 ADMIN_STATS_BUTTON = "📊 Статистика"
@@ -704,8 +706,23 @@ def admin_user_card_keyboard() -> ReplyKeyboardMarkup:
             KeyboardButton(text=ADMIN_USERS_UPDATE_CONTACTS),
             KeyboardButton(text=ADMIN_USERS_EDIT_PROGRESS),
         ],
-        [KeyboardButton(text=ADMIN_USERS_BACK_TO_LIST)],
-        [KeyboardButton(text=ADMIN_USERS_BACK_TO_SEGMENTS)],
+        [KeyboardButton(text=ADMIN_USERS_DELETE_USER)],
+        [
+            KeyboardButton(text=ADMIN_USERS_BACK_TO_LIST),
+            KeyboardButton(text=ADMIN_USERS_BACK_TO_SEGMENTS),
+        ],
+        [KeyboardButton(text=BACK_TO_ADMIN), KeyboardButton(text=BACK_TO_MAIN)],
+    ]
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
+
+
+def admin_user_delete_confirm_keyboard() -> ReplyKeyboardMarkup:
+    rows = [
+        [KeyboardButton(text=ADMIN_USERS_CONFIRM_DELETE)],
+        [
+            KeyboardButton(text=ADMIN_USERS_BACK_TO_LIST),
+            KeyboardButton(text=ADMIN_USERS_BACK_TO_SEGMENTS),
+        ],
         [KeyboardButton(text=BACK_TO_ADMIN), KeyboardButton(text=BACK_TO_MAIN)],
     ]
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
