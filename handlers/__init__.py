@@ -7495,45 +7495,65 @@ async def cmd_help(message: types.Message, state: FSMContext):
 # ──────────────────────────────────────────────────────────────────────────────
 # Навигация по меню
 # ──────────────────────────────────────────────────────────────────────────────
-async def _get_user_and_admin(message: types.Message) -> tuple[Optional[dict], bool]:
+async def _get_user_and_admin(
+    message: types.Message,
+    *,
+    require_user: bool = False,
+) -> tuple[Optional[dict], bool]:
     """Return the DB user row together with the admin menu access flag."""
 
     user = await get_user_with_id(message.from_user.id)
-    return user, has_staff_access(message.from_user.id)
+    is_admin = has_staff_access(message.from_user.id)
+
+    if require_user and not user:
+        await message.answer("Перезапусти /start, чтобы загрузить профиль.")
+        return None, is_admin
+
+    return user, is_admin
 
 
 @router.message(StateFilter("*"), F.text == BACK_TO_MAIN)
 async def menu_back_to_main(message: types.Message, state: FSMContext):
     await _reset_state_if_needed(state)
-    user, is_admin = await _get_user_and_admin(message)
+    user, is_admin = await _get_user_and_admin(message, require_user=True)
+    if not user:
+        return
     await send_menu_section(message, user, is_admin, "root")
 
 
 @router.message(StateFilter("*"), F.text == "ℹ️ О клубе")
 async def menu_open_info(message: types.Message, state: FSMContext):
     await _reset_state_if_needed(state)
-    user, is_admin = await _get_user_and_admin(message)
+    user, is_admin = await _get_user_and_admin(message, require_user=True)
+    if not user:
+        return
     await send_menu_section(message, user, is_admin, "info")
 
 
 @router.message(StateFilter("*"), F.text == "🎓 Обучение")
 async def menu_open_learning(message: types.Message, state: FSMContext):
     await _reset_state_if_needed(state)
-    user, is_admin = await _get_user_and_admin(message)
+    user, is_admin = await _get_user_and_admin(message, require_user=True)
+    if not user:
+        return
     await send_menu_section(message, user, is_admin, "learning")
 
 
 @router.message(StateFilter("*"), F.text == "📦 Материалы")
 async def menu_open_materials(message: types.Message, state: FSMContext):
     await _reset_state_if_needed(state)
-    user, is_admin = await _get_user_and_admin(message)
+    user, is_admin = await _get_user_and_admin(message, require_user=True)
+    if not user:
+        return
     await send_materials_root_section(message, user, is_admin, state=state)
 
 
 @router.message(StateFilter("*"), F.text == "👤 Профиль")
 async def menu_open_profile(message: types.Message, state: FSMContext):
     await _reset_state_if_needed(state)
-    user, is_admin = await _get_user_and_admin(message)
+    user, is_admin = await _get_user_and_admin(message, require_user=True)
+    if not user:
+        return
     await send_menu_section(message, user, is_admin, "profile")
 
 
@@ -7561,16 +7581,18 @@ async def info_rules(message: types.Message, state: FSMContext):
 @router.message(StateFilter("*"), F.text.in_({"💳 Оплата", "🔒 Оплата"}))
 async def menu_pay(message: types.Message, state: FSMContext):
     await _reset_state_if_needed(state)
-    user, is_admin = await _get_user_and_admin(message)
+    user, is_admin = await _get_user_and_admin(message, require_user=True)
     if not user:
-        user = await ensure_user(message.from_user)
+        return
     await send_pay_section(message, user, is_admin)
 
 
 @router.message(StateFilter("*"), F.text == "🆘 Поддержка")
 async def menu_support(message: types.Message, state: FSMContext):
     await _reset_state_if_needed(state)
-    user, is_admin = await _get_user_and_admin(message)
+    user, is_admin = await _get_user_and_admin(message, require_user=True)
+    if not user:
+        return
     await send_support_section(message, user, is_admin)
 
 
