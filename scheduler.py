@@ -34,7 +34,25 @@ from handlers.content import _load_yaml_content, get_content
 
 logger = logging.getLogger("scheduler")
 
+
+def _configure_apscheduler_logging():
+    """Снижает уровень подробных логов APScheduler до WARNING."""
+
+    for name in (
+        "apscheduler",
+        "apscheduler.executors.default",
+        "apscheduler.scheduler",
+        "apscheduler.jobstores.default",
+    ):
+        logging.getLogger(name).setLevel(logging.WARNING)
+
 scheduler: Optional[AsyncIOScheduler] = None
+
+# Напоминания о событиях не должны бесконечно висеть, если бот был офлайн или
+# отправка не удалась. Разрешаем «догонять» просроченные события в пределах
+# нескольких часов, после чего помечаем напоминание обработанным, чтобы не
+# засорять очередь.
+EVENT_REMINDER_MAX_DELAY = timedelta(hours=2)
 
 # ──────────────────────────────────────────────────────────────────────────────
 # ENV
@@ -374,7 +392,6 @@ async def _job_schedule_event_reminders_once(bot: Bot):
         WHERE r.is_cancelled = FALSE
           AND r.notified_at IS NULL
           AND e.is_archived = FALSE
-          AND e.scheduled_at >= NOW()
           AND r.remind_at <= NOW()
         ORDER BY r.remind_at
         """
@@ -382,6 +399,50 @@ async def _job_schedule_event_reminders_once(bot: Bot):
 
     if not rows:
         logger.debug("[job_schedule_event_reminders] nothing to notify")
+        return
+
+    now = now_utc()
+    active_rows = []
+    stale_rows = []
+
+    for row in rows:
+        scheduled_at: datetime = row["scheduled_at"]
+        if scheduled_at < now - EVENT_REMINDER_MAX_DELAY:
+            stale_rows.append(row)
+        else:
+            active_rows.append(row)
+
+    if stale_rows:
+        for row in stale_rows:
+            try:
+                await execute(
+                    """
+                    UPDATE schedule_event_reminders
+                    SET notified_at = NOW(),
+                        updated_at = NOW()
+                    WHERE id = $1
+                    """,
+                    row["id"],
+                )
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.warning(
+                    "[job_schedule_event_reminders] failed to close stale reminder user_id=%s event_id=%s err=%s",
+                    row["user_id"],
+                    row["event_id"],
+                    exc,
+                )
+            else:
+                delay = now - row["scheduled_at"]
+                logger.info(
+                    "[job_schedule_event_reminders] stale reminder skipped user_id=%s event_id=%s delay_minutes=%.1f",
+                    row["user_id"],
+                    row["event_id"],
+                    delay.total_seconds() / 60.0,
+                )
+
+    rows = active_rows
+    if not rows:
+        logger.info("[job_schedule_event_reminders] nothing to notify after stale cleanup")
         return
 
     sent, errors = 0, 0
@@ -572,6 +633,8 @@ async def setup_scheduler(bot: Bot, timezone_name: str, time_send_lessons: str):
         hh, mm = map(int, time_send_lessons.split(":"))
     except Exception:
         hh, mm = 10, 0  # дефолт 10:00
+
+    _configure_apscheduler_logging()
 
     scheduler = AsyncIOScheduler(timezone=timezone_name)
 
