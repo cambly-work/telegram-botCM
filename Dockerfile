@@ -11,14 +11,23 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 RUN set -eux; \
-    printf 'Acquire::Retries "5";\nAcquire::http::Timeout "30";\n' > /etc/apt/apt.conf.d/80-retries; \
-    if [ -f /etc/apt/sources.list ]; then \
-        sed -ri "s|https?://deb.debian.org/debian|${DEBIAN_MIRROR}|g" /etc/apt/sources.list; \
-        sed -ri "s|https?://security.debian.org/debian-security|${DEBIAN_SECURITY_MIRROR}|g" /etc/apt/sources.list; \
+    printf '%s\n' \
+        'Acquire::Retries "5";' \
+        'Acquire::http::Timeout "30";' \
+        'Acquire::https::Timeout "30";' \
+        'Acquire::ForceIPv4 "true";' \
+        > /etc/apt/apt.conf.d/80-retries; \
+    if [ -n "$DEBIAN_MIRROR" ] && [ -f /etc/apt/sources.list ]; then \
+        sed -ri "s|https?://deb\.debian\.org/debian|${DEBIAN_MIRROR}|g" /etc/apt/sources.list; \
     fi; \
-    if [ -f /etc/apt/sources.list.d/debian.sources ]; then \
-        sed -ri "s|https?://deb.debian.org/debian|${DEBIAN_MIRROR}|g" /etc/apt/sources.list.d/debian.sources; \
-        sed -ri "s|https?://security.debian.org/debian-security|${DEBIAN_SECURITY_MIRROR}|g" /etc/apt/sources.list.d/debian.sources; \
+    if [ -n "$DEBIAN_SECURITY_MIRROR" ] && [ -f /etc/apt/sources.list ]; then \
+        sed -ri "s|https?://security\.debian\.org/debian-security|${DEBIAN_SECURITY_MIRROR}|g" /etc/apt/sources.list; \
+    fi; \
+    if [ -n "$DEBIAN_MIRROR" ] && [ -f /etc/apt/sources.list.d/debian.sources ]; then \
+        sed -ri "s|URIs: https?://deb\.debian\.org/debian|URIs: ${DEBIAN_MIRROR}|g" /etc/apt/sources.list.d/debian.sources; \
+    fi; \
+    if [ -n "$DEBIAN_SECURITY_MIRROR" ] && [ -f /etc/apt/sources.list.d/debian.sources ]; then \
+        sed -ri "s|URIs: https?://security\.debian\.org/debian-security|URIs: ${DEBIAN_SECURITY_MIRROR}|g" /etc/apt/sources.list.d/debian.sources; \
     fi; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
