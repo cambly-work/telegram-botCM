@@ -4,16 +4,11 @@ services:
   bot:
     build:
       context: .
-      args:
-        DEBIAN_MIRROR: ${DEBIAN_MIRROR:-https://deb.debian.org/debian}
-        DEBIAN_SECURITY_MIRROR: ${DEBIAN_SECURITY_MIRROR:-https://security.debian.org/debian-security}
     container_name: code-magnetism-bot
     env_file:
       - .env
     depends_on:
       postgres:
-        condition: service_healthy
-      ngrok:
         condition: service_healthy
     ports:
       - "8000:8000"
@@ -36,9 +31,26 @@ services:
       start_period: 5s
     restart: unless-stopped
 
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: code-magnetism-cloudflared
+    command:
+      - tunnel
+      - --no-autoupdate
+      - --url=http://bot:8000
+      - --metrics=0.0.0.0:49999
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:49999/metrics >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+    restart: unless-stopped
+
   ngrok:
     image: ngrok/ngrok:alpine
     container_name: code-magnetism-ngrok
+    profiles: ["ngrok"]
     environment:
       NGROK_AUTHTOKEN: ${NGROK_AUTHTOKEN}
     command:
