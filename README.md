@@ -36,11 +36,6 @@
    ```
 
    По умолчанию FastAPI доступен на `http://localhost:8000`, Postgres — во внутренней сети Compose.
-   Если при сборке контейнера доступ к зеркалам Debian ограничен, установите переменные окружения
-   `DEBIAN_MIRROR` и `DEBIAN_SECURITY_MIRROR` с адресами доступных зеркал, либо передайте аргументы
-   сборки при запуске (`docker compose build --build-arg DEBIAN_MIRROR=...`).
-   Dockerfile также включает повышенные таймауты apt и принудительное использование IPv4, что помогает
-   в средах с нестабильной сетью.
 
 4. **Проверьте работоспособность:**
 
@@ -50,50 +45,51 @@
 
    Ожидаемый ответ — JSON со статусом `ok`.
 
-## Деплой на сервер с Docker и ngrok
+## Публичный доступ к вебхукам
 
-Чтобы бот работал на удалённом сервере и автоматически проксировал вебхуки через ngrok:
+Для работы вебхуков Telegram нужен публичный HTTPS-адрес. Приложение поддерживает автоматическую
+подстановку URL, выданных **Cloudflare Tunnel (cloudflared)** или **ngrok**.
 
-1. **Подготовьте файл окружения.** Скопируйте пример и включите автозаполнение публичного URL из ngrok:
+### Cloudflare Tunnel (cloudflared)
 
-   ```bash
-   cp .env.example .env
-   ```
+Подходит для VPS без Docker и не требует платного аккаунта. Запустите `cloudflared`, указав локальный
+адрес FastAPI и включив метрики:
 
-   В `.env` обязательно задайте `BOT_TOKEN`, `WEBHOOK_SECRET`, `NGROK_AUTHTOKEN` (из личного кабинета ngrok) и, при необходимости, список администраторов. Чтобы бот забрал HTTPS-адрес туннеля автоматически, установите параметры:
+```bash
+cloudflared tunnel --url http://127.0.0.1:8000 --metrics 127.0.0.1:49999
+```
 
-   ```dotenv
-   PUBLIC_BASE_URL=ngrok
-   NGROK_AUTOFETCH=1
-   NGROK_API_URL=http://ngrok:4040/api/tunnels
-   NGROK_TUNNEL_NAME=
-   ```
+В `.env` добавьте:
 
-   При необходимости можно переопределить адрес, на который ngrok будет проксировать трафик (`NGROK_FORWARD_ADDR`), например если FastAPI слушает нестандартный порт.
+```dotenv
+PUBLIC_BASE_URL=cloudflared
+CLOUDFLARED_AUTOFETCH=1
+CLOUDFLARED_METRICS_URL=http://127.0.0.1:49999/metrics
+```
 
-2. **Запустите контейнеры:**
+При необходимости уточните список доменных суффиксов (`CLOUDFLARED_HOSTNAME_SUFFIXES`) или задайте
+собственное регулярное выражение (`CLOUDFLARED_URL_REGEX`). В Docker Compose сервис `cloudflared`
+запускается автоматически и публикует метрики на `http://cloudflared:49999/metrics`.
 
-   ```bash
-   docker compose up -d --build
-   ```
+### Docker + ngrok
 
-   Compose поднимет PostgreSQL, приложение бота и контейнер `ngrok`. Базовые данные будут сохраняться на сервере в volume `postgres_data`.
+Если нужно вернуться к ngrok (например, для локальной разработки), включите профиль `ngrok`:
 
-3. **Получите публичный URL.** Посмотрите логи ngrok и найдите HTTPS-ссылку, которую Telegram должен использовать в качестве вебхука:
+```bash
+docker compose --profile ngrok up -d --build
+```
 
-   ```bash
-   docker compose logs -f ngrok
-   ```
+В `.env` установите:
 
-   Также можно запросить `http://localhost:4040/api/tunnels` (порт проброшен наружу) — FastAPI подтянет это значение автоматически и укажет его в логах при старте.
+```dotenv
+PUBLIC_BASE_URL=ngrok
+NGROK_AUTOFETCH=1
+NGROK_API_URL=http://ngrok:4040/api/tunnels
+```
 
-4. **Проверьте вебхуки.** Убедитесь, что API доступен и статус webhook в Telegram отображает новый публичный адрес.
-
-   ```bash
-   curl http://localhost:8000/health
-   ```
-
-   Если адрес не подтянулся, удостоверьтесь, что туннель активен (в логах ngrok должен появиться `https://...`) и переменная `NGROK_AUTOFETCH` включена.
+Наблюдать за выданным адресом можно командой `docker compose logs -f ngrok` или запросом
+`http://localhost:4040/api/tunnels`. Чтобы вернуться к cloudflared, остановите профиль:
+`docker compose down ngrok` и запустите `docker compose up -d` без профиля.
 
 ## Переменные окружения
 
@@ -101,8 +97,12 @@
 | ---------- | ---------- |
 | `BOT_TOKEN` | Токен Telegram-бота |
 | `ADMIN_IDS` | CSV-список Telegram ID администраторов |
-| `PUBLIC_BASE_URL` | Публичный URL, по которому Telegram обращается к вебхуку |
+| `PUBLIC_BASE_URL` | Публичный URL, по которому Telegram обращается к вебхуку. Значения `cloudflared` или `ngrok` включают автоподстановку |
 | `WEBHOOK_SECRET` | Секрет для ручного управления вебхуком и админ-эндпоинтов |
+| `CLOUDFLARED_AUTOFETCH` | Если `1/true` — автоматически подтянуть `PUBLIC_BASE_URL` из cloudflared |
+| `CLOUDFLARED_METRICS_URL` | Endpoint метрик cloudflared (например, `http://cloudflared:49999/metrics`) |
+| `CLOUDFLARED_HOSTNAME_SUFFIXES` | Список суффиксов доменов (через запятую), по которым ищется URL cloudflared |
+| `CLOUDFLARED_URL_REGEX` | Пользовательский RegExp для поиска URL cloudflared (опционально) |
 | `NGROK_AUTOFETCH` | Если `1/true` — автоматически подтянуть `PUBLIC_BASE_URL` из ngrok |
 | `NGROK_API_URL` | Endpoint ngrok, возвращающий список туннелей (например, `http://ngrok:4040/api/tunnels`) |
 | `NGROK_API_TOKEN` | Токен API ngrok (нужен для облачного API `https://api.ngrok.com`) |
