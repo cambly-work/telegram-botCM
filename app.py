@@ -9,7 +9,8 @@ import logging
 import os
 import urllib.error
 import urllib.request
-from typing import Optional, Any, Dict, List, Literal
+import re
+from typing import Optional, Any, Dict, List, Literal, Sequence
 from contextlib import asynccontextmanager
 from pprint import pformat
 from datetime import datetime, timedelta, timezone
@@ -45,6 +46,18 @@ NGROK_AUTOFETCH = _env_flag("NGROK_AUTOFETCH")
 NGROK_API_URL = os.getenv("NGROK_API_URL", "").strip()
 NGROK_API_TOKEN = os.getenv("NGROK_API_TOKEN", "").strip()
 NGROK_TUNNEL_NAME = os.getenv("NGROK_TUNNEL_NAME", "").strip()
+
+CLOUDFLARED_AUTOFETCH = _env_flag("CLOUDFLARED_AUTOFETCH")
+CLOUDFLARED_METRICS_URL = os.getenv("CLOUDFLARED_METRICS_URL", "").strip()
+CLOUDFLARED_HOSTNAME_SUFFIXES = tuple(
+    part.strip().lower()
+    for part in os.getenv(
+        "CLOUDFLARED_HOSTNAME_SUFFIXES",
+        "trycloudflare.com,cfargotunnel.com",
+    ).split(",")
+    if part.strip()
+)
+CLOUDFLARED_URL_REGEX = os.getenv("CLOUDFLARED_URL_REGEX", "").strip()
 
 
 def _fetch_ngrok_public_url(api_url: str, api_token: str, tunnel_name: str) -> Optional[str]:
@@ -139,40 +152,132 @@ def _fetch_ngrok_public_url(api_url: str, api_token: str, tunnel_name: str) -> O
     return candidates[0]
 
 
+def _fetch_cloudflared_public_url(
+    metrics_url: str,
+    hostname_suffixes: Sequence[str],
+    url_regex: str,
+) -> Optional[str]:
+    """Получить публичный URL активного туннеля cloudflared из метрик."""
+
+    logger_cf = logging.getLogger("code-magnetism")
+
+    metrics_url = (metrics_url or "").strip()
+    if not metrics_url:
+        logger_cf.warning(
+            "Cloudflared autofetch enabled but CLOUDFLARED_METRICS_URL is not set",
+        )
+        return None
+
+    try:
+        request = urllib.request.Request(metrics_url.rstrip("/"))
+        request.add_header("User-Agent", "code-magnetism-bot/1.0")
+        with urllib.request.urlopen(request, timeout=10) as response:
+            raw = response.read()
+    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError) as exc:
+        logger_cf.warning("Failed to fetch cloudflared metrics from %s: %s", metrics_url, exc)
+        return None
+    except Exception as exc:  # noqa: BLE001 — хотим логировать любую ошибку
+        logger_cf.warning("Unexpected error fetching cloudflared data from %s: %s", metrics_url, exc)
+        return None
+
+    try:
+        payload = raw.decode("utf-8", errors="ignore")
+    except Exception as exc:  # noqa: BLE001 — избегаем падений из-за декодирования
+        logger_cf.warning("Failed to decode cloudflared response from %s: %s", metrics_url, exc)
+        return None
+
+    candidates: List[str] = []
+    patterns: List[re.Pattern[str]] = []
+
+    if url_regex:
+        try:
+            patterns.append(re.compile(url_regex))
+        except re.error as exc:
+            logger_cf.warning("Invalid CLOUDFLARED_URL_REGEX '%s': %s", url_regex, exc)
+
+    if hostname_suffixes:
+        suffix_pattern = "|".join(re.escape(suffix.lstrip(".")) for suffix in hostname_suffixes)
+        if suffix_pattern:
+            patterns.append(re.compile(r"https://[\w.-]+(?:" + suffix_pattern + r")"))
+
+    if not patterns:
+        # Последний шанс — искать любые HTTPS-ссылки в ответе
+        patterns.append(re.compile(r"https://[\w.-]+"))
+
+    for pattern in patterns:
+        candidates.extend(pattern.findall(payload))
+
+    if not candidates:
+        logger_cf.warning("Cloudflared response from %s did not contain usable public URLs", metrics_url)
+        return None
+
+    candidates = [candidate.rstrip("/") for candidate in candidates if candidate]
+    candidates.sort(key=lambda value: (0 if value.startswith("https://") else 1, value))
+    return candidates[0] if candidates else None
+
+
 def _resolve_public_base_url(
     env_value: str,
-    autofetch: bool,
+    ngrok_autofetch: bool,
     api_url: str,
     api_token: str,
     tunnel_name: str,
+    cloudflared_autofetch: bool,
+    metrics_url: str,
+    hostname_suffixes: Sequence[str],
+    url_regex: str,
 ) -> tuple[str, str, bool]:
-    """Выбрать PUBLIC_BASE_URL с учётом автоподстановки ngrok"""
+    """Выбрать PUBLIC_BASE_URL с учётом автоподстановки туннелей."""
 
     env_value = (env_value or "").strip()
 
     fallback_url = "https://example.com"
     fallback_source = "default"
-    if env_value and env_value.lower() not in {"auto", "ngrok"}:
+    if env_value and env_value.lower() not in {"auto", "ngrok", "cloudflared"}:
         fallback_url = env_value
         fallback_source = "env"
 
-    prefer_ngrok = autofetch or env_value.lower() in {"", "auto", "ngrok"}
-    if prefer_ngrok:
-        ngrok_url = _fetch_ngrok_public_url(api_url, api_token, tunnel_name)
-        if ngrok_url:
-            return ngrok_url.rstrip("/"), "ngrok", True
+    preference: List[str]
+    env_lower = env_value.lower()
+    if env_lower in {"ngrok", "cloudflared"}:
+        preference = [env_lower]
+    elif env_lower == "auto" or env_lower == "":
+        preference = []
+        if cloudflared_autofetch:
+            preference.append("cloudflared")
+        if ngrok_autofetch:
+            preference.append("ngrok")
+    else:
+        preference = []
 
-    return fallback_url.rstrip("/"), fallback_source, prefer_ngrok
+    tried_any = bool(preference)
+
+    for provider in preference:
+        if provider == "cloudflared":
+            url = _fetch_cloudflared_public_url(metrics_url, hostname_suffixes, url_regex)
+            if url:
+                return url.rstrip("/"), "cloudflared", True
+        elif provider == "ngrok":
+            url = _fetch_ngrok_public_url(api_url, api_token, tunnel_name)
+            if url:
+                return url.rstrip("/"), "ngrok", True
+
+    return fallback_url.rstrip("/"), fallback_source, tried_any
 
 
-PUBLIC_BASE_URL, PUBLIC_BASE_URL_SOURCE, NGROK_FETCH_ATTEMPTED = _resolve_public_base_url(
+PUBLIC_BASE_URL, PUBLIC_BASE_URL_SOURCE, TUNNEL_FETCH_ATTEMPTED = _resolve_public_base_url(
     os.getenv("PUBLIC_BASE_URL", ""),
     NGROK_AUTOFETCH,
     NGROK_API_URL,
     NGROK_API_TOKEN,
     NGROK_TUNNEL_NAME,
+    CLOUDFLARED_AUTOFETCH,
+    CLOUDFLARED_METRICS_URL,
+    CLOUDFLARED_HOSTNAME_SUFFIXES,
+    CLOUDFLARED_URL_REGEX,
 )
 NGROK_FETCH_SUCCEEDED = PUBLIC_BASE_URL_SOURCE == "ngrok"
+CLOUDFLARED_FETCH_SUCCEEDED = PUBLIC_BASE_URL_SOURCE == "cloudflared"
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "change_me")
 
 DB_DSN = os.getenv("DB_DSN", "postgresql://magnet:magnet_pwd@localhost:5432/magnetism")
@@ -214,9 +319,9 @@ logging.basicConfig(
 logger = logging.getLogger("code-magnetism")
 
 logger.info("PUBLIC_BASE_URL resolved (%s): %s", PUBLIC_BASE_URL_SOURCE, PUBLIC_BASE_URL)
-if NGROK_FETCH_ATTEMPTED and not NGROK_FETCH_SUCCEEDED:
+if TUNNEL_FETCH_ATTEMPTED and not NGROK_FETCH_SUCCEEDED and not CLOUDFLARED_FETCH_SUCCEEDED:
     logger.warning(
-        "Ngrok autofetch requested but failed; using %s URL instead",
+        "Automatic tunnel URL resolution failed; using %s URL instead",
         PUBLIC_BASE_URL_SOURCE,
     )
 
@@ -508,6 +613,7 @@ async def debug_config(secret: Optional[str] = None) -> dict:
     return {
         "PUBLIC_BASE_URL": PUBLIC_BASE_URL,
         "PUBLIC_BASE_URL_source": PUBLIC_BASE_URL_SOURCE,
+        "TUNNEL_FETCH_ATTEMPTED": TUNNEL_FETCH_ATTEMPTED,
         "BOT_TIMEZONE": BOT_TIMEZONE,
         "TIME_SEND_LESSONS": TIME_SEND_LESSONS,
         "CLUB_CHAT_ID_present": bool(_club_chat_id_as_int()),
@@ -516,10 +622,16 @@ async def debug_config(secret: Optional[str] = None) -> dict:
         "RETRY_DELAY": RETRY_DELAY,
         "NGROK": {
             "autofetch": NGROK_AUTOFETCH,
-            "fetch_attempted": NGROK_FETCH_ATTEMPTED,
             "fetch_succeeded": NGROK_FETCH_SUCCEEDED,
             "api_url_present": bool(NGROK_API_URL),
             "tunnel_name": NGROK_TUNNEL_NAME,
+        },
+        "CLOUDFLARED": {
+            "autofetch": CLOUDFLARED_AUTOFETCH,
+            "fetch_succeeded": CLOUDFLARED_FETCH_SUCCEEDED,
+            "metrics_url_present": bool(CLOUDFLARED_METRICS_URL),
+            "hostname_suffixes": list(CLOUDFLARED_HOSTNAME_SUFFIXES),
+            "custom_regex": bool(CLOUDFLARED_URL_REGEX),
         },
     }
 
