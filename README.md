@@ -91,10 +91,6 @@ NGROK_API_URL=http://ngrok:4040/api/tunnels
 `http://localhost:4040/api/tunnels`. Чтобы вернуться к cloudflared, остановите профиль:
 `docker compose down ngrok` и запустите `docker compose up -d` без профиля.
 
-## Деплой без Docker
-
-Для пошагового руководства по установке зависимостей, настройке PostgreSQL, восстановлению дампа и запуску бота с ngrok на чистом сервере без контейнеров см. [docs/README-no-docker.md](docs/README-no-docker.md).
-
 ## Переменные окружения
 
 | Переменная | Назначение |
