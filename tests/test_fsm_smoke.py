@@ -160,7 +160,7 @@ async def test_registration_smoke_flow(monkeypatch):
 
     monkeypatch.setattr(handlers, "render_content", fake_render_content, raising=False)
 
-    await handlers.registration_receive_name(message, state)
+    await handlers._prompt_registration_step(message, state, "email")
     assert await state.get_state() == RegistrationStates.waiting_email.state
     assert any("Укажи email" in text for text, _ in events)
     assert any("можно пропустить" in text for text, _ in events)
@@ -239,7 +239,7 @@ async def test_registration_cancel_drops_state(monkeypatch):
     user = DummyFromUser()
     message = DummyMessage(handlers.CANCEL_TEXT, user, events)
     state = DummyState()
-    await state.set_state(RegistrationStates.waiting_name)
+    await state.set_state(RegistrationStates.waiting_email)
 
     execute_calls: list[tuple] = []
 
@@ -248,7 +248,7 @@ async def test_registration_cancel_drops_state(monkeypatch):
 
     monkeypatch.setattr(handlers, "execute", fake_execute, raising=False)
 
-    await handlers.registration_cancel_name(message, state)
+    await handlers.registration_cancel(message, state)
 
     assert await state.get_state() is None
     assert not execute_calls

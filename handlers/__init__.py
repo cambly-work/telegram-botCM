@@ -4275,6 +4275,31 @@ def _format_weekly_keys_section(
     return base_section, omitted
 
 
+def _profile_name_value(
+    user_row: dict,
+    fallback_user: types.User | None = None,
+) -> str:
+    name = str(
+        user_row.get("name")
+        or user_row.get("full_name")
+        or ""
+    ).strip()
+    if name:
+        return name
+
+    username = str(user_row.get("username") or "").strip()
+    if not username and fallback_user:
+        username = str(getattr(fallback_user, "username", "") or "").strip()
+    if username:
+        return username if username.startswith("@") else f"@{username}"
+
+    tg_id = user_row.get("tg_user_id") or getattr(fallback_user, "id", None)
+    if tg_id:
+        return str(tg_id)
+
+    return "—"
+
+
 async def send_profile_overview(
     message: types.Message,
     user: Optional[dict],
@@ -4304,7 +4329,7 @@ async def send_profile_overview(
 
     email_value = user_row.get("email") or "—"
     phone_value = user_row.get("phone") or "—"
-    name_value = user_row.get("name") or (user_row.get("full_name") or "—")
+    name_value = _profile_name_value(user_row, getattr(message, "from_user", None))
 
     try:
         weekly_keys = await list_weekly_keys_for_user(user_row.get("id"))
@@ -6597,6 +6622,143 @@ async def next_lesson_to_deliver(user_id: int) -> int:
     return 5
 
 
+_LESSON_MEDIA_SENDERS: dict[str, str] = {
+    "audio": "answer_audio",
+    "video": "answer_video",
+    "voice": "answer_voice",
+    "video_note": "answer_video_note",
+    "document": "answer_document",
+}
+
+
+def _normalize_lesson_media_entry(raw: Any) -> dict[str, Any] | None:
+    if isinstance(raw, str):
+        file_ref = raw.strip()
+        if not file_ref:
+            return None
+        return {"type": "document", "file": file_ref}
+
+    if not isinstance(raw, dict):
+        return None
+
+    file_ref = str(
+        raw.get("file_id")
+        or raw.get("file")
+        or raw.get("url")
+        or ""
+    ).strip()
+    if not file_ref:
+        return None
+
+    media_type = str(raw.get("type") or "document").strip().lower()
+    if media_type not in _LESSON_MEDIA_SENDERS:
+        media_type = "document"
+
+    entry: dict[str, Any] = {"type": media_type, "file": file_ref}
+
+    caption = str(raw.get("caption") or "").strip()
+    if caption:
+        entry["caption"] = caption
+
+    title = str(raw.get("title") or "").strip()
+    if title:
+        entry["title"] = title
+
+    performer = str(raw.get("performer") or "").strip()
+    if performer:
+        entry["performer"] = performer
+
+    duration_raw = raw.get("duration")
+    try:
+        duration = int(duration_raw)
+    except (TypeError, ValueError):
+        duration = None
+    if duration and duration > 0:
+        entry["duration"] = duration
+
+    supports_streaming = raw.get("supports_streaming")
+    if isinstance(supports_streaming, bool):
+        entry["supports_streaming"] = supports_streaming
+    elif isinstance(supports_streaming, str):
+        normalized = supports_streaming.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            entry["supports_streaming"] = True
+        elif normalized in {"0", "false", "no", "off"}:
+            entry["supports_streaming"] = False
+
+    return entry
+
+
+def _get_lesson_media_entries(
+    funnel_cfg: dict[str, Any],
+    lesson_num: int,
+) -> list[dict[str, Any]]:
+    media_map = funnel_cfg.get("lesson_media")
+    if not isinstance(media_map, dict):
+        return []
+
+    raw_entries = media_map.get(lesson_num)
+    if raw_entries is None:
+        raw_entries = media_map.get(str(lesson_num))
+    if raw_entries is None:
+        return []
+
+    if isinstance(raw_entries, dict):
+        raw_entries = [raw_entries]
+    elif not isinstance(raw_entries, list):
+        raw_entries = [raw_entries]
+
+    entries: list[dict[str, Any]] = []
+    for item in raw_entries:
+        entry = _normalize_lesson_media_entry(item)
+        if entry:
+            entries.append(entry)
+    return entries
+
+
+async def _send_lesson_media_entry(message: types.Message, entry: dict[str, Any]) -> None:
+    media_type = entry.get("type", "document")
+    file_ref = entry.get("file")
+    if not file_ref:
+        return
+
+    caption = entry.get("caption")
+
+    if media_type == "audio":
+        kwargs = {}
+        if "performer" in entry:
+            kwargs["performer"] = entry["performer"]
+        if "title" in entry:
+            kwargs["title"] = entry["title"]
+        if "duration" in entry:
+            kwargs["duration"] = entry["duration"]
+        await message.answer_audio(audio=file_ref, caption=caption, **kwargs)
+        return
+
+    if media_type == "voice":
+        await message.answer_voice(voice=file_ref, caption=caption)
+        return
+
+    if media_type == "video":
+        kwargs = {}
+        if "duration" in entry:
+            kwargs["duration"] = entry["duration"]
+        if "supports_streaming" in entry:
+            kwargs["supports_streaming"] = entry["supports_streaming"]
+        await message.answer_video(video=file_ref, caption=caption, **kwargs)
+        return
+
+    if media_type == "video_note":
+        await message.answer_video_note(video_note=file_ref)
+        return
+
+    if media_type == "document":
+        await message.answer_document(document=file_ref, caption=caption)
+        return
+
+    await message.answer_document(document=file_ref, caption=caption)
+
+
 async def deliver_lesson(
     message: types.Message,
     user: dict,
@@ -6640,6 +6802,7 @@ async def deliver_lesson(
     funnel_cfg = (_load_yaml_content() or {}).get("funnel") or {}
     lesson_urls = funnel_cfg.get("lesson_urls") or {}
     hw_questions = funnel_cfg.get("hw_questions") or {}
+    lesson_media = _get_lesson_media_entries(funnel_cfg, lesson_num)
 
     url = ""
     if isinstance(lesson_urls, dict):
@@ -6671,6 +6834,17 @@ async def deliver_lesson(
     text = "\n\n".join(parts)
 
     keyboard = lesson_actions_keyboard()
+
+    for media_entry in lesson_media:
+        try:
+            await _send_lesson_media_entry(message, media_entry)
+        except Exception as exc:  # noqa: BLE001 — логируем, но не прерываем урок
+            logger.warning(
+                "deliver_lesson: failed to send media type=%s lesson=%s err=%s",
+                media_entry.get("type"),
+                lesson_num,
+                exc,
+            )
 
     async with ChatActionSender.typing(chat_id=message.chat.id, bot=message.bot):
         await asyncio.sleep(0.2)
@@ -6740,38 +6914,60 @@ async def on_my_chat_member(event: types.ChatMemberUpdated):
     except Exception as e:
         logger.error(f"Error in my_chat_member: {e}", exc_info=True)
 # /start — создаём пользователя, захватываем UTM, показываем меню
+def _next_registration_step(user: Optional[dict]) -> Optional[str]:
+    if not user:
+        return "email"
+
+    email = str(user.get("email") or "").strip()
+    phone = str(user.get("phone") or "").strip()
+
+    if not email:
+        return "email"
+    if not phone:
+        return "phone"
+    return None
+
+
+async def _prompt_registration_step(
+    message: types.Message,
+    state: FSMContext,
+    step: str,
+) -> None:
+    if step == "email":
+        await state.set_state(RegistrationStates.waiting_email)
+        await message.answer(
+            "Укажи email для связи (можно пропустить):",
+            reply_markup=cancel_keyboard(cancel_text=SKIP_TEXT),
+        )
+    elif step == "phone":
+        await state.set_state(RegistrationStates.waiting_phone)
+        await message.answer(
+            "Укажи номер телефона (можно пропустить):",
+            reply_markup=cancel_keyboard(cancel_text=SKIP_TEXT),
+        )
+
+
 @router.message(CommandStart())
 async def on_start(message: types.Message, state: FSMContext):
-    # Проверяем, зарегистрирован ли уже пользователь
+    await _reset_state_if_needed(state)
+
     user = await get_user_with_id(message.from_user.id)
-    
-    # Если пользователь не зарегистрирован, создаем его
+
     if not user:
         utm_params = parse_start_utm(message.text)
-        user_row = await ensure_user(message.from_user, utm=utm_params)
-        user = await get_user_with_id(message.from_user.id)  # ← ДОБАВЬТЕ ЭТУ СТРОКУ
-    
-    # Проверяем, завершена ли регистрация
-    if not user.get("name"):
-        # Начинаем процесс регистрации
-        await state.set_state(RegistrationStates.waiting_name)
-        await message.answer(
-            "Добро пожаловать! Для начала нам нужно познакомиться. Как тебя зовут?",
-            reply_markup=cancel_keyboard()
-        )
-        return
-    
-    # Показываем главное меню
+        await ensure_user(message.from_user, utm=utm_params)
+        user = await get_user_with_id(message.from_user.id)
+
     has_admin_access = has_staff_access(message.from_user.id)
     kb = await build_menu_keyboard(user=user, is_admin=has_admin_access, section="root")
-    
+
     welcome_template = await get_content(
         "menu.start",
         "Добро пожаловать в CODE: Магнетизм. Это пространство для развития и перемен. Выбери раздел в меню, чтобы начать, {name}!",
     )
     display_name = (
-        user.get("name")
-        or user.get("full_name")
+        (user or {}).get("name")
+        or (user or {}).get("full_name")
         or message.from_user.full_name
         or message.from_user.first_name
         or "друг"
@@ -6785,6 +6981,10 @@ async def on_start(message: types.Message, state: FSMContext):
     async with ChatActionSender.typing(chat_id=message.chat.id, bot=message.bot):
         await asyncio.sleep(0.15)
         await message.answer(welcome_text, reply_markup=kb)
+
+    next_step = _next_registration_step(user)
+    if next_step:
+        await _prompt_registration_step(message, state, next_step)
 
 # Обработка отмены на этапах регистрации
 async def _cancel_registration(message: types.Message, state: FSMContext) -> None:
@@ -6857,25 +7057,12 @@ async def _finish_registration(message: types.Message, state: FSMContext) -> Non
             )
 
 
-@router.message(RegistrationStates.waiting_name, F.text.casefold() == CANCEL_TEXT.lower())
-async def registration_cancel_name(message: types.Message, state: FSMContext):
+@router.message(
+    StateFilter(RegistrationStates.waiting_email, RegistrationStates.waiting_phone),
+    F.text.casefold() == CANCEL_TEXT.lower(),
+)
+async def registration_cancel(message: types.Message, state: FSMContext):
     await _cancel_registration(message, state)
-
-
-# Обработка ввода имени при регистрации
-@router.message(RegistrationStates.waiting_name, F.text.len() > 0)
-async def registration_receive_name(message: types.Message, state: FSMContext):
-    name = message.text.strip()
-    
-    # Сохраняем имя
-    await execute("UPDATE users SET name=$2, updated_at=NOW() WHERE tg_user_id=$1", message.from_user.id, name)
-    
-    # Переходим к вводу email
-    await state.set_state(RegistrationStates.waiting_email)
-    await message.answer(
-        "Укажи email для связи (можно пропустить):",
-        reply_markup=cancel_keyboard(cancel_text=SKIP_TEXT)
-    )
 
 # Обработка пропуска email при регистрации
 @router.message(RegistrationStates.waiting_email, F.text.casefold() == SKIP_TEXT.lower())
@@ -14387,7 +14574,6 @@ async def fallback(message: types.Message, state: FSMContext):
         HWStates.waiting_answer,
         HWStates.waiting_feedback,
         HWStates.waiting_question,
-        RegistrationStates.waiting_name,
         RegistrationStates.waiting_email,
         RegistrationStates.waiting_phone,
         ProfileStates.waiting_email,
