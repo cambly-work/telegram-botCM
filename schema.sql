@@ -393,9 +393,8 @@ CREATE TABLE IF NOT EXISTS analysis_requests (
   id               SERIAL PRIMARY KEY,
   tg_user_id       BIGINT NOT NULL,
   user_id          INT REFERENCES users(id) ON DELETE SET NULL,
-  preferred_format TEXT NOT NULL,
-  contact          TEXT NOT NULL,
-  preferred_time   TEXT NOT NULL,
+  request_text     TEXT NOT NULL,
+  contact          TEXT,
   status           TEXT NOT NULL DEFAULT 'new',
   created_at       TIMESTAMPTZ DEFAULT NOW(),
   updated_at       TIMESTAMPTZ DEFAULT NOW()
@@ -519,6 +518,22 @@ CREATE INDEX IF NOT EXISTS idx_material_category_access_user
 
 CREATE INDEX IF NOT EXISTS idx_material_category_access_category
   ON material_category_access(category_id);
+
+CREATE TABLE IF NOT EXISTS material_assets (
+  id          SERIAL PRIMARY KEY,
+  category_id INT NOT NULL REFERENCES material_categories(id) ON DELETE CASCADE,
+  asset_type  TEXT NOT NULL CHECK (asset_type IN ('text','audio','video')),
+  title       TEXT,
+  body        TEXT,
+  file_id     TEXT,
+  sort_order  INT NOT NULL DEFAULT 100,
+  is_active   BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_material_assets_category
+  ON material_assets(category_id);
 
 INSERT INTO material_categories (slug, title, content_key, requires_access, sort_order)
 VALUES

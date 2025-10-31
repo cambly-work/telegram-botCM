@@ -37,8 +37,6 @@ WRITE_FEEDBACK = "📝 Написать отзыв"
 SKIP_FEEDBACK = "Пропустить отзыв"
 CANCEL_TEXT = "Отмена"
 SKIP_TEXT = "Пропустить"
-ANALYSIS_BACK_BUTTON = "⬅️ Назад"
-ANALYSIS_CONFIRM_BUTTON = "✅ Отправить заявку"
 ADMIN_TEXTS_ENTRY = "📄 Тексты экранов"
 ADMIN_CONTENT_MENU = "🧾 Контент и тексты"
 ADMIN_CONTENT_VIEW = "🔍 Посмотреть текст"
@@ -96,17 +94,25 @@ ADMIN_BROADCAST_HISTORY_BUTTON = "📜 История рассылок"
 BROADCAST_HISTORY_MORE_BUTTON = "➕ Ещё"
 
 ADMIN_MATERIALS_LIST = "📂 Список категорий"
+ADMIN_MATERIALS_ASSETS = "🎞 Контент разделов"
 ADMIN_MATERIALS_CREATE = "➕ Добавить категорию"
 ADMIN_MATERIALS_UPDATE = "✏️ Изменить категорию"
 ADMIN_MATERIALS_DELETE = "🗑️ Удалить категорию"
 ADMIN_MATERIALS_GRANT = "✅ Выдать доступ"
 ADMIN_MATERIALS_REVOKE = "🚫 Отозвать доступ"
+ADMIN_MATERIALS_ASSET_ADD_TEXT = "📝 Добавить текст"
+ADMIN_MATERIALS_ASSET_ADD_AUDIO = "🎧 Добавить аудио"
+ADMIN_MATERIALS_ASSET_ADD_VIDEO = "🎬 Добавить видео"
+ADMIN_MATERIALS_ASSET_LIST = "📋 Список материалов"
+ADMIN_MATERIALS_ASSET_DELETE = "🗑️ Удалить материал"
+BACK_TO_MATERIALS_ASSETS = "⬅️ К категориям материалов"
 
 ADMIN_KEYS_BULK_GRANT = "🎁 Массовая выдача"
 ADMIN_KEYS_REVOKE = "🔄 Отозвать ключ"
 ADMIN_KEYS_UPLOAD = "⬆️ Загрузить описания"
 
 ADMIN_BEHAVIOR_START = "✉️ Приветствие /start"
+ADMIN_BEHAVIOR_START_MEDIA = "🖼 Медиа приветствия"
 ADMIN_BEHAVIOR_REGISTRATION = "✅ Сообщение после регистрации"
 ADMIN_BEHAVIOR_ONBOARDING = "🚀 Шаги онбординга"
 
@@ -378,19 +384,19 @@ def cancel_keyboard(
     )
 
 
-def analysis_confirm_keyboard() -> ReplyKeyboardMarkup:
-    rows = [
-        [KeyboardButton(text=ANALYSIS_CONFIRM_BUTTON)],
-        [
-            KeyboardButton(text=ANALYSIS_BACK_BUTTON),
-            KeyboardButton(text=CANCEL_TEXT),
-        ],
-    ]
-    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
-
-
 def remove_keyboard() -> ReplyKeyboardRemove:
     return ReplyKeyboardRemove()
+
+
+def admin_material_assets_keyboard() -> ReplyKeyboardMarkup:
+    rows = [
+        [KeyboardButton(text=ADMIN_MATERIALS_ASSET_ADD_TEXT), KeyboardButton(text=ADMIN_MATERIALS_ASSET_ADD_AUDIO)],
+        [KeyboardButton(text=ADMIN_MATERIALS_ASSET_ADD_VIDEO)],
+        [KeyboardButton(text=ADMIN_MATERIALS_ASSET_LIST), KeyboardButton(text=ADMIN_MATERIALS_ASSET_DELETE)],
+        [KeyboardButton(text=BACK_TO_MATERIALS_ASSETS), KeyboardButton(text=BACK_TO_ADMIN)],
+        [KeyboardButton(text=BACK_TO_MAIN)],
+    ]
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
 
 ADMIN_PAYMENTS_OPEN_WINDOW = "🔓 Открыть окно оплат"
@@ -476,6 +482,7 @@ def admin_service_category_keyboard() -> ReplyKeyboardMarkup:
 def admin_materials_keyboard() -> ReplyKeyboardMarkup:
     rows = [
         [KeyboardButton(text=ADMIN_MATERIALS_LIST)],
+        [KeyboardButton(text=ADMIN_MATERIALS_ASSETS)],
         [KeyboardButton(text=ADMIN_MATERIALS_CREATE), KeyboardButton(text=ADMIN_MATERIALS_UPDATE)],
         [KeyboardButton(text=ADMIN_MATERIALS_DELETE)],
         [KeyboardButton(text=ADMIN_MATERIALS_GRANT), KeyboardButton(text=ADMIN_MATERIALS_REVOKE)],
@@ -747,6 +754,7 @@ def admin_schedule_keyboard(*, archive_mode: bool = False) -> ReplyKeyboardMarku
 def admin_behavior_keyboard() -> ReplyKeyboardMarkup:
     rows = [
         [KeyboardButton(text=ADMIN_BEHAVIOR_START)],
+        [KeyboardButton(text=ADMIN_BEHAVIOR_START_MEDIA)],
         [KeyboardButton(text=ADMIN_BEHAVIOR_REGISTRATION)],
         [KeyboardButton(text=ADMIN_BEHAVIOR_ONBOARDING)],
         [KeyboardButton(text=ADMIN_PAYMENTS_BUTTON)],

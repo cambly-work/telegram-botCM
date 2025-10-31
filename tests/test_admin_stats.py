@@ -59,8 +59,7 @@ def _default_stats() -> dict:
                         "status": "new",
                         "created_at": base_ts,
                         "updated_at": later_ts,
-                        "preferred_format": "Zoom",
-                        "preferred_time": "вечером",
+                        "request_text": "Хочу разобрать стратегию продвижения",
                         "contact": "@consultant",
                         "tg_user_id": 555111,
                         "user_id": 42,
@@ -111,7 +110,7 @@ def test_admin_stats_forms_default_summary_without_applicant_table():
     assert "@petr_petrov" not in text
     assert "Мария Консультация" in text
     assert "@consultant" in text
-    assert "Zoom" in text
+    assert "Хочу разобрать стратегию продвижения" in text
 
 
 def test_admin_stats_forms_handles_missing_usernames():
@@ -151,8 +150,7 @@ def test_format_admin_analysis_request_entry_includes_contacts():
         "id": 7,
         "status": "archived",
         "contact": "mail@example.com",
-        "preferred_format": "Очная",
-        "preferred_time": "утром",
+        "request_text": "Нужна помощь с планированием",
         "username": "analysis_user",
         "tg_user_id": 123456,
         "user_id": 789,
@@ -166,8 +164,7 @@ def test_format_admin_analysis_request_entry_includes_contacts():
     assert "Заявка #7" in text
     assert "Марина Аналитик" in text
     assert "mail@example.com" in text
-    assert "Очная" in text
-    assert "утром" in text
+    assert "Нужна помощь с планированием" in text
     assert "@analysis_user" in text
     assert "id=789" in text
 

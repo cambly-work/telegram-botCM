@@ -1,6 +1,7 @@
 from keyboards import (
     ADMIN_BEHAVIOR_BUTTON,
     ADMIN_BEHAVIOR_ONBOARDING,
+    ADMIN_BEHAVIOR_START_MEDIA,
     ADMIN_BEHAVIOR_REGISTRATION,
     ADMIN_BEHAVIOR_START,
     ADMIN_CATEGORY_USERS,
@@ -23,6 +24,12 @@ from keyboards import (
     ADMIN_MATERIALS_DELETE,
     ADMIN_MATERIALS_GRANT,
     ADMIN_MATERIALS_REVOKE,
+    ADMIN_MATERIALS_ASSETS,
+    ADMIN_MATERIALS_ASSET_ADD_TEXT,
+    ADMIN_MATERIALS_ASSET_ADD_AUDIO,
+    ADMIN_MATERIALS_ASSET_ADD_VIDEO,
+    ADMIN_MATERIALS_ASSET_LIST,
+    ADMIN_MATERIALS_ASSET_DELETE,
     ADMIN_PAYMENTS_BUTTON,
     ADMIN_PAYMENTS_CLOSE_WINDOW,
     ADMIN_PAYMENTS_CONFIRM_ACCESS,
@@ -45,6 +52,7 @@ from keyboards import (
     BACK_TO_BEHAVIOR,
     BACK_TO_MAIN,
     BACK_TO_MATERIALS,
+    BACK_TO_MATERIALS_ASSETS,
     BROADCAST_ALL_BUTTON,
     BROADCAST_EXPIRED_BUTTON,
     BROADCAST_LEADS_BUTTON,
@@ -55,7 +63,6 @@ from keyboards import (
     CANCEL_TEXT,
     LEARNING_PROGRESS_BUTTON,
     MATERIALS_CATALOG_BUTTON,
-    analysis_confirm_keyboard,
     cancel_keyboard,
     materials_menu_keyboard,
     learning_menu_keyboard,
@@ -71,6 +78,7 @@ from keyboards import (
     admin_service_category_keyboard,
     admin_materials_keyboard,
     admin_materials_categories_keyboard,
+    admin_material_assets_keyboard,
     admin_payments_keyboard,
     admin_settings_keyboard,
     admin_user_card_keyboard,
@@ -181,6 +189,7 @@ def test_admin_materials_keyboard_layout():
     rows = _keyboard_texts(admin_materials_keyboard())
     assert rows == [
         [ADMIN_MATERIALS_LIST],
+        [ADMIN_MATERIALS_ASSETS],
         [ADMIN_MATERIALS_CREATE, ADMIN_MATERIALS_UPDATE],
         [ADMIN_MATERIALS_DELETE],
         [ADMIN_MATERIALS_GRANT, ADMIN_MATERIALS_REVOKE],
@@ -196,10 +205,22 @@ def test_admin_materials_categories_keyboard_appends_navigation():
     assert rows[-1] == [BACK_TO_ADMIN, BACK_TO_MAIN]
 
 
+def test_admin_material_assets_keyboard_layout():
+    rows = _keyboard_texts(admin_material_assets_keyboard())
+    assert rows == [
+        [ADMIN_MATERIALS_ASSET_ADD_TEXT, ADMIN_MATERIALS_ASSET_ADD_AUDIO],
+        [ADMIN_MATERIALS_ASSET_ADD_VIDEO],
+        [ADMIN_MATERIALS_ASSET_LIST, ADMIN_MATERIALS_ASSET_DELETE],
+        [BACK_TO_MATERIALS_ASSETS, BACK_TO_ADMIN],
+        [BACK_TO_MAIN],
+    ]
+
+
 def test_admin_behavior_keyboard_contains_payments_button():
     rows = _keyboard_texts(admin_behavior_keyboard())
     assert rows == [
         [ADMIN_BEHAVIOR_START],
+        [ADMIN_BEHAVIOR_START_MEDIA],
         [ADMIN_BEHAVIOR_REGISTRATION],
         [ADMIN_BEHAVIOR_ONBOARDING],
         [ADMIN_PAYMENTS_BUTTON],
@@ -347,8 +368,3 @@ def test_cancel_keyboard_allows_custom_text():
     custom = "Пропустить"
     rows = _keyboard_texts(cancel_keyboard(cancel_text=custom))
     assert any(custom in row for row in rows)
-
-
-def test_analysis_confirm_keyboard_contains_cancel_button():
-    rows = _keyboard_texts(analysis_confirm_keyboard())
-    assert any(CANCEL_TEXT in row for row in rows)
