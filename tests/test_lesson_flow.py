@@ -185,3 +185,43 @@ async def test_send_profile_overview_formats_status_without_duplicates(monkeypat
     profile_text = events[-1][1]
     assert "Статус: Активный доступ" in profile_text
     assert "Активный доступ (" not in profile_text
+
+
+async def test_profile_name_fallbacks(monkeypatch):
+    events: list[tuple[str, str]] = []
+    test_user = DummyFromUser(username="fallback")
+    message = DummyMessage("/profile", test_user, events)
+    user_row = {
+        "id": 2,
+        "status": "lead_funnel",
+        "email": None,
+        "phone": None,
+        "username": "fallback",
+        "tg_user_id": test_user.id,
+    }
+
+    async def fake_keyboard(**kwargs):
+        return "KEYBOARD"
+
+    async def fake_weekly_keys(user_id):
+        assert user_id == user_row["id"]
+        return []
+
+    monkeypatch.setattr(handlers, "build_menu_keyboard", fake_keyboard)
+    monkeypatch.setattr(handlers, "list_weekly_keys_for_user", fake_weekly_keys)
+
+    await handlers.send_profile_overview(message, user_row, False)
+
+    assert events, "profile overview should send a message"
+    profile_text = events[-1][1]
+    assert "Имя: @fallback" in profile_text
+
+    events.clear()
+    user_row.pop("username")
+    test_user.username = None
+
+    await handlers.send_profile_overview(message, user_row, False)
+
+    assert events, "profile overview should send a message for id fallback"
+    profile_text = events[-1][1]
+    assert f"Имя: {test_user.id}" in profile_text
