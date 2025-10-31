@@ -8,10 +8,7 @@ class RegistrationStates(StatesGroup):
 
 
 class AnalysisStates(StatesGroup):
-    waiting_format = State()
-    waiting_contact = State()
-    waiting_time = State()
-    waiting_confirm = State()
+    waiting_request = State()
 
 
 class HWStates(StatesGroup):
@@ -49,6 +46,7 @@ class AdminContentStates(StatesGroup):
 
 class AdminBehaviorStates(StatesGroup):
     waiting_start_text = State()
+    waiting_start_media = State()
     waiting_registration_text = State()
     waiting_onboarding_text = State()
     waiting_onboarding_delete = State()
@@ -89,6 +87,14 @@ class AdminMaterialsStates(StatesGroup):
     waiting_revoke_payload = State()
 
 
+class AdminMaterialAssetsStates(StatesGroup):
+    waiting_category = State()
+    waiting_action = State()
+    waiting_add_text = State()
+    waiting_add_media = State()
+    waiting_delete_choice = State()
+
+
 class AdminWeeklyKeysStates(StatesGroup):
     waiting_bulk_payload = State()
     waiting_revoke_payload = State()
@@ -113,6 +119,7 @@ __all__ = [
     "AdminUserStates",
     "AdminPaymentsStates",
     "AdminMaterialsStates",
+    "AdminMaterialAssetsStates",
     "AdminWeeklyKeysStates",
     "TestStates",
 ]

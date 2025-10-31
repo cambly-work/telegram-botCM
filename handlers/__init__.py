@@ -9,6 +9,7 @@ import math
 import os
 import re
 import shlex
+import textwrap
 import time
 from collections import OrderedDict
 from datetime import date, datetime, timedelta, timezone
@@ -74,6 +75,7 @@ from .states import (
     AdminBehaviorStates,
     AdminContentStates,
     AdminMaterialsStates,
+    AdminMaterialAssetsStates,
     AdminPaymentsStates,
     AdminScheduleStates,
     AdminUserStates,
@@ -110,9 +112,9 @@ from keyboards import (
     admin_behavior_keyboard,
     admin_onboarding_steps_keyboard,
     admin_onboarding_delete_keyboard,
-    admin_materials_keyboard,
     admin_keys_keyboard,
     admin_materials_categories_keyboard,
+    admin_material_assets_keyboard,
     admin_broadcast_keyboard,
     admin_broadcast_segments_keyboard,
     admin_broadcast_history_keyboard,
@@ -133,6 +135,7 @@ from keyboards import (
     BACK_TO_LESSONS,
     BACK_TO_BEHAVIOR,
     BACK_TO_ONBOARDING,
+    BACK_TO_MATERIALS_ASSETS,
     LESSON_DONE,
     LESSON_SKIP,
     LESSON_QUESTION,
@@ -142,9 +145,6 @@ from keyboards import (
     FEEDBACK_OPTIONS,
     CANCEL_TEXT,
     SKIP_TEXT,
-    ANALYSIS_BACK_BUTTON,
-    ANALYSIS_CONFIRM_BUTTON,
-    analysis_confirm_keyboard,
     ADMIN_TEXTS_ENTRY,
     ADMIN_CONTENT_MENU,
     ADMIN_CONTENT_VIEW,
@@ -190,6 +190,7 @@ from keyboards import (
     ADD_ONBOARDING_STEP,
     DELETE_ONBOARDING_STEP,
     ADMIN_BEHAVIOR_START,
+    ADMIN_BEHAVIOR_START_MEDIA,
     ADMIN_BEHAVIOR_REGISTRATION,
     ADMIN_BEHAVIOR_ONBOARDING,
     ADMIN_STATS_BUTTON,
@@ -198,11 +199,17 @@ from keyboards import (
     ADMIN_PAYMENTS_BUTTON,
     ADMIN_MATERIALS_BUTTON,
     ADMIN_MATERIALS_LIST,
+    ADMIN_MATERIALS_ASSETS,
     ADMIN_MATERIALS_CREATE,
     ADMIN_MATERIALS_UPDATE,
     ADMIN_MATERIALS_DELETE,
     ADMIN_MATERIALS_GRANT,
     ADMIN_MATERIALS_REVOKE,
+    ADMIN_MATERIALS_ASSET_ADD_TEXT,
+    ADMIN_MATERIALS_ASSET_ADD_AUDIO,
+    ADMIN_MATERIALS_ASSET_ADD_VIDEO,
+    ADMIN_MATERIALS_ASSET_LIST,
+    ADMIN_MATERIALS_ASSET_DELETE,
     ADMIN_KEYS_BUTTON,
     ADMIN_KEYS_BULK_GRANT,
     ADMIN_KEYS_REVOKE,
@@ -326,45 +333,24 @@ _notify_admins_cached: Optional[Callable[[str], Awaitable[None]]] = None
 _BOT_USERNAME_CACHE: Optional[str] = None
 _BOT_USERNAME_LOCK = asyncio.Lock()
 
+_START_MEDIA_CONTENT_KEY = "menu.start_media"
+_START_MEDIA_ALLOWED_TYPES = {"photo", "video"}
+_MATERIAL_ASSET_TYPES = {"text", "audio", "video"}
+
 
 _ANALYSIS_DEFAULT_INTRO = (
     "Персональный разбор.\n\n"
-    "Ответь на несколько вопросов, чтобы оставить заявку."
+    "Напиши свой запрос — и администратор свяжется с тобой, чтобы согласовать время."
 )
-_ANALYSIS_DEFAULT_FORMAT_PROMPT = (
-    "Расскажи, как тебе удобно провести разбор. Укажи желаемую дату/время и контакт для связи."
+_ANALYSIS_DEFAULT_REQUEST_PROMPT = (
+    "Расскажи, что хочешь разобрать. Можно описать ситуацию или вопрос в нескольких фразах."
 )
-_ANALYSIS_DEFAULT_FORMAT_RETRY = (
-    "Нужны желаемые дата/время и контакт, чтобы запланировать разбор. Напиши эти данные."
-)
-_ANALYSIS_DEFAULT_CONTACT_PROMPT = (
-    "Оставь контакт для связи: телефон, @username или другой удобный способ."
-)
-_ANALYSIS_DEFAULT_CONTACT_RETRY = (
-    "Нужен контакт, чтобы мы связались. Напиши телефон, @username или ссылку."
-)
-_ANALYSIS_DEFAULT_TIME_PROMPT = (
-    "Когда тебе удобно провести разбор? Укажи несколько вариантов даты и времени."
-)
-_ANALYSIS_DEFAULT_TIME_RETRY = (
-    "Напиши, когда тебе комфортно провести разбор. Можно предложить несколько слотов."
-)
-_ANALYSIS_DEFAULT_CONFIRM_PROMPT = (
-    "Проверь заявку:\n"
-    "• Детали запроса: {format}\n"
-    "• Контакт: {contact}\n"
-    "• Время: {time}\n\n"
-    "Если всё верно — нажми «{confirm_button}»."
+_ANALYSIS_DEFAULT_REQUEST_RETRY = (
+    "Добавь несколько фраз о запросе, чтобы команда понимала, с чем помочь."
 )
 _ANALYSIS_DEFAULT_SUCCESS = (
-    "Заявка сохранена. Команда свяжется с тобой, чтобы согласовать детали."
+    "Заявка сохранена. Команда свяжется с тобой в Telegram, чтобы договориться о времени."
 )
-
-_ANALYSIS_BACK_TOKENS = {
-    ANALYSIS_BACK_BUTTON.casefold(),
-    ANALYSIS_BACK_BUTTON.strip().casefold(),
-    "назад",
-}
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Конфиг из окружения
@@ -809,9 +795,8 @@ async def create_analysis_request(
     *,
     tg_user_id: int,
     user_id: Optional[int],
-    preferred_format: str,
-    contact: str,
-    preferred_time: str,
+    request_text: str,
+    contact: str | None,
 ) -> Optional[dict]:
     try:
         return await fetchrow(
@@ -819,18 +804,16 @@ async def create_analysis_request(
             INSERT INTO analysis_requests (
                 tg_user_id,
                 user_id,
-                preferred_format,
-                contact,
-                preferred_time
+                request_text,
+                contact
             )
-            VALUES ($1, $2, $3, $4, $5)
+            VALUES ($1, $2, $3, $4)
             RETURNING *
             """,
             tg_user_id,
             user_id,
-            preferred_format,
+            request_text,
             contact,
-            preferred_time,
         )
     except Exception as e:
         logger.warning(
@@ -839,6 +822,56 @@ async def create_analysis_request(
             e,
         )
         return None
+
+
+def _parse_start_media(raw: str | None) -> Optional[dict[str, str]]:
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    media_type = str(data.get("type") or "").strip().lower()
+    file_id = str(data.get("file_id") or "").strip()
+    if media_type not in _START_MEDIA_ALLOWED_TYPES or not file_id:
+        return None
+    caption = str(data.get("caption") or "").strip()
+    return {
+        "type": media_type,
+        "file_id": file_id,
+        "caption": caption,
+    }
+
+
+async def _get_start_media_config() -> Optional[dict[str, str]]:
+    raw_value = await get_content(_START_MEDIA_CONTENT_KEY, "")
+    return _parse_start_media(raw_value)
+
+
+async def _set_start_media_config(
+    media: Optional[dict[str, str]], *, updated_by: int
+) -> None:
+    value = json.dumps(media, ensure_ascii=False) if media else ""
+    await set_content_value(
+        _START_MEDIA_CONTENT_KEY,
+        value,
+        updated_by=updated_by,
+    )
+
+
+def _format_start_media_summary(media: Optional[dict[str, str]]) -> str:
+    if not media:
+        return "Сейчас медиаприветствие не настроено."
+
+    media_type = media.get("type", "")
+    caption = media.get("caption") or ""
+    type_label = "Фото" if media_type == "photo" else "Видео"
+    lines = [f"Текущий тип: {type_label}"]
+    if caption:
+        lines.append(f"Описание: {caption}")
+    return "\n".join(lines)
 
 
 def _get_notify_admins() -> Optional[Callable[[str], Awaitable[None]]]:
@@ -1489,16 +1522,12 @@ _ADMIN_TEXT_GROUPS: dict[str, list[tuple[str, str]]] = {
     "🎓 Раздел «Обучение»": [
         ("Подсказка «Обучение»", "menu.prompts.learning"),
         ("Заявка на разбор: вводное сообщение", "menu.analysis.intro"),
-        ("Заявка на разбор: вопрос формата", "menu.analysis.format_prompt"),
-        ("Заявка на разбор: уточнение формата", "menu.analysis.format_retry"),
-        ("Заявка на разбор: вопрос контакта", "menu.analysis.contact_prompt"),
-        ("Заявка на разбор: уточнение контакта", "menu.analysis.contact_retry"),
-        ("Заявка на разбор: вопрос времени", "menu.analysis.time_prompt"),
-        ("Заявка на разбор: уточнение времени", "menu.analysis.time_retry"),
-        ("Заявка на разбор: подтверждение", "menu.analysis.confirm_prompt"),
+        ("Заявка на разбор: запрос участницы", "menu.analysis.request_prompt"),
+        ("Заявка на разбор: уточнение запроса", "menu.analysis.request_retry"),
         ("Заявка на разбор: успешное сообщение", "menu.analysis.success"),
         ("Окно «Пройти тест»", "menu.test"),
         ("Сообщение «Все уроки пройдены»", "menu.funnel.completed"),
+        ("Окно «Окно в Магнетизм»", "menu.learning.magnetism_window"),
     ],
     "📦 Раздел «Материалы»": [
         ("Подсказка «Материалы»", "menu.prompts.materials"),
@@ -1580,13 +1609,9 @@ _ADMIN_TEXT_PLACEHOLDERS: dict[str, dict[str, list[str]]] = {
         "required": ["{form_label}"],
         "optional": [],
     },
-    "menu.analysis.confirm_prompt": {
-        "required": ["{format}", "{contact}", "{time}"],
-        "optional": ["{confirm_button}"],
-    },
     "menu.analysis.success": {
-        "required": ["{format}", "{contact}", "{time}"],
-        "optional": [],
+        "required": ["{request}"],
+        "optional": ["{contact}", "{{REQUEST}}", "{{CONTACT}}"],
     },
 }
 
@@ -1626,10 +1651,8 @@ _ADMIN_TEXT_PREVIEW_SAMPLE_DATA: dict[str, str] = {
     "support_site_label": "🌐 Сайт",
     "support_site_description": "Полезные ссылки.",
     "support_site_display": "https://codemagnetic.ru",
-    "format": "Zoom",
+    "request": "Хочу разобрать, как выстроить план действий на месяц.",
     "contact": "@codemagnetic",
-    "time": "Будни после 18:00",
-    "confirm_button": ANALYSIS_CONFIRM_BUTTON,
 }
 
 
@@ -2018,22 +2041,25 @@ def _generate_analysis_requests_table_data(
         "#",
         "Имя",
         "Контакт",
-        "Формат",
-        "Время",
+        "Запрос",
         "Статус",
         "Обновлено",
     ]
 
     rows: list[list[str]] = []
     if not entries:
-        return headers, rows, ["right", "left", "left", "left", "left", "left", "left"]
+        return headers, rows, ["right", "left", "left", "left", "left", "left"]
 
     for entry in entries:
         request_id = entry.get("id")
         request_id_text = html.escape(str(request_id)) if request_id is not None else "—"
         contact = (entry.get("contact") or "").strip()
-        preferred_format = (entry.get("preferred_format") or "").strip()
-        preferred_time = (entry.get("preferred_time") or "").strip()
+        request_text = (entry.get("request_text") or "").strip()
+        request_preview = (
+            html.escape(textwrap.shorten(request_text, width=80, placeholder="…"))
+            if request_text
+            else "—"
+        )
         status = str(entry.get("status") or "")
         status_label = ANALYSIS_REQUEST_STATUS_LABELS.get(status, status or "—")
 
@@ -2042,14 +2068,13 @@ def _generate_analysis_requests_table_data(
                 request_id_text,
                 _analysis_request_display_name(entry),
                 html.escape(contact) if contact else "—",
-                html.escape(preferred_format) if preferred_format else "—",
-                html.escape(preferred_time) if preferred_time else "—",
+                request_preview,
                 html.escape(status_label),
                 _format_datetime_safe(entry.get("updated_at") or entry.get("created_at")),
             ]
         )
 
-    return headers, rows, ["right", "left", "left", "left", "left", "left", "left"]
+    return headers, rows, ["right", "left", "left", "left", "left", "left"]
 
 
 def _format_admin_analysis_request_entry(entry: dict[str, Any]) -> str:
@@ -2063,10 +2088,12 @@ def _format_admin_analysis_request_entry(entry: dict[str, Any]) -> str:
     name_text = _analysis_request_display_name(entry)
     contact = (entry.get("contact") or "").strip()
     contact_text = html.escape(contact) if contact else "—"
-    preferred_format = (entry.get("preferred_format") or "").strip()
-    format_text = html.escape(preferred_format) if preferred_format else "—"
-    preferred_time = (entry.get("preferred_time") or "").strip()
-    time_text = html.escape(preferred_time) if preferred_time else "—"
+    request_text = (entry.get("request_text") or "").strip()
+    request_display = (
+        html.escape(textwrap.shorten(request_text, width=240, placeholder="…"))
+        if request_text
+        else "—"
+    )
 
     identifiers: list[str] = []
     username = (entry.get("username") or "").strip()
@@ -2090,8 +2117,7 @@ def _format_admin_analysis_request_entry(entry: dict[str, Any]) -> str:
         f"• <b>Заявка {header_id}</b> — {status_label_text}",
         f"  Имя: {name_text}",
         f"  Контакт: {contact_text}",
-        f"  Формат: {format_text}",
-        f"  Время: {time_text}",
+        f"  Запрос: {request_display}",
         f"  Telegram: {identifiers_text}",
         f"  Создана: {created_text}; обновлена: {updated_text}",
     ]
@@ -2332,9 +2358,8 @@ async def _collect_admin_stats_data() -> dict[str, Any]:
                ar.status,
                ar.created_at,
                ar.updated_at,
-               ar.preferred_format,
+               ar.request_text,
                ar.contact,
-               ar.preferred_time,
                ar.tg_user_id,
                ar.user_id,
                u.full_name,
@@ -3915,20 +3940,6 @@ async def build_admin_broadcast_keyboard() -> ReplyKeyboardMarkup:
     return admin_broadcast_keyboard(_broadcast_status_labels(flags))
 
 
-def _analysis_normalize_text(text: str | None) -> str:
-    return (text or "").strip().casefold()
-
-
-def _analysis_is_back(text: str | None) -> bool:
-    if not text:
-        return False
-    normalized = _analysis_normalize_text(text)
-    if not normalized:
-        return False
-    arrowless = normalized.replace("⬅️", "").strip()
-    return normalized in _ANALYSIS_BACK_TOKENS or arrowless == "назад"
-
-
 async def _analysis_get_intro_text() -> str:
     intro_text, _ = await get_content_with_source("menu.analysis.intro", "")
     if intro_text.strip():
@@ -3940,7 +3951,7 @@ async def _analysis_get_intro_text() -> str:
     return legacy_text or _ANALYSIS_DEFAULT_INTRO
 
 
-async def _analysis_send_format_prompt(
+async def _analysis_send_request_prompt(
     message: types.Message,
     *,
     include_intro: bool = False,
@@ -3950,119 +3961,62 @@ async def _analysis_send_format_prompt(
         intro = (await _analysis_get_intro_text()).strip()
         if intro:
             parts.append(intro)
-    prompt = (await get_content("menu.analysis.format_prompt", _ANALYSIS_DEFAULT_FORMAT_PROMPT)).strip()
-    if prompt:
-        parts.append(prompt)
-    text = "\n\n".join(parts) if parts else _ANALYSIS_DEFAULT_FORMAT_PROMPT
+    prompt_template = await get_content(
+        "menu.analysis.request_prompt",
+        _ANALYSIS_DEFAULT_REQUEST_PROMPT,
+    )
+    prompt_text = render_content(prompt_template).strip()
+    if prompt_text:
+        parts.append(prompt_text)
+    text = "\n\n".join(parts) if parts else _ANALYSIS_DEFAULT_REQUEST_PROMPT
     await message.answer(text, reply_markup=cancel_keyboard())
 
 
-async def _analysis_send_format_retry(message: types.Message) -> None:
-    retry_text = await get_content("menu.analysis.format_retry", _ANALYSIS_DEFAULT_FORMAT_RETRY)
-    text = retry_text.strip() or _ANALYSIS_DEFAULT_FORMAT_RETRY
-    await message.answer(text, reply_markup=cancel_keyboard())
-
-
-async def _analysis_send_contact_prompt(message: types.Message) -> None:
-    prompt = await get_content("menu.analysis.contact_prompt", _ANALYSIS_DEFAULT_CONTACT_PROMPT)
-    text = prompt.strip() or _ANALYSIS_DEFAULT_CONTACT_PROMPT
-    await message.answer(
-        text,
-        reply_markup=cancel_keyboard(extra_buttons=[ANALYSIS_BACK_BUTTON]),
+async def _analysis_send_request_retry(message: types.Message) -> None:
+    retry_template = await get_content(
+        "menu.analysis.request_retry",
+        _ANALYSIS_DEFAULT_REQUEST_RETRY,
     )
+    retry_text = render_content(retry_template).strip()
+    await message.answer(retry_text or _ANALYSIS_DEFAULT_REQUEST_RETRY, reply_markup=cancel_keyboard())
 
 
-async def _analysis_send_contact_retry(message: types.Message) -> None:
-    retry_text = await get_content("menu.analysis.contact_retry", _ANALYSIS_DEFAULT_CONTACT_RETRY)
-    text = retry_text.strip() or _ANALYSIS_DEFAULT_CONTACT_RETRY
-    await message.answer(
-        text,
-        reply_markup=cancel_keyboard(extra_buttons=[ANALYSIS_BACK_BUTTON]),
-    )
+def _analysis_guess_contact(user: Optional[dict], tg_user: types.User) -> str:
+    contact_bits: list[str] = []
+    if tg_user.username:
+        contact_bits.append(f"@{tg_user.username.lstrip('@')}")
+    if user:
+        for key in ("email", "phone"):
+            value = (user.get(key) or "").strip()
+            if value:
+                contact_bits.append(value)
+    seen: set[str] = set()
+    unique: list[str] = []
+    for bit in contact_bits:
+        if bit not in seen:
+            seen.add(bit)
+            unique.append(bit)
+    return ", ".join(unique)
 
 
-async def _analysis_send_time_prompt(message: types.Message) -> None:
-    prompt = await get_content("menu.analysis.time_prompt", _ANALYSIS_DEFAULT_TIME_PROMPT)
-    text = prompt.strip() or _ANALYSIS_DEFAULT_TIME_PROMPT
-    await message.answer(
-        text,
-        reply_markup=cancel_keyboard(extra_buttons=[ANALYSIS_BACK_BUTTON]),
-    )
-
-
-async def _analysis_send_time_retry(message: types.Message) -> None:
-    retry_text = await get_content("menu.analysis.time_retry", _ANALYSIS_DEFAULT_TIME_RETRY)
-    text = retry_text.strip() or _ANALYSIS_DEFAULT_TIME_RETRY
-    await message.answer(
-        text,
-        reply_markup=cancel_keyboard(extra_buttons=[ANALYSIS_BACK_BUTTON]),
-    )
-
-
-def _analysis_escape_value(value: str | None) -> str:
-    if value is None:
-        return "—"
-    cleaned = value.strip()
-    return html.escape(cleaned) if cleaned else "—"
-
-
-def _analysis_display_values(data: dict) -> tuple[str, str, str]:
-    return (
-        _analysis_escape_value(data.get("analysis_format")),
-        _analysis_escape_value(data.get("analysis_contact")),
-        _analysis_escape_value(data.get("analysis_time")),
-    )
-
-
-async def _analysis_send_confirm_prompt(message: types.Message, state: FSMContext) -> None:
-    data = await state.get_data()
-    if not data or not all(data.get(key) for key in ("analysis_format", "analysis_contact", "analysis_time")):
-        await state.set_state(AnalysisStates.waiting_format)
-        await _analysis_send_format_prompt(message)
-        return
-
-    format_value, contact_value, time_value = _analysis_display_values(data)
-    template = await get_content(
-        "menu.analysis.confirm_prompt",
-        _ANALYSIS_DEFAULT_CONFIRM_PROMPT,
-    )
-    rendered = render_content(
-        template,
-        format=format_value,
-        contact=contact_value,
-        time=time_value,
-        confirm_button=ANALYSIS_CONFIRM_BUTTON,
-    )
-    fallback = render_content(
-        _ANALYSIS_DEFAULT_CONFIRM_PROMPT,
-        format=format_value,
-        contact=contact_value,
-        time=time_value,
-        confirm_button=ANALYSIS_CONFIRM_BUTTON,
-    )
-    await message.answer(
-        rendered.strip() or fallback,
-        reply_markup=analysis_confirm_keyboard(),
-    )
-
-
-async def _analysis_success_text(data: dict) -> str:
-    format_value, contact_value, time_value = _analysis_display_values(data)
+async def _analysis_success_text(request_text: str, contact: str | None) -> str:
     template = await get_content(
         "menu.analysis.success",
         _ANALYSIS_DEFAULT_SUCCESS,
     )
     rendered = render_content(
         template,
-        format=format_value,
-        contact=contact_value,
-        time=time_value,
+        request=request_text or "",
+        REQUEST=request_text or "",
+        contact=contact or "",
+        CONTACT=contact or "",
     )
     fallback = render_content(
         _ANALYSIS_DEFAULT_SUCCESS,
-        format=format_value,
-        contact=contact_value,
-        time=time_value,
+        request=request_text or "",
+        REQUEST=request_text or "",
+        contact=contact or "",
+        CONTACT=contact or "",
     )
     return rendered.strip() or fallback
 
@@ -4936,6 +4890,95 @@ async def list_material_categories(
     return result
 
 
+async def list_material_assets(
+    category_id: int,
+    *,
+    include_inactive: bool = False,
+) -> list[dict]:
+    where_clauses = ["category_id=$1"]
+    params: list[Any] = [category_id]
+    if not include_inactive:
+        where_clauses.append("is_active")
+    where_sql = " AND ".join(where_clauses)
+    rows = await fetch(
+        f"""
+        SELECT id, category_id, asset_type, title, body, file_id, sort_order, is_active, created_at, updated_at
+          FROM material_assets
+         WHERE {where_sql}
+         ORDER BY sort_order ASC, id ASC
+        """,
+        *params,
+    )
+    return [dict(row) for row in rows or []]
+
+
+async def create_material_asset(
+    *,
+    category_id: int,
+    asset_type: str,
+    title: str | None = None,
+    body: str | None = None,
+    file_id: str | None = None,
+    sort_order: int = 100,
+) -> Optional[dict]:
+    normalized_type = asset_type.strip().lower()
+    if normalized_type not in _MATERIAL_ASSET_TYPES:
+        raise ValueError(f"unsupported asset type: {asset_type}")
+
+    row = await fetchrow(
+        """
+        INSERT INTO material_assets (
+            category_id,
+            asset_type,
+            title,
+            body,
+            file_id,
+            sort_order,
+            is_active,
+            created_at,
+            updated_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, TRUE, NOW(), NOW())
+        RETURNING id, category_id, asset_type, title, body, file_id, sort_order, is_active, created_at, updated_at
+        """,
+        category_id,
+        normalized_type,
+        title or None,
+        body or None,
+        file_id or None,
+        sort_order,
+    )
+    return dict(row) if row else None
+
+
+async def get_material_asset_by_id(
+    asset_id: int,
+    *,
+    include_inactive: bool = False,
+) -> Optional[dict]:
+    row = await fetchrow(
+        """
+        SELECT id, category_id, asset_type, title, body, file_id, sort_order, is_active, created_at, updated_at
+          FROM material_assets
+         WHERE id=$1
+        """,
+        asset_id,
+    )
+    if not row:
+        return None
+    if not include_inactive and not row.get("is_active"):
+        return None
+    return dict(row)
+
+
+async def delete_material_asset(asset_id: int) -> bool:
+    row = await fetchrow(
+        "DELETE FROM material_assets WHERE id=$1 RETURNING id",
+        asset_id,
+    )
+    return row is not None
+
+
 async def user_has_material_access(
     user_row: Optional[dict],
     category: dict,
@@ -5307,6 +5350,37 @@ async def send_materials_challenges_section(
     )
 
 
+async def _send_material_asset_entry(message: types.Message, asset: dict) -> None:
+    asset_type = (asset.get("asset_type") or "").strip().lower()
+    title = (asset.get("title") or "").strip()
+    body = (asset.get("body") or "").strip()
+    caption_parts = [part for part in (title, body) if part]
+
+    if asset_type == "text":
+        if not caption_parts:
+            return
+        text = "\n\n".join(caption_parts)
+        await message.answer(text, disable_web_page_preview=True)
+        return
+
+    file_id = (asset.get("file_id") or "").strip()
+    if not file_id:
+        return
+
+    caption = "\n\n".join(caption_parts) if caption_parts else None
+
+    if asset_type == "audio":
+        await message.answer_audio(file_id, caption=caption or None)
+        return
+    if asset_type == "video":
+        await message.answer_video(
+            file_id,
+            caption=caption or None,
+            supports_streaming=True,
+        )
+        return
+
+
 async def send_materials_category_section(
     message: types.Message,
     user: Optional[dict],
@@ -5419,6 +5493,18 @@ async def send_materials_category_section(
         from_callback=from_callback,
         custom_keyboard=keyboard,
     )
+
+    assets = await list_material_assets(category["id"])
+    for asset in assets:
+        try:
+            await _send_material_asset_entry(message, asset)
+        except Exception as exc:
+            logger.warning(
+                "materials: failed to deliver asset id=%s type=%s err=%s",
+                asset.get("id"),
+                asset.get("asset_type"),
+                exc,
+            )
 
 
 async def send_schedule_section(
@@ -7822,104 +7908,45 @@ async def menu_analysis(message: types.Message, state: FSMContext):
                 exc,
             )
 
-    await state.set_state(AnalysisStates.waiting_format)
-    await state.update_data(analysis_user_id=user_id)
-    await _analysis_send_format_prompt(message, include_intro=True)
+    contact_guess = _analysis_guess_contact(user, message.from_user)
+
+    await state.set_state(AnalysisStates.waiting_request)
+    await state.update_data(
+        analysis_user_id=user_id,
+        analysis_contact=contact_guess or None,
+    )
+    await _analysis_send_request_prompt(message, include_intro=True)
 
 
-@router.message(AnalysisStates.waiting_format)
-async def analysis_collect_format(message: types.Message, state: FSMContext):
+@router.message(AnalysisStates.waiting_request)
+async def analysis_collect_request(message: types.Message, state: FSMContext):
     text = (message.text or "").strip()
-    if _analysis_normalize_text(text) == _analysis_normalize_text(CANCEL_TEXT):
+    cancel_token = (CANCEL_TEXT or "").strip().casefold()
+    if cancel_token and text.casefold() == cancel_token:
         await cancel_handler(message, state)
-        return
-    if _analysis_is_back(text):
-        await _analysis_send_format_prompt(message)
         return
 
     if not text:
-        await _analysis_send_format_retry(message)
-        return
-
-    await state.update_data(analysis_format=text)
-    await state.set_state(AnalysisStates.waiting_contact)
-    await _analysis_send_contact_prompt(message)
-
-
-@router.message(AnalysisStates.waiting_contact)
-async def analysis_collect_contact(message: types.Message, state: FSMContext):
-    text = (message.text or "").strip()
-    if _analysis_normalize_text(text) == _analysis_normalize_text(CANCEL_TEXT):
-        await cancel_handler(message, state)
-        return
-    if _analysis_is_back(text):
-        await state.set_state(AnalysisStates.waiting_format)
-        await _analysis_send_format_prompt(message)
-        return
-
-    if not text:
-        await _analysis_send_contact_retry(message)
-        return
-
-    await state.update_data(analysis_contact=text)
-    await state.set_state(AnalysisStates.waiting_time)
-    await _analysis_send_time_prompt(message)
-
-
-@router.message(AnalysisStates.waiting_time)
-async def analysis_collect_time(message: types.Message, state: FSMContext):
-    text = (message.text or "").strip()
-    if _analysis_normalize_text(text) == _analysis_normalize_text(CANCEL_TEXT):
-        await cancel_handler(message, state)
-        return
-    if _analysis_is_back(text):
-        await state.set_state(AnalysisStates.waiting_contact)
-        await _analysis_send_contact_prompt(message)
-        return
-
-    if not text:
-        await _analysis_send_time_retry(message)
-        return
-
-    await state.update_data(analysis_time=text)
-    await state.set_state(AnalysisStates.waiting_confirm)
-    await _analysis_send_confirm_prompt(message, state)
-
-
-@router.message(AnalysisStates.waiting_confirm)
-async def analysis_confirm_request(message: types.Message, state: FSMContext):
-    text = (message.text or "").strip()
-    if _analysis_normalize_text(text) == _analysis_normalize_text(CANCEL_TEXT):
-        await cancel_handler(message, state)
-        return
-    if _analysis_is_back(text):
-        await state.set_state(AnalysisStates.waiting_time)
-        await _analysis_send_time_prompt(message)
-        return
-
-    if _analysis_normalize_text(text) != _analysis_normalize_text(ANALYSIS_CONFIRM_BUTTON):
-        await _analysis_send_confirm_prompt(message, state)
+        await _analysis_send_request_retry(message)
         return
 
     data = await state.get_data()
-    if not data or not all(
-        (data.get(key) or "").strip() for key in ("analysis_format", "analysis_contact", "analysis_time")
-    ):
-        await state.set_state(AnalysisStates.waiting_format)
-        await _analysis_send_format_prompt(message, include_intro=True)
-        return
+    user_id = (data or {}).get("analysis_user_id")
+    stored_contact = (data or {}).get("analysis_contact")
 
-    format_raw = (data.get("analysis_format") or "").strip()
-    contact_raw = (data.get("analysis_contact") or "").strip()
-    time_raw = (data.get("analysis_time") or "").strip()
-    user_id = data.get("analysis_user_id")
+    user, is_admin = await _get_user_and_admin(message)
+    if not user:
+        user = await ensure_user(message.from_user)
+    if not user_id:
+        user_id = (user or {}).get("id")
+
+    contact = (stored_contact or "").strip() or _analysis_guess_contact(user, message.from_user)
 
     request_row = await create_analysis_request(
         tg_user_id=message.from_user.id,
         user_id=user_id,
-        preferred_format=format_raw,
-        contact=contact_raw,
-        preferred_time=time_raw,
+        request_text=text,
+        contact=contact or None,
     )
 
     if user_id and request_row:
@@ -7935,7 +7962,8 @@ async def analysis_confirm_request(message: types.Message, state: FSMContext):
     notify_admins = _get_notify_admins()
     if request_row and notify_admins and await _is_form_notification_enabled(FORM_SLUG_ANALYSIS):
         try:
-            format_value, contact_value, time_value = _analysis_display_values(data)
+            request_preview = (textwrap.shorten(text, width=180, placeholder="…") or "—")
+            contact_display = html.escape(contact) if contact else "—"
             card_lines = [
                 "🧭 Заявка на разбор",
                 f"tg-id: <code>{message.from_user.id}</code>",
@@ -7945,13 +7973,9 @@ async def analysis_confirm_request(message: types.Message, state: FSMContext):
             full_name = (message.from_user.full_name or "").strip()
             if full_name:
                 card_lines.append(f"Имя: {html.escape(full_name)}")
-            card_lines.extend(
-                [
-                    f"Формат: {format_value}",
-                    f"Контакт: {contact_value}",
-                    f"Время: {time_value}",
-                ]
-            )
+            card_lines.append(f"Контакт: {contact_display}")
+            card_lines.append("Запрос:")
+            card_lines.append(html.escape(text.strip()) or request_preview)
             await notify_admins("\n".join(card_lines))
         except Exception as exc:
             logger.warning(
@@ -7960,12 +7984,8 @@ async def analysis_confirm_request(message: types.Message, state: FSMContext):
                 exc,
             )
 
-    success_text = await _analysis_success_text(data)
+    success_text = await _analysis_success_text(text, contact)
     await state.clear()
-
-    user, is_admin = await _get_user_and_admin(message)
-    if not user:
-        user = await ensure_user(message.from_user)
 
     await answer_with_main_menu(
         message,
@@ -8658,6 +8678,38 @@ async def cancel_handler(message: types.Message, state: FSMContext):
         )
         return
 
+    if (
+        current_state
+        in {
+            AdminMaterialAssetsStates.waiting_add_text.state,
+            AdminMaterialAssetsStates.waiting_add_media.state,
+            AdminMaterialAssetsStates.waiting_delete_choice.state,
+        }
+        and is_admin
+    ):
+        slug = (data or {}).get("assets_category_slug")
+        category = (
+            await get_material_category_by_slug(slug, include_inactive=True)
+            if slug
+            else None
+        )
+        if slug and category:
+            await state.set_state(AdminMaterialAssetsStates.waiting_action)
+            await state.update_data(assets_category_slug=slug)
+            overview = await _render_admin_material_assets_overview(category)
+            await message.answer(
+                "Действие отменено.\n\n" + overview,
+                reply_markup=admin_material_assets_keyboard(),
+                parse_mode=ParseMode.HTML,
+                disable_web_page_preview=True,
+            )
+        else:
+            await message.answer(
+                "Действие отменено. Возвращаю в раздел «Материалы».",
+                reply_markup=admin_materials_keyboard(),
+            )
+        return
+
     if current_state in {
         AdminMaterialsStates.waiting_create_payload.state,
         AdminMaterialsStates.waiting_update_payload.state,
@@ -8693,6 +8745,7 @@ async def cancel_handler(message: types.Message, state: FSMContext):
         current_state
         in {
             AdminBehaviorStates.waiting_start_text.state,
+            AdminBehaviorStates.waiting_start_media.state,
             AdminBehaviorStates.waiting_registration_text.state,
         }
         and is_admin
@@ -8807,6 +8860,129 @@ async def admin_behavior_entry(message: types.Message, state: FSMContext):
         return
     await _reset_state_if_needed(state)
     await send_admin_behavior_menu(message)
+
+
+@router.message(F.text == ADMIN_BEHAVIOR_START_MEDIA)
+async def admin_behavior_start_media_prompt(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+    await _reset_state_if_needed(state)
+    media = await _get_start_media_config()
+    summary = _format_start_media_summary(media)
+    lines = [
+        "<b>Медиа приветствия /start</b>",
+        "",
+        summary,
+        "",
+        "Пришли фото или видео. Можно добавить подпись — она сохранится в медиа.",
+        "Чтобы удалить медиаприветствие, напиши «Удалить».",
+    ]
+    await state.set_state(AdminBehaviorStates.waiting_start_media)
+    await message.answer(
+        "\n".join(lines),
+        reply_markup=cancel_keyboard(),
+        parse_mode=ParseMode.HTML,
+        disable_web_page_preview=True,
+    )
+
+
+@router.message(
+    AdminBehaviorStates.waiting_start_media,
+    F.photo | F.video,
+)
+async def admin_behavior_start_media_receive_media(
+    message: types.Message, state: FSMContext
+) -> None:
+    if not is_admin_id(message.from_user.id):
+        await state.clear()
+        return
+
+    media_type: str
+    file_id: str
+    if message.photo:
+        media_type = "photo"
+        file_id = message.photo[-1].file_id
+    elif message.video:
+        media_type = "video"
+        file_id = message.video.file_id
+    else:
+        await message.answer(
+            "Пришли фото или видео. Чтобы удалить медиаприветствие, напиши «Удалить».",
+            reply_markup=cancel_keyboard(),
+        )
+        return
+
+    caption = (message.caption or "").strip()
+    media_payload = {"type": media_type, "file_id": file_id}
+    if caption:
+        media_payload["caption"] = caption
+
+    await _set_start_media_config(media_payload, updated_by=message.from_user.id)
+    await log_admin_action(
+        message.from_user.id,
+        "behavior_start_media_update",
+        {"type": media_type},
+    )
+
+    await state.clear()
+
+    await message.answer(
+        "<b>Медиа обновлено. Предпросмотр:</b>",
+        parse_mode=ParseMode.HTML,
+        disable_web_page_preview=True,
+    )
+
+    try:
+        if media_type == "photo":
+            await message.answer_photo(file_id, caption=caption or None)
+        else:
+            await message.answer_video(
+                file_id,
+                caption=caption or None,
+                supports_streaming=True,
+            )
+    except Exception as exc:
+        logger.warning(
+            "behavior_start_media preview failed type=%s err=%s",
+            media_type,
+            exc,
+        )
+
+    await message.answer(
+        "Готово!",
+        reply_markup=admin_behavior_keyboard(),
+        disable_web_page_preview=True,
+    )
+
+
+@router.message(AdminBehaviorStates.waiting_start_media, F.text.len() > 0)
+async def admin_behavior_start_media_receive_text(
+    message: types.Message, state: FSMContext
+) -> None:
+    if not is_admin_id(message.from_user.id):
+        await state.clear()
+        return
+
+    normalized = message.text.strip().lower()
+    if normalized in {"удалить", "delete", "очистить", "remove"}:
+        await _set_start_media_config(None, updated_by=message.from_user.id)
+        await log_admin_action(
+            message.from_user.id,
+            "behavior_start_media_clear",
+            {},
+        )
+        await state.clear()
+        await message.answer(
+            "Медиа приветствия удалено.",
+            reply_markup=admin_behavior_keyboard(),
+            disable_web_page_preview=True,
+        )
+        return
+
+    await message.answer(
+        "Пришли фото или видео. Чтобы удалить медиаприветствие, напиши «Удалить».",
+        reply_markup=cancel_keyboard(),
+    )
 
 
 @router.message(F.text == ADMIN_BEHAVIOR_START)
@@ -10253,6 +10429,67 @@ async def _collect_all_material_slugs() -> list[str]:
     return slugs
 
 
+def _format_admin_material_asset_line(asset: dict) -> str:
+    status_icon = "✅" if asset.get("is_active") else "⛔️"
+    asset_type = (asset.get("asset_type") or "").strip().lower()
+    type_labels = {"text": "Текст", "audio": "Аудио", "video": "Видео"}
+    type_label = type_labels.get(asset_type, asset_type or "Материал")
+    title = (asset.get("title") or "").strip()
+    body = (asset.get("body") or "").strip()
+    description = title or body.splitlines()[0] if body else ""
+    if description:
+        description = textwrap.shorten(description, width=70, placeholder="…")
+    else:
+        description = type_label
+    return (
+        f"{status_icon} #{asset.get('id')} • {type_label} — {html.escape(description)}"
+    )
+
+
+def _split_admin_asset_text(raw: str) -> tuple[str | None, str]:
+    text = (raw or "").strip()
+    if not text:
+        return "", ""
+    parts = text.split("\n\n", 1)
+    if len(parts) == 2:
+        title = parts[0].strip()
+        body = parts[1].strip()
+        if not body and title:
+            return "", title
+        return title, body
+    return "", text
+
+
+async def _render_admin_material_assets_overview(
+    category: dict,
+    *,
+    limit: int = 10,
+) -> str:
+    assets = await list_material_assets(category["id"], include_inactive=True)
+    total = len(assets)
+    active = sum(1 for asset in assets if asset.get("is_active"))
+
+    header = (
+        f"<b>{html.escape(category['title'])}</b>"
+        f" (<code>{html.escape(category['slug'])}</code>)"
+    )
+    lines = [
+        header,
+        f"Активных материалов: {active} / {total}",
+    ]
+
+    if assets:
+        lines.append("")
+        for asset in assets[:limit]:
+            lines.append(_format_admin_material_asset_line(asset))
+        if total > limit:
+            lines.append(f"… и ещё {total - limit}")
+    else:
+        lines.append("Материалы ещё не добавлены.")
+
+    return "\n".join(lines)
+
+
 async def _render_materials_tree() -> str:
     counts = await _material_access_counts()
     roots = await list_material_categories(include_inactive=True)
@@ -10316,6 +10553,410 @@ async def admin_materials_list(message: types.Message, state: FSMContext):
         reply_markup=admin_materials_keyboard(),
         parse_mode=ParseMode.HTML,
     )
+
+
+@router.message(F.text == ADMIN_MATERIALS_ASSETS)
+async def admin_materials_assets_menu(message: types.Message, state: FSMContext):
+    if not is_admin_id(message.from_user.id):
+        return
+    await _reset_state_if_needed(state)
+    slugs = await _collect_all_material_slugs()
+    prompt = (
+        "<b>Материалы разделов</b>\n\n"
+        "Выбери категорию, чтобы добавить текст, аудио или видео материалы."
+    )
+    await state.set_state(AdminMaterialAssetsStates.waiting_category)
+    await message.answer(
+        prompt,
+        reply_markup=admin_materials_categories_keyboard(slugs),
+        parse_mode=ParseMode.HTML,
+    )
+
+
+@router.message(AdminMaterialAssetsStates.waiting_category, F.text.len() > 0)
+async def admin_materials_assets_choose_category(
+    message: types.Message, state: FSMContext
+):
+    if not is_admin_id(message.from_user.id):
+        await state.clear()
+        return
+
+    text = (message.text or "").strip()
+    if text in {BACK_TO_ADMIN, BACK_TO_MAIN}:
+        raise EventSkip()
+
+    category = await get_material_category_by_slug(text, include_inactive=True)
+    if not category:
+        slugs = await _collect_all_material_slugs()
+        await message.answer(
+            "Не удалось найти категорию. Выбери пункт из списка.",
+            reply_markup=admin_materials_categories_keyboard(slugs),
+        )
+        return
+
+    await state.set_state(AdminMaterialAssetsStates.waiting_action)
+    await state.update_data(assets_category_slug=category["slug"])
+    overview = await _render_admin_material_assets_overview(category)
+    await message.answer(
+        overview + "\n\nВыбери действие ниже.",
+        reply_markup=admin_material_assets_keyboard(),
+        parse_mode=ParseMode.HTML,
+        disable_web_page_preview=True,
+    )
+
+
+@router.message(AdminMaterialAssetsStates.waiting_action)
+async def admin_materials_assets_handle_action(
+    message: types.Message, state: FSMContext
+):
+    if not is_admin_id(message.from_user.id):
+        await state.clear()
+        return
+
+    data = await state.get_data()
+    slug = (data or {}).get("assets_category_slug")
+    if not slug:
+        await state.clear()
+        await send_admin_materials_menu(message)
+        return
+
+    category = await get_material_category_by_slug(slug, include_inactive=True)
+    if not category:
+        await state.clear()
+        await message.answer(
+            "Категория недоступна. Выбери другую категорию.",
+            reply_markup=admin_materials_keyboard(),
+        )
+        return
+
+    text = (message.text or "").strip()
+
+    if text == ADMIN_MATERIALS_ASSET_ADD_TEXT:
+        await state.set_state(AdminMaterialAssetsStates.waiting_add_text)
+        await state.update_data(assets_category_slug=slug)
+        await message.answer(
+            "Пришли текст материала.\n\n"
+            "Если нужен заголовок, напиши его в первой строке, затем оставь пустую строку и основной текст.",
+            reply_markup=cancel_keyboard(),
+        )
+        return
+
+    if text == ADMIN_MATERIALS_ASSET_ADD_AUDIO:
+        await state.set_state(AdminMaterialAssetsStates.waiting_add_media)
+        await state.update_data(assets_category_slug=slug, assets_asset_type="audio")
+        await message.answer(
+            "Пришли аудиофайл. Подпись можно использовать для описания материала.",
+            reply_markup=cancel_keyboard(),
+        )
+        return
+
+    if text == ADMIN_MATERIALS_ASSET_ADD_VIDEO:
+        await state.set_state(AdminMaterialAssetsStates.waiting_add_media)
+        await state.update_data(assets_category_slug=slug, assets_asset_type="video")
+        await message.answer(
+            "Пришли видеофайл. Подпись можно использовать для описания материала.",
+            reply_markup=cancel_keyboard(),
+        )
+        return
+
+    if text == ADMIN_MATERIALS_ASSET_LIST:
+        overview = await _render_admin_material_assets_overview(category, limit=20)
+        await message.answer(
+            overview,
+            reply_markup=admin_material_assets_keyboard(),
+            parse_mode=ParseMode.HTML,
+            disable_web_page_preview=True,
+        )
+        return
+
+    if text == ADMIN_MATERIALS_ASSET_DELETE:
+        assets = await list_material_assets(category["id"], include_inactive=True)
+        if not assets:
+            await message.answer(
+                "В этой категории пока нет материалов.",
+                reply_markup=admin_material_assets_keyboard(),
+            )
+            return
+        await state.set_state(AdminMaterialAssetsStates.waiting_delete_choice)
+        await state.update_data(assets_category_slug=slug)
+        lines = [
+            "<b>Удаление материала</b>",
+            "Выбери идентификатор материала из списка ниже.",
+            "",
+        ]
+        for asset in assets[:20]:
+            lines.append(_format_admin_material_asset_line(asset))
+        if len(assets) > 20:
+            lines.append(f"… и ещё {len(assets) - 20}")
+        lines.append("\nНапиши номер материала или нажми «Отмена».")
+        await message.answer(
+            "\n".join(lines),
+            reply_markup=cancel_keyboard(),
+            parse_mode=ParseMode.HTML,
+            disable_web_page_preview=True,
+        )
+        return
+
+    if text == BACK_TO_MATERIALS_ASSETS:
+        slugs = await _collect_all_material_slugs()
+        await state.set_state(AdminMaterialAssetsStates.waiting_category)
+        await message.answer(
+            "Выбери другую категорию.",
+            reply_markup=admin_materials_categories_keyboard(slugs),
+        )
+        return
+
+    if text in {BACK_TO_ADMIN, BACK_TO_MAIN}:
+        raise EventSkip()
+
+    await message.answer(
+        "Выбери действие из меню или вернись к списку категорий.",
+        reply_markup=admin_material_assets_keyboard(),
+    )
+
+
+@router.message(AdminMaterialAssetsStates.waiting_add_text, F.text.len() > 0)
+async def admin_materials_assets_receive_text(
+    message: types.Message, state: FSMContext
+):
+    if not is_admin_id(message.from_user.id):
+        await state.clear()
+        return
+
+    data = await state.get_data()
+    slug = (data or {}).get("assets_category_slug")
+    if not slug:
+        await state.clear()
+        await send_admin_materials_menu(message)
+        return
+
+    category = await get_material_category_by_slug(slug, include_inactive=True)
+    if not category:
+        await state.clear()
+        await send_admin_materials_menu(message)
+        return
+
+    title, body = _split_admin_asset_text(message.text)
+    if not (title or body):
+        await message.answer(
+            "Текст не распознан. Пришли сообщение с описанием материала.",
+            reply_markup=cancel_keyboard(),
+        )
+        return
+
+    asset = await create_material_asset(
+        category_id=category["id"],
+        asset_type="text",
+        title=title or None,
+        body=body or None,
+    )
+    await log_admin_action(
+        message.from_user.id,
+        "materials_asset_create",
+        {"category": slug, "asset_id": asset.get("id") if asset else None, "type": "text"},
+    )
+
+    await state.set_state(AdminMaterialAssetsStates.waiting_action)
+    await state.update_data(assets_category_slug=slug)
+
+    await message.answer(
+        "<b>Текстовый материал добавлен.</b>",
+        parse_mode=ParseMode.HTML,
+        disable_web_page_preview=True,
+    )
+
+    overview = await _render_admin_material_assets_overview(category)
+    await message.answer(
+        overview + "\n\nВыбери действие ниже.",
+        reply_markup=admin_material_assets_keyboard(),
+        parse_mode=ParseMode.HTML,
+        disable_web_page_preview=True,
+    )
+
+
+@router.message(AdminMaterialAssetsStates.waiting_add_media, F.audio | F.video)
+async def admin_materials_assets_receive_media(
+    message: types.Message, state: FSMContext
+):
+    if not is_admin_id(message.from_user.id):
+        await state.clear()
+        return
+
+    data = await state.get_data()
+    slug = (data or {}).get("assets_category_slug")
+    asset_type = (data or {}).get("assets_asset_type")
+    if not slug or asset_type not in {"audio", "video"}:
+        await state.clear()
+        await send_admin_materials_menu(message)
+        return
+
+    category = await get_material_category_by_slug(slug, include_inactive=True)
+    if not category:
+        await state.clear()
+        await send_admin_materials_menu(message)
+        return
+
+    file_id: Optional[str] = None
+    title: str | None = None
+    body: str | None = None
+
+    caption = (message.caption or "").strip()
+    caption_title, caption_body = _split_admin_asset_text(caption)
+
+    if asset_type == "audio":
+        if not message.audio:
+            await message.answer(
+                "Пришли аудиофайл в формате .mp3, .m4a или .ogg.",
+                reply_markup=cancel_keyboard(),
+            )
+            return
+        file_id = message.audio.file_id
+        title = message.audio.title or caption_title or None
+        body = caption_body or None
+    elif asset_type == "video":
+        if not message.video:
+            await message.answer(
+                "Пришли видеофайл. Можно добавить подпись с описанием.",
+                reply_markup=cancel_keyboard(),
+            )
+            return
+        file_id = message.video.file_id
+        title = caption_title or None
+        body = caption_body or None
+
+    if not file_id:
+        await message.answer(
+            "Файл не распознан. Попробуй отправить его ещё раз.",
+            reply_markup=cancel_keyboard(),
+        )
+        return
+
+    asset = await create_material_asset(
+        category_id=category["id"],
+        asset_type=asset_type,
+        title=title,
+        body=body,
+        file_id=file_id,
+    )
+    await log_admin_action(
+        message.from_user.id,
+        "materials_asset_create",
+        {
+            "category": slug,
+            "asset_id": asset.get("id") if asset else None,
+            "type": asset_type,
+        },
+    )
+
+    await state.set_state(AdminMaterialAssetsStates.waiting_action)
+    await state.update_data(assets_category_slug=slug)
+
+    await message.answer(
+        "<b>Материал сохранён.</b>",
+        parse_mode=ParseMode.HTML,
+        disable_web_page_preview=True,
+    )
+
+    overview = await _render_admin_material_assets_overview(category)
+    await message.answer(
+        overview + "\n\nВыбери действие ниже.",
+        reply_markup=admin_material_assets_keyboard(),
+        parse_mode=ParseMode.HTML,
+        disable_web_page_preview=True,
+    )
+
+
+@router.message(AdminMaterialAssetsStates.waiting_add_media)
+async def admin_materials_assets_waiting_media_prompt(
+    message: types.Message, state: FSMContext
+):
+    if not is_admin_id(message.from_user.id):
+        await state.clear()
+        return
+    await message.answer(
+        "Отправь файл требуемого типа или нажми «Отмена».",
+        reply_markup=cancel_keyboard(),
+    )
+
+
+@router.message(AdminMaterialAssetsStates.waiting_delete_choice, F.text.len() > 0)
+async def admin_materials_assets_delete_choice(
+    message: types.Message, state: FSMContext
+):
+    if not is_admin_id(message.from_user.id):
+        await state.clear()
+        return
+
+    data = await state.get_data()
+    slug = (data or {}).get("assets_category_slug")
+    if not slug:
+        await state.clear()
+        await send_admin_materials_menu(message)
+        return
+
+    text = (message.text or "").strip()
+    if text in {BACK_TO_MATERIALS_ASSETS}:
+        slugs = await _collect_all_material_slugs()
+        await state.set_state(AdminMaterialAssetsStates.waiting_category)
+        await message.answer(
+            "Выбери категорию.",
+            reply_markup=admin_materials_categories_keyboard(slugs),
+        )
+        return
+
+    if text in {BACK_TO_ADMIN, BACK_TO_MAIN}:
+        raise EventSkip()
+
+    try:
+        asset_id = int(text)
+    except ValueError:
+        await message.answer(
+            "Укажи числовой идентификатор материала или нажми «Отмена».",
+            reply_markup=cancel_keyboard(),
+        )
+        return
+
+    asset = await get_material_asset_by_id(asset_id, include_inactive=True)
+    if not asset or asset.get("category_id") is None:
+        await message.answer(
+            "Материал не найден. Проверь идентификатор и попробуй снова.",
+            reply_markup=cancel_keyboard(),
+        )
+        return
+
+    category = await get_material_category_by_slug(slug, include_inactive=True)
+    if not category or asset.get("category_id") != category.get("id"):
+        await message.answer(
+            "Материал относится к другой категории. Укажи корректный идентификатор.",
+            reply_markup=cancel_keyboard(),
+        )
+        return
+
+    success = await delete_material_asset(asset_id)
+    await log_admin_action(
+        message.from_user.id,
+        "materials_asset_delete",
+        {"category": slug, "asset_id": asset_id, "success": success},
+    )
+
+    await state.set_state(AdminMaterialAssetsStates.waiting_action)
+    await state.update_data(assets_category_slug=slug)
+
+    if success:
+        await message.answer("Материал удалён.")
+    else:
+        await message.answer("Не удалось удалить материал. Попробуй позже.")
+
+    if category:
+        overview = await _render_admin_material_assets_overview(category)
+        await message.answer(
+            overview + "\n\nВыбери действие ниже.",
+            reply_markup=admin_material_assets_keyboard(),
+            parse_mode=ParseMode.HTML,
+            disable_web_page_preview=True,
+        )
+    else:
+        await send_admin_materials_menu(message)
 
 
 @router.message(F.text == ADMIN_MATERIALS_CREATE)
@@ -12977,9 +13618,8 @@ async def admin_stats_analysis_request_update_status(callback: types.CallbackQue
                ar.status,
                ar.created_at,
                ar.updated_at,
-               ar.preferred_format,
+               ar.request_text,
                ar.contact,
-               ar.preferred_time,
                ar.tg_user_id,
                ar.user_id,
                u.full_name,
