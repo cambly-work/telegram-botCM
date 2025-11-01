@@ -187,14 +187,13 @@ def main_menu_keyboard(
             KeyboardButton(text="📚 Библиотека"),
         ],
         [
-            KeyboardButton(text="Пройти тест"),
-            KeyboardButton(text="Забрать гайд"),
+            KeyboardButton(text="🧪 Пройти тест"),
+            KeyboardButton(text="📘 Забрать гайд"),
         ],
         [
-            KeyboardButton(text="Записаться на разбор"),
-            KeyboardButton(text="Окно в Магнетизм"),
+            KeyboardButton(text="🗓️ Записаться на разбор"),
+            KeyboardButton(text="✨ Окно в Магнетизм"),
         ],
-        [KeyboardButton(text="🆘 Поддержка")],
     ]
 
     if is_admin:
@@ -209,7 +208,7 @@ def main_menu_keyboard(
 
 def club_menu_keyboard(*, payments_open: bool, has_pay: bool) -> ReplyKeyboardMarkup:
     rows: list[list[KeyboardButton]] = [
-        [KeyboardButton(text="О клубе"), KeyboardButton(text="Правила")],
+        [KeyboardButton(text="🆘 Поддержка")],
         [KeyboardButton(text="FAQ"), KeyboardButton(text="📦 Материалы")],
         [KeyboardButton(text="🎓 Обучение")],
     ]
@@ -229,10 +228,10 @@ def learning_menu_keyboard() -> ReplyKeyboardMarkup:
             KeyboardButton(text=LEARNING_PROGRESS_BUTTON),
         ],
         [
-            KeyboardButton(text="Окно в Магнетизм"),
-            KeyboardButton(text="Записаться на разбор"),
+            KeyboardButton(text="✨ Окно в Магнетизм"),
+            KeyboardButton(text="🗓️ Записаться на разбор"),
         ],
-        [KeyboardButton(text="Пройти тест")],
+        [KeyboardButton(text="🧪 Пройти тест")],
         [KeyboardButton(text=BACK_TO_MAIN)],
     ]
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)

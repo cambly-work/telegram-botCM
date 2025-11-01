@@ -7928,7 +7928,7 @@ async def menu_lessons(message: types.Message, state: FSMContext):
     await send_funnel_section(message, user, has_admin_access)
 
 
-@router.message(StateFilter("*"), F.text == "Окно в Магнетизм")
+@router.message(StateFilter("*"), F.text == "✨ Окно в Магнетизм")
 async def menu_magnetism_window(message: types.Message, state: FSMContext):
     await _reset_state_if_needed(state)
     user = await get_user_with_id(message.from_user.id)
@@ -7939,7 +7939,7 @@ async def menu_magnetism_window(message: types.Message, state: FSMContext):
     await send_magnetism_window_section(message, user, has_admin_access)
 
 
-@router.message(StateFilter("*"), F.text == "Забрать гайд")
+@router.message(StateFilter("*"), F.text == "📘 Забрать гайд")
 async def menu_guide(message: types.Message, state: FSMContext):
     await _reset_state_if_needed(state)
     user, is_admin = await _get_user_and_admin(message)
@@ -7957,7 +7957,7 @@ async def menu_library(message: types.Message, state: FSMContext):
     await send_library_section(message, user, is_admin)
 
 
-@router.message(StateFilter("*"), F.text == "Записаться на разбор")
+@router.message(StateFilter("*"), F.text == "🗓️ Записаться на разбор")
 async def menu_analysis(message: types.Message, state: FSMContext):
     await _reset_state_if_needed(state)
     user, _ = await _get_user_and_admin(message)
@@ -8083,7 +8083,7 @@ async def analysis_confirm_request(message: types.Message, state: FSMContext):
     await cancel_handler(message, state)
 
 
-@router.message(StateFilter("*"), F.text == "Пройти тест")
+@router.message(StateFilter("*"), F.text == "🧪 Пройти тест")
 async def menu_test(message: types.Message, state: FSMContext):
     await _reset_state_if_needed(state)
     user, is_admin = await _get_user_and_admin(message)
