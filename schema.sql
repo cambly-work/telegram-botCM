@@ -407,6 +407,58 @@ CREATE INDEX IF NOT EXISTS idx_analysis_requests_status
 CREATE INDEX IF NOT EXISTS idx_analysis_requests_user
   ON analysis_requests(user_id);
 
+ALTER TABLE analysis_requests
+    ADD COLUMN IF NOT EXISTS request_text TEXT;
+
+DO $$
+BEGIN
+  IF EXISTS (
+      SELECT 1
+        FROM information_schema.columns
+       WHERE table_schema = 'public'
+         AND table_name = 'analysis_requests'
+         AND column_name = 'preferred_format'
+  ) AND EXISTS (
+      SELECT 1
+        FROM information_schema.columns
+       WHERE table_schema = 'public'
+         AND table_name = 'analysis_requests'
+         AND column_name = 'preferred_time'
+  ) THEN
+      UPDATE analysis_requests
+         SET request_text = NULLIF(
+              COALESCE(NULLIF(preferred_format, ''), '') ||
+              CASE
+                  WHEN preferred_time IS NOT NULL AND preferred_time <> '' AND preferred_format IS NOT NULL AND preferred_format <> ''
+                      THEN E'\n\n' || preferred_time
+                  WHEN preferred_time IS NOT NULL AND preferred_time <> ''
+                      THEN preferred_time
+                  ELSE ''
+              END,
+              ''
+          )
+       WHERE request_text IS NULL OR request_text = '';
+
+      UPDATE analysis_requests
+         SET request_text = 'Запрос не указан'
+       WHERE request_text IS NULL OR request_text = '';
+
+      ALTER TABLE analysis_requests
+          DROP COLUMN IF EXISTS preferred_format,
+          DROP COLUMN IF EXISTS preferred_time;
+  END IF;
+END$$;
+
+UPDATE analysis_requests
+   SET request_text = 'Запрос не указан'
+ WHERE request_text IS NULL OR request_text = '';
+
+ALTER TABLE analysis_requests
+    ALTER COLUMN request_text SET NOT NULL;
+
+ALTER TABLE analysis_requests
+    ALTER COLUMN contact DROP NOT NULL;
+
 -- TEST_REQUESTS
 CREATE TABLE IF NOT EXISTS test_requests (
   id             SERIAL PRIMARY KEY,
