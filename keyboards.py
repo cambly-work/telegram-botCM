@@ -208,9 +208,8 @@ def main_menu_keyboard(
 
 def club_menu_keyboard(*, payments_open: bool, has_pay: bool) -> ReplyKeyboardMarkup:
     rows: list[list[KeyboardButton]] = [
-        [KeyboardButton(text="🆘 Поддержка")],
-        [KeyboardButton(text="FAQ"), KeyboardButton(text="📦 Материалы")],
-        [KeyboardButton(text="🎓 Обучение")],
+        [KeyboardButton(text="🆘 Поддержка"), KeyboardButton(text="📦 Материалы")],
+        [KeyboardButton(text="FAQ 🙂"), KeyboardButton(text="🎓 Обучение")],
     ]
 
     if has_pay:
