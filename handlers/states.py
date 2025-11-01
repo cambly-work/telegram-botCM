@@ -9,6 +9,10 @@ class RegistrationStates(StatesGroup):
 
 class AnalysisStates(StatesGroup):
     waiting_request = State()
+    waiting_format = State()
+    waiting_contact = State()
+    waiting_time = State()
+    waiting_confirm = State()
 
 
 class HWStates(StatesGroup):

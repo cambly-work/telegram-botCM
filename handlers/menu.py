@@ -8,11 +8,10 @@ from aiogram.types import ReplyKeyboardMarkup
 import yaml
 
 from keyboards import (
-    info_menu_keyboard,
+    club_menu_keyboard,
     learning_menu_keyboard,
     main_menu_keyboard,
     materials_menu_keyboard,
-    profile_menu_keyboard,
 )
 from settings import YOOMONEY_CHECKOUT_URL
 
@@ -29,7 +28,9 @@ __all__ = [
     "answer_with_main_menu",
     "build_menu_keyboard",
     "send_about_section",
+    "send_guide_section",
     "send_faq_section",
+    "send_library_section",
     "send_menu_section",
     "send_magnetism_window_section",
     "send_pay_section",
@@ -42,10 +43,17 @@ _MENU_SECTION_PROMPTS: dict[str, tuple[str, str]] = {
         "menu.prompts.root",
         (
             "Главное меню.\n\n"
-            "Разделы: «О клубе», «Обучение», «Материалы» и «Профиль». Выбери, что интересно прямо сейчас."
+            "Выбирай: «Клуб», «Библиотека», тест, гайд, разбор или окно в Магнетизм."
         ),
     ),
-    "info": ("menu.prompts.info", "Раздел «О клубе».\n\nВыбери интересующий пункт."),
+    "club": (
+        "menu.prompts.club",
+        "Раздел «Клуб».\n\nОткрой описание, смотри материалы, обучение или переходи к оплате.",
+    ),
+    "info": (
+        "menu.prompts.club",
+        "Раздел «Клуб».\n\nОткрой описание, смотри материалы, обучение или переходи к оплате.",
+    ),
     "learning": (
         "menu.prompts.learning",
         "Раздел «Обучение».\n\nЗдесь собраны бесплатные уроки, «Мой прогресс», тест и запись на разбор.",
@@ -53,10 +61,6 @@ _MENU_SECTION_PROMPTS: dict[str, tuple[str, str]] = {
     "materials": (
         "menu.prompts.materials",
         "Раздел «Материалы».\n\nМатериалы недели, каталог клуба, практики, челленджи и расписание эфиров.",
-    ),
-    "profile": (
-        "menu.prompts.profile",
-        "Раздел «Профиль».\n\nПроверяй контакты, статус доступа и обновляй данные.",
     ),
 }
 
@@ -76,8 +80,8 @@ async def build_menu_keyboard(
     schedule_enabled = flags.get("show_schedule", True)
     has_pay = bool(AT_PRODUCT_ID_CLUB)
 
-    if section == "info":
-        return info_menu_keyboard()
+    if section in {"club", "info"}:
+        return club_menu_keyboard(payments_open=payments_open, has_pay=has_pay)
     if section == "learning":
         return learning_menu_keyboard()
     if section == "materials":
@@ -85,16 +89,9 @@ async def build_menu_keyboard(
             weekly_enabled=weekly_enabled,
             schedule_enabled=schedule_enabled,
         )
-    if section == "profile":
-        return profile_menu_keyboard(
-            has_pay=has_pay,
-            payments_open=payments_open,
-        )
 
     return main_menu_keyboard(
         is_admin=is_admin,
-        has_pay=has_pay,
-        payments_open=payments_open,
     )
 
 
@@ -172,7 +169,7 @@ async def send_about_section(
         user,
         is_admin,
         about_text,
-        section="info",
+        section="club",
         from_callback=from_callback,
     )
 
@@ -200,7 +197,7 @@ async def send_faq_section(
         user,
         is_admin,
         faq_text,
-        section="info",
+        section="club",
         from_callback=from_callback,
     )
 
@@ -230,7 +227,53 @@ async def send_rules_section(
         user,
         is_admin,
         rules_text,
-        section="info",
+        section="club",
+        from_callback=from_callback,
+    )
+
+
+async def send_guide_section(
+    message: types.Message,
+    user: Optional[dict],
+    is_admin: bool,
+    *,
+    from_callback: bool = False,
+) -> None:
+    default_text = (
+        "Гайд CODE: Магнетизм.\n\n"
+        "Добавь ссылку на гайд через админ-панель в разделе контента (ключ menu.guide)."
+    )
+    guide_text = await get_content("menu.guide", default_text)
+
+    await answer_with_main_menu(
+        message,
+        user,
+        is_admin,
+        guide_text,
+        section="root",
+        from_callback=from_callback,
+    )
+
+
+async def send_library_section(
+    message: types.Message,
+    user: Optional[dict],
+    is_admin: bool,
+    *,
+    from_callback: bool = False,
+) -> None:
+    default_text = (
+        "Библиотека CODE: Магнетизм.\n\n"
+        "Здесь собраны подборки постов по разделам. Добавляй новые материалы через админ-панель в разделе контента."
+    )
+    library_text = await get_content("menu.library", default_text)
+
+    await answer_with_main_menu(
+        message,
+        user,
+        is_admin,
+        library_text,
+        section="root",
         from_callback=from_callback,
     )
 
@@ -295,7 +338,7 @@ async def send_pay_section(
             user,
             is_admin,
             "Сейчас доступ в клуб бесплатный.",
-            section="root",
+            section="club",
             from_callback=from_callback,
         )
         return
@@ -312,51 +355,7 @@ async def send_pay_section(
             user,
             is_admin,
             closed_text,
-            section="root",
-            from_callback=from_callback,
-        )
-        return
-
-    user_row = user or {}
-    missing_contacts: list[str] = []
-    buttons_hint_parts: list[str] = []
-    if not user_row.get("email"):
-        missing_contacts.append("email")
-        buttons_hint_parts.append("«Изменить email»")
-    if not user_row.get("phone"):
-        missing_contacts.append("номер телефона")
-        buttons_hint_parts.append("«Изменить телефон»")
-
-    if missing_contacts:
-        if len(missing_contacts) == 1:
-            missing_text = missing_contacts[0]
-        else:
-            missing_text = " и ".join(missing_contacts)
-        buttons_hint = " и ".join(buttons_hint_parts)
-        missing_list = "\n".join(f"• {item}" for item in missing_contacts)
-        missing_template = await get_content(
-            "menu.pay.missing_contacts",
-            (
-                "Оплата недоступна без контактов. "
-                "Добавь {missing_contacts} в разделе «Профиль». "
-                "Используй {buttons_hint}, чтобы заполнить данные."
-            ),
-        )
-        notice = render_content(
-            missing_template,
-            missing_contacts=missing_text,
-            MISSING_CONTACTS=missing_text,
-            missing_contacts_list=missing_list,
-            MISSING_CONTACTS_LIST=missing_list,
-            buttons_hint=buttons_hint,
-            BUTTONS_HINT=buttons_hint,
-        )
-        await answer_with_main_menu(
-            message,
-            user,
-            is_admin,
-            notice,
-            section="root",
+            section="club",
             from_callback=from_callback,
         )
         return
@@ -393,7 +392,7 @@ async def send_pay_section(
         user,
         is_admin,
         pay_text,
-        section="root",
+        section="club",
         from_callback=from_callback,
     )
 
