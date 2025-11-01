@@ -48,7 +48,7 @@ def test_send_pay_section_uses_default_template_for_yaml_dump(monkeypatch):
     assert text.strip().endswith("Ручная проверка активирована.")
 
 
-def test_send_pay_section_requires_contacts(monkeypatch):
+def test_send_pay_section_without_contacts(monkeypatch):
     captured: dict[str, object] = {}
 
     async def fake_get_menu_flags():
@@ -78,6 +78,5 @@ def test_send_pay_section_requires_contacts(monkeypatch):
     asyncio.run(run())
 
     text = captured.get("text", "")
-    assert "Оплата недоступна" in text
-    assert "Профиль" in text
-    assert "Изменить email" in text
+    assert "Ссылка на оплату: https://example.com/pay" in text
+    assert "Профиль" not in text

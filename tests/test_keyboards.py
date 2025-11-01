@@ -66,7 +66,7 @@ from keyboards import (
     cancel_keyboard,
     materials_menu_keyboard,
     learning_menu_keyboard,
-    profile_menu_keyboard,
+    club_menu_keyboard,
     admin_behavior_keyboard,
     admin_broadcast_keyboard,
     admin_broadcast_segments_keyboard,
@@ -333,11 +333,28 @@ def test_admin_settings_keyboard_no_content_shortcuts():
     assert flattened[: len(expected)] == expected
 
 
-def test_profile_menu_keyboard_adds_progress_button():
+def test_club_menu_keyboard_layout():
     rows = _keyboard_texts(
-        profile_menu_keyboard(has_pay=True, payments_open=True)
+        club_menu_keyboard(payments_open=True, has_pay=True)
     )
-    assert rows[0] == ["Мой профиль", LEARNING_PROGRESS_BUTTON]
+    assert rows[0] == ["О клубе", "Правила"]
+    assert rows[1] == ["FAQ", "📦 Материалы"]
+    assert rows[2] == ["🎓 Обучение"]
+    assert [BACK_TO_MAIN] == rows[-1]
+    flattened = [text for row in rows for text in row]
+    assert "💳 Оплата" in flattened
+
+
+def test_club_menu_keyboard_respects_payment_flags():
+    locked_rows = _keyboard_texts(
+        club_menu_keyboard(payments_open=False, has_pay=True)
+    )
+    assert any(text == "🔒 Оплата" for row in locked_rows for text in row)
+
+    no_pay_rows = _keyboard_texts(
+        club_menu_keyboard(payments_open=True, has_pay=False)
+    )
+    assert not any("Оплата" in text for row in no_pay_rows for text in row)
 
 
 def test_admin_user_card_keyboard_contains_progress_control():

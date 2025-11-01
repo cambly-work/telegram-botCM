@@ -23,7 +23,6 @@ SUPPORT_CONTACT = os.getenv("SUPPORT_CONTACT", "@codemagnetic").strip()
 BACK_TO_MAIN = "⬅️ В главное меню"
 BACK_TO_LEARNING = "⬅️ К обучению"
 BACK_TO_MATERIALS = "⬅️ К материалам"
-BACK_TO_PROFILE = "⬅️ К профилю"
 BACK_TO_ADMIN = "⬅️ В админку"
 BACK_TO_TEXT_GROUPS = "⬅️ К списку текстов"
 BACK_TO_LESSONS = "⬅️ К списку уроков"
@@ -181,26 +180,22 @@ MATERIALS_ARCHIVE_BUTTON = "Архив недель"
 def main_menu_keyboard(
     *,
     is_admin: bool,
-    has_pay: bool,
-    payments_open: bool,
 ) -> ReplyKeyboardMarkup:
     rows: list[list[KeyboardButton]] = [
         [
-            KeyboardButton(text="ℹ️ О клубе"),
-            KeyboardButton(text="🎓 Обучение"),
+            KeyboardButton(text="ℹ️ Клуб"),
+            KeyboardButton(text="📚 Библиотека"),
         ],
         [
-            KeyboardButton(text="📦 Материалы"),
-            KeyboardButton(text="👤 Профиль"),
+            KeyboardButton(text="Пройти тест"),
+            KeyboardButton(text="Забрать гайд"),
         ],
         [
-            KeyboardButton(text="🆘 Поддержка"),
+            KeyboardButton(text="Записаться на разбор"),
+            KeyboardButton(text="Окно в Магнетизм"),
         ],
+        [KeyboardButton(text="🆘 Поддержка")],
     ]
-
-    if has_pay:
-        pay_text = "💳 Оплата" if payments_open else "🔒 Оплата"
-        rows[-1].append(KeyboardButton(text=pay_text))
 
     if is_admin:
         rows.append([KeyboardButton(text="⚙️ Админка")])
@@ -212,12 +207,18 @@ def main_menu_keyboard(
     )
 
 
-def info_menu_keyboard() -> ReplyKeyboardMarkup:
-    rows = [
-        [KeyboardButton(text="О клубе"), KeyboardButton(text="FAQ")],
-        [KeyboardButton(text="Правила")],
-        [KeyboardButton(text=BACK_TO_MAIN)],
+def club_menu_keyboard(*, payments_open: bool, has_pay: bool) -> ReplyKeyboardMarkup:
+    rows: list[list[KeyboardButton]] = [
+        [KeyboardButton(text="О клубе"), KeyboardButton(text="Правила")],
+        [KeyboardButton(text="FAQ"), KeyboardButton(text="📦 Материалы")],
+        [KeyboardButton(text="🎓 Обучение")],
     ]
+
+    if has_pay:
+        pay_text = "💳 Оплата" if payments_open else "🔒 Оплата"
+        rows.append([KeyboardButton(text=pay_text)])
+
+    rows.append([KeyboardButton(text=BACK_TO_MAIN)])
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
 
@@ -286,29 +287,6 @@ def materials_menu_keyboard(
         resize_keyboard=True,
         input_field_placeholder="Раздел «Материалы»",
     )
-
-
-def profile_menu_keyboard(
-    *,
-    has_pay: bool,
-    payments_open: bool,
-) -> ReplyKeyboardMarkup:
-    rows: list[list[KeyboardButton]] = [
-        [
-            KeyboardButton(text="Мой профиль"),
-            KeyboardButton(text=LEARNING_PROGRESS_BUTTON),
-        ],
-        [KeyboardButton(text="Изменить email"), KeyboardButton(text="Изменить телефон")],
-    ]
-
-    if has_pay:
-        pay_text = "💳 Оплата" if payments_open else "🔒 Оплата"
-        rows.append([KeyboardButton(text=pay_text)])
-
-    rows.append([KeyboardButton(text=BACK_TO_MAIN)])
-    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
-
-
 def lessons_overview_keyboard(next_available: int) -> ReplyKeyboardMarkup:
     titles = {
         1: "Введение",

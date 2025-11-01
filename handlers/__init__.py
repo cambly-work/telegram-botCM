@@ -266,6 +266,8 @@ from .menu import (
     build_menu_keyboard,
     send_about_section,
     send_faq_section,
+    send_guide_section,
+    send_library_section,
     send_menu_section,
     send_magnetism_window_section,
     send_pay_section,
@@ -1851,10 +1853,21 @@ def _admin_user_segment_label(segment: str | None) -> str:
 
 
 def _admin_user_display_name(user: dict) -> str:
-    for key in ("name", "full_name"):
-        value = (user.get(key) or "").strip()
-        if value:
-            return value
+    profile_name = (
+        (user.get("name") or "")
+        or (user.get("full_name") or "")
+    ).strip()
+    if profile_name:
+        return profile_name
+
+    username = (user.get("username") or "").strip()
+    if username:
+        return f"@{username}"
+
+    tg_id = user.get("tg_user_id")
+    if tg_id:
+        return str(tg_id)
+
     return "—"
 
 
@@ -6511,6 +6524,9 @@ async def ensure_user(tg_user: types.User, utm: dict | None = None) -> dict:
     utm_medium = (utm or {}).get("utm_medium")
     utm_campaign = (utm or {}).get("utm_campaign")
 
+    full_name = (tg_user.full_name or tg_user.first_name or tg_user.last_name or "").strip() or None
+    username = (tg_user.username or "").strip() or None
+
     row = await fetchrow(
         """
         INSERT INTO users (tg_user_id, username, full_name, utm_source, utm_medium, utm_campaign, created_at, updated_at, last_activity_at)
@@ -6526,8 +6542,8 @@ async def ensure_user(tg_user: types.User, utm: dict | None = None) -> dict:
         RETURNING *
         """,
         tg_user.id,
-        tg_user.username,
-        tg_user.full_name,
+        username,
+        full_name,
         utm_source,
         utm_medium,
         utm_campaign,
@@ -6535,6 +6551,26 @@ async def ensure_user(tg_user: types.User, utm: dict | None = None) -> dict:
 
     if row and row["created_at"] == row["updated_at"]:
         logger.info("ensure_user: created user tg_id=%s id=%s", tg_user.id, row["id"])
+
+    if row:
+        current_name = (row.get("name") or "").strip()
+        preferred_name = current_name
+        if not preferred_name:
+            profile_name = (row.get("full_name") or full_name or "").strip()
+            if profile_name:
+                preferred_name = profile_name
+            elif username:
+                preferred_name = f"@{username}"
+            else:
+                preferred_name = str(tg_user.id)
+
+        if preferred_name and preferred_name != current_name:
+            await execute(
+                "UPDATE users SET name=$2, updated_at=NOW() WHERE id=$1",
+                row["id"],
+                preferred_name,
+            )
+            row["name"] = preferred_name
 
     return row
 async def is_member(user_row: dict) -> bool:
@@ -7794,7 +7830,15 @@ async def menu_back_to_main(message: types.Message, state: FSMContext):
     await send_menu_section(message, user, is_admin, "root")
 
 
-@router.message(StateFilter("*"), F.text == "ℹ️ О клубе")
+@router.message(StateFilter("*"), F.text.in_({"ℹ️ Клуб", "ℹ️ О клубе"}))
+async def menu_open_club(message: types.Message, state: FSMContext):
+    await _reset_state_if_needed(state)
+    user, is_admin = await _get_user_and_admin(message)
+    if not user:
+        user = await ensure_user(message.from_user)
+    await send_about_section(message, user, is_admin)
+
+
 async def menu_open_info(message: types.Message, state: FSMContext):
     await _reset_state_if_needed(state)
     user, is_admin = await _get_user_and_admin(message, require_user=True)
@@ -7822,12 +7866,17 @@ async def menu_open_materials(message: types.Message, state: FSMContext):
 
 
 @router.message(StateFilter("*"), F.text == "👤 Профиль")
-async def menu_open_profile(message: types.Message, state: FSMContext):
+async def menu_profile_disabled(message: types.Message, state: FSMContext):
     await _reset_state_if_needed(state)
-    user, is_admin = await _get_user_and_admin(message, require_user=True)
+    user, is_admin = await _get_user_and_admin(message)
     if not user:
-        return
-    await send_menu_section(message, user, is_admin, "profile")
+        user = await ensure_user(message.from_user)
+    await answer_with_main_menu(
+        message,
+        user,
+        is_admin,
+        "Раздел «Профиль» больше не используется. Контакты и имя подтягиваются автоматически.",
+    )
 
 
 @router.message(StateFilter("*"), F.text == "О клубе")
@@ -7854,9 +7903,9 @@ async def info_rules(message: types.Message, state: FSMContext):
 @router.message(StateFilter("*"), F.text.in_({"💳 Оплата", "🔒 Оплата"}))
 async def menu_pay(message: types.Message, state: FSMContext):
     await _reset_state_if_needed(state)
-    user, is_admin = await _get_user_and_admin(message, require_user=True)
+    user, is_admin = await _get_user_and_admin(message)
     if not user:
-        return
+        user = await ensure_user(message.from_user)
     await send_pay_section(message, user, is_admin)
 
 
@@ -7888,6 +7937,24 @@ async def menu_magnetism_window(message: types.Message, state: FSMContext):
         await message.answer("Перезапусти /start, чтобы загрузить профиль.")
         return
     await send_magnetism_window_section(message, user, has_admin_access)
+
+
+@router.message(StateFilter("*"), F.text == "Забрать гайд")
+async def menu_guide(message: types.Message, state: FSMContext):
+    await _reset_state_if_needed(state)
+    user, is_admin = await _get_user_and_admin(message)
+    if not user:
+        user = await ensure_user(message.from_user)
+    await send_guide_section(message, user, is_admin)
+
+
+@router.message(StateFilter("*"), F.text == "📚 Библиотека")
+async def menu_library(message: types.Message, state: FSMContext):
+    await _reset_state_if_needed(state)
+    user, is_admin = await _get_user_and_admin(message)
+    if not user:
+        user = await ensure_user(message.from_user)
+    await send_library_section(message, user, is_admin)
 
 
 @router.message(StateFilter("*"), F.text == "Записаться на разбор")
@@ -7994,6 +8061,26 @@ async def analysis_collect_request(message: types.Message, state: FSMContext):
         success_text,
         section="learning",
     )
+
+
+@router.message(AnalysisStates.waiting_format)
+async def analysis_collect_format(message: types.Message, state: FSMContext):
+    await cancel_handler(message, state)
+
+
+@router.message(AnalysisStates.waiting_contact)
+async def analysis_collect_contact(message: types.Message, state: FSMContext):
+    await cancel_handler(message, state)
+
+
+@router.message(AnalysisStates.waiting_time)
+async def analysis_collect_time(message: types.Message, state: FSMContext):
+    await cancel_handler(message, state)
+
+
+@router.message(AnalysisStates.waiting_confirm)
+async def analysis_confirm_request(message: types.Message, state: FSMContext):
+    await cancel_handler(message, state)
 
 
 @router.message(StateFilter("*"), F.text == "Пройти тест")
