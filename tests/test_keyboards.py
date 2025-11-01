@@ -338,7 +338,7 @@ def test_club_menu_keyboard_layout():
         club_menu_keyboard(payments_open=True, has_pay=True)
     )
     assert rows[0] == ["🆘 Поддержка", "📦 Материалы"]
-    assert rows[1] == ["FAQ 🙂", "🎓 Обучение"]
+    assert rows[1] == ["FAQ", "🎓 Обучение"]
     assert [BACK_TO_MAIN] == rows[-1]
     flattened = [text for row in rows for text in row]
     assert "💳 Оплата" in flattened
