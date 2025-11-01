@@ -7886,7 +7886,7 @@ async def info_about(message: types.Message, state: FSMContext):
     await send_about_section(message, user, is_admin)
 
 
-@router.message(StateFilter("*"), F.text == "FAQ")
+@router.message(StateFilter("*"), F.text == "FAQ 🙂")
 async def info_faq(message: types.Message, state: FSMContext):
     await _reset_state_if_needed(state)
     user, is_admin = await _get_user_and_admin(message)
