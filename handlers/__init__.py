@@ -84,7 +84,6 @@ from .states import (
     BroadcastStates,
     HWStates,
     ProfileStates,
-    RegistrationStates,
     SupportStates,
     TestStates,
 )
@@ -7036,39 +7035,6 @@ async def on_my_chat_member(event: types.ChatMemberUpdated):
     except Exception as e:
         logger.error(f"Error in my_chat_member: {e}", exc_info=True)
 # /start — создаём пользователя, захватываем UTM, показываем меню
-def _next_registration_step(user: Optional[dict]) -> Optional[str]:
-    if not user:
-        return "email"
-
-    email = str(user.get("email") or "").strip()
-    phone = str(user.get("phone") or "").strip()
-
-    if not email:
-        return "email"
-    if not phone:
-        return "phone"
-    return None
-
-
-async def _prompt_registration_step(
-    message: types.Message,
-    state: FSMContext,
-    step: str,
-) -> None:
-    if step == "email":
-        await state.set_state(RegistrationStates.waiting_email)
-        await message.answer(
-            "Укажи email для связи (можно пропустить):",
-            reply_markup=cancel_keyboard(cancel_text=SKIP_TEXT),
-        )
-    elif step == "phone":
-        await state.set_state(RegistrationStates.waiting_phone)
-        await message.answer(
-            "Укажи номер телефона (можно пропустить):",
-            reply_markup=cancel_keyboard(cancel_text=SKIP_TEXT),
-        )
-
-
 @router.message(CommandStart())
 async def on_start(message: types.Message, state: FSMContext):
     await _reset_state_if_needed(state)
@@ -7103,143 +7069,6 @@ async def on_start(message: types.Message, state: FSMContext):
     async with ChatActionSender.typing(chat_id=message.chat.id, bot=message.bot):
         await asyncio.sleep(0.15)
         await message.answer(welcome_text, reply_markup=kb)
-
-    next_step = _next_registration_step(user)
-    if next_step:
-        await _prompt_registration_step(message, state, next_step)
-
-# Обработка отмены на этапах регистрации
-async def _cancel_registration(message: types.Message, state: FSMContext) -> None:
-    await state.clear()
-    await message.answer(
-        "Регистрация отменена. Чтобы продолжить, напиши /start.",
-        reply_markup=ReplyKeyboardRemove(),
-    )
-
-
-async def _finish_registration(message: types.Message, state: FSMContext) -> None:
-    await state.clear()
-
-    user = await get_user_with_id(message.from_user.id)
-    has_admin_access = has_staff_access(message.from_user.id)
-
-    kb = await build_menu_keyboard(user=user, is_admin=has_admin_access, section="root")
-
-    completion_template = await get_content(
-        "menu.registration_complete",
-        "Регистрация завершена, {name}!\n\nТеперь тебе доступно:\n- Бесплатные уроки\n- Доступ в клуб\n- Отслеживание прогресса\n\nВыбирай в меню и начинай.",
-    )
-    display_name = (
-        (user or {}).get("name")
-        or (user or {}).get("full_name")
-        or message.from_user.full_name
-        or message.from_user.first_name
-        or "друг"
-    )
-    completion_text = render_content(
-        completion_template,
-        name=display_name,
-        NAME=display_name,
-    )
-
-    await message.answer(completion_text, reply_markup=kb)
-
-    notify_admins = _get_notify_admins()
-    if notify_admins and await _is_admin_setting_enabled("notify_registration"):
-        card_lines = [
-            "🆕 Новая регистрация",
-            f"tg-id: <code>{message.from_user.id}</code>",
-        ]
-        if user and user.get("id"):
-            card_lines.append(f"user-id: <code>{user['id']}</code>")
-        full_name = user.get("full_name") if user else None
-        if full_name:
-            card_lines.append(f"Имя в Telegram: {html.escape(full_name)}")
-        name = user.get("name") if user else None
-        if name:
-            card_lines.append(f"Имя в анкете: {html.escape(name)}")
-        username = user.get("username") if user else None
-        if username:
-            card_lines.append(f"username: @{username}")
-        email = user.get("email") if user else None
-        if email:
-            card_lines.append(f"email: {html.escape(email)}")
-        phone = user.get("phone") if user else None
-        if phone:
-            card_lines.append(f"phone: {html.escape(phone)}")
-
-        card_text = "\n".join(card_lines)
-        try:
-            await notify_admins(card_text)
-        except Exception as exc:
-            logger.warning(
-                "registration: notify_admins failed tg_user_id=%s err=%s",
-                message.from_user.id,
-                exc,
-            )
-
-
-@router.message(
-    StateFilter(RegistrationStates.waiting_email, RegistrationStates.waiting_phone),
-    F.text.casefold() == CANCEL_TEXT.lower(),
-)
-async def registration_cancel(message: types.Message, state: FSMContext):
-    await _cancel_registration(message, state)
-
-# Обработка пропуска email при регистрации
-@router.message(RegistrationStates.waiting_email, F.text.casefold() == SKIP_TEXT.lower())
-async def registration_skip_email(message: types.Message, state: FSMContext):
-    await state.set_state(RegistrationStates.waiting_phone)
-    await message.answer(
-        "Укажи номер телефона (можно пропустить):",
-        reply_markup=cancel_keyboard(cancel_text=SKIP_TEXT)
-    )
-
-
-# Обработка ввода email при регистрации
-@router.message(RegistrationStates.waiting_email, F.text.len() > 0)
-async def registration_receive_email(message: types.Message, state: FSMContext):
-    email = (message.text or "").strip()
-    
-    if not validate_email(email):
-        await message.answer(
-            "Формат неверный. Пример: name@mail.com",
-            reply_markup=cancel_keyboard(cancel_text=SKIP_TEXT)
-        )
-        return
-    
-    # Сохраняем email
-    await execute("UPDATE users SET email=$2, updated_at=NOW() WHERE tg_user_id=$1", message.from_user.id, email)
-    
-    # Переходим к вводу телефона
-    await state.set_state(RegistrationStates.waiting_phone)
-    await message.answer(
-        "Укажи номер телефона (можно пропустить):",
-        reply_markup=cancel_keyboard(cancel_text=SKIP_TEXT)
-    )
-
-# Обработка пропуска телефона при регистрации
-@router.message(RegistrationStates.waiting_phone, F.text.casefold() == SKIP_TEXT.lower())
-async def registration_skip_phone(message: types.Message, state: FSMContext):
-    await _finish_registration(message, state)
-
-
-# Обработка ввода телефона при регистрации
-@router.message(RegistrationStates.waiting_phone, F.text.len() > 0)
-async def registration_receive_phone(message: types.Message, state: FSMContext):
-    phone = normalize_phone(message.text or "")
-    
-    if not validate_phone(phone):
-        await message.answer(
-            "Формат неверный. Пример: +79991234567",
-            reply_markup=cancel_keyboard(cancel_text=SKIP_TEXT)
-        )
-        return
-    
-    # Сохраняем телефон
-    await execute("UPDATE users SET phone=$2, updated_at=NOW() WHERE tg_user_id=$1", message.from_user.id, phone)
-
-    await _finish_registration(message, state)
 
 async def _reset_state_if_needed(state: FSMContext) -> bool:
     """Сбрасывает активный FSM-стейт, если он есть."""
@@ -15301,8 +15130,6 @@ async def fallback(message: types.Message, state: FSMContext):
         HWStates.waiting_answer,
         HWStates.waiting_feedback,
         HWStates.waiting_question,
-        RegistrationStates.waiting_email,
-        RegistrationStates.waiting_phone,
         ProfileStates.waiting_email,
         ProfileStates.waiting_phone,
         AdminContentStates.waiting_value,

@@ -15,7 +15,6 @@ from handlers.states import (  # noqa: E402
     AnalysisStates,
     BroadcastStates,
     HWStates,
-    RegistrationStates,
     SupportStates,
     TestStates,
 )
@@ -125,227 +124,43 @@ def anyio_backend():
     return "asyncio"
 
 
-async def test_registration_smoke_flow(monkeypatch):
+async def test_start_opens_main_menu_without_registration(monkeypatch):
     events: list[tuple[str, dict]] = []
     user = DummyFromUser()
-    message = DummyMessage("Анна", user, events)
+    message = DummyMessage("/start", user, events)
     state = DummyState()
 
-    execute_calls: list[tuple] = []
-
-    async def fake_execute(*args, **kwargs):
-        execute_calls.append((args, kwargs))
-
-    monkeypatch.setattr(handlers, "execute", fake_execute, raising=False)
+    calls = {"count": 0}
 
     async def fake_get_user(_):
-        return {"id": 1, "name": "Анна", "email": "user@example.com", "phone": "+79991234567"}
-
-    monkeypatch.setattr(handlers, "get_user_with_id", fake_get_user, raising=False)
-    monkeypatch.setattr(handlers, "is_admin_id", lambda _: False, raising=False)
-    monkeypatch.setattr(handlers, "has_staff_access", lambda _: False, raising=False)
-
-    async def fake_build_menu_keyboard(*_, **__):
-        return "MENU_KB"
-
-    monkeypatch.setattr(handlers, "build_menu_keyboard", fake_build_menu_keyboard, raising=False)
-
-    async def fake_get_content(key, fallback):
-        return fallback
-
-    monkeypatch.setattr(handlers, "get_content", fake_get_content, raising=False)
-
-    def fake_render_content(template: str, **kwargs):
-        return template.format(**{k: v for k, v in kwargs.items() if isinstance(v, str)})
-
-    monkeypatch.setattr(handlers, "render_content", fake_render_content, raising=False)
-
-    await handlers._prompt_registration_step(message, state, "email")
-    assert await state.get_state() == RegistrationStates.waiting_email.state
-    assert any("Укажи email" in text for text, _ in events)
-    assert any("можно пропустить" in text for text, _ in events)
-
-    message.text = "непочта"
-    await handlers.registration_receive_email(message, state)
-    assert await state.get_state() == RegistrationStates.waiting_email.state
-    assert any("Формат неверный" in text for text, _ in events)
-
-    message.text = "user@example.com"
-    await handlers.registration_receive_email(message, state)
-    assert await state.get_state() == RegistrationStates.waiting_phone.state
-
-    message.text = "12345"
-    await handlers.registration_receive_phone(message, state)
-    assert await state.get_state() == RegistrationStates.waiting_phone.state
-    assert any("Пример: +79991234567" in text for text, _ in events)
-
-    message.text = "+7 (999) 123-45-67"
-    await handlers.registration_receive_phone(message, state)
-    assert await state.get_state() is None
-    assert any("Регистрация завершена" in text for text, _ in events)
-    assert execute_calls
-
-
-async def test_registration_skip_optional_contacts(monkeypatch):
-    events: list[tuple[str, dict]] = []
-    user = DummyFromUser()
-    message = DummyMessage(handlers.SKIP_TEXT, user, events)
-    state = DummyState()
-    await state.set_state(RegistrationStates.waiting_email)
-
-    execute_calls: list[tuple] = []
-
-    async def fake_execute(*args, **kwargs):
-        execute_calls.append((args, kwargs))
-
-    async def fake_get_user(_):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            return None
         return {"id": 1, "name": "Анна", "email": None, "phone": None}
 
-    async def fake_get_content(key, fallback):
-        return fallback
-
-    def fake_render_content(template: str, **kwargs):
-        return template
-
-    async def fake_is_admin_setting_enabled(key: str) -> bool:
-        return False
-
-    monkeypatch.setattr(handlers, "execute", fake_execute, raising=False)
-    monkeypatch.setattr(handlers, "get_user_with_id", fake_get_user, raising=False)
-    monkeypatch.setattr(handlers, "has_staff_access", lambda _: False, raising=False)
-
-    async def fake_build_menu_keyboard(*args, **kwargs):
-        return "MENU_KB"
-
-    monkeypatch.setattr(handlers, "build_menu_keyboard", fake_build_menu_keyboard, raising=False)
-    monkeypatch.setattr(handlers, "get_content", fake_get_content, raising=False)
-    monkeypatch.setattr(handlers, "render_content", fake_render_content, raising=False)
-    monkeypatch.setattr(handlers, "_get_notify_admins", lambda: None, raising=False)
-    monkeypatch.setattr(handlers, "_is_admin_setting_enabled", fake_is_admin_setting_enabled, raising=False)
-
-    await handlers.registration_skip_email(message, state)
-    assert await state.get_state() == RegistrationStates.waiting_phone.state
-    assert any("номер телефона" in text for text, _ in events)
-
-    message.text = handlers.SKIP_TEXT
-    await handlers.registration_skip_phone(message, state)
-    assert await state.get_state() is None
-    assert not execute_calls
-    assert any("Регистрация завершена" in text for text, _ in events)
-
-
-async def test_registration_cancel_drops_state(monkeypatch):
-    events: list[tuple[str, dict]] = []
-    user = DummyFromUser()
-    message = DummyMessage(handlers.CANCEL_TEXT, user, events)
-    state = DummyState()
-    await state.set_state(RegistrationStates.waiting_email)
-
-    execute_calls: list[tuple] = []
-
-    async def fake_execute(*args, **kwargs):
-        execute_calls.append((args, kwargs))
-
-    monkeypatch.setattr(handlers, "execute", fake_execute, raising=False)
-
-    await handlers.registration_cancel(message, state)
-
-    assert await state.get_state() is None
-    assert not execute_calls
-    assert events
-    text, kwargs = events[-1]
-    assert "Регистрация отменена" in text
-    reply_markup = kwargs.get("reply_markup")
-    assert isinstance(reply_markup, aiogram_types.ReplyKeyboardRemove)
-    assert reply_markup.remove_keyboard is True
-
-
-async def test_registration_notifies_admins_when_enabled(monkeypatch):
-    events: list[tuple[str, dict]] = []
-    user = DummyFromUser(user_id=808, username="newbie")
-    message = DummyMessage("+79991234567", user, events)
-    state = DummyState()
-    await state.set_state(RegistrationStates.waiting_phone)
-
-    notifications: list[str] = []
-
-    async def fake_execute(*args, **kwargs):
+    async def fake_ensure_user(*args, **kwargs):
         return None
 
-    async def fake_get_user(_):
-        return {
-            "id": 55,
-            "full_name": "New User",
-            "email": "user@example.com",
-        }
-
     async def fake_get_content(key, fallback):
-        if key == "settings.notify_registration":
-            return "true"
         return fallback
 
     def fake_render_content(template: str, **kwargs):
         return template.format(**{k: v for k, v in kwargs.items() if isinstance(v, str)})
 
-    async def fake_notify(text: str):
-        notifications.append(text)
-
-    monkeypatch.setattr(handlers, "execute", fake_execute, raising=False)
     monkeypatch.setattr(handlers, "get_user_with_id", fake_get_user, raising=False)
-    monkeypatch.setattr(handlers, "is_admin_id", lambda _: False, raising=False)
+    monkeypatch.setattr(handlers, "ensure_user", fake_ensure_user, raising=False)
     monkeypatch.setattr(handlers, "has_staff_access", lambda _: False, raising=False)
     monkeypatch.setattr(handlers, "get_content", fake_get_content, raising=False)
     monkeypatch.setattr(handlers, "render_content", fake_render_content, raising=False)
-    monkeypatch.setattr(handlers, "_get_notify_admins", lambda: fake_notify, raising=False)
-    monkeypatch.setattr(handlers, "_notify_admins_cached", None, raising=False)
 
-    await handlers.registration_receive_phone(message, state)
+    await handlers.on_start(message, state)
 
-    assert notifications and "Новая регистрация" in notifications[0]
-
-
-async def test_registration_notifications_disabled(monkeypatch):
-    events: list[tuple[str, dict]] = []
-    user = DummyFromUser(user_id=909, username="quiet")
-    message = DummyMessage("+79991234567", user, events)
-    state = DummyState()
-    await state.set_state(RegistrationStates.waiting_phone)
-
-    notifications: list[str] = []
-
-    async def fake_execute(*args, **kwargs):
-        return None
-
-    async def fake_get_user(_):
-        return {
-            "id": 77,
-            "full_name": "Silent User",
-            "email": "silent@example.com",
-        }
-
-    async def fake_get_content(key, fallback):
-        if key == "settings.notify_registration":
-            return "false"
-        return fallback
-
-    def fake_render_content(template: str, **kwargs):
-        return template.format(**{k: v for k, v in kwargs.items() if isinstance(v, str)})
-
-    async def fake_notify(text: str):
-        notifications.append(text)
-
-    monkeypatch.setattr(handlers, "execute", fake_execute, raising=False)
-    monkeypatch.setattr(handlers, "get_user_with_id", fake_get_user, raising=False)
-    monkeypatch.setattr(handlers, "is_admin_id", lambda _: False, raising=False)
-    monkeypatch.setattr(handlers, "has_staff_access", lambda _: False, raising=False)
-    monkeypatch.setattr(handlers, "get_content", fake_get_content, raising=False)
-    monkeypatch.setattr(handlers, "render_content", fake_render_content, raising=False)
-    monkeypatch.setattr(handlers, "_get_notify_admins", lambda: fake_notify, raising=False)
-    monkeypatch.setattr(handlers, "_notify_admins_cached", None, raising=False)
-
-    await handlers.registration_receive_phone(message, state)
-
-    assert notifications == []
+    assert await state.get_state() is None
+    assert len(events) == 1
+    text, kwargs = events[0]
+    assert "Добро пожаловать" in text
+    assert kwargs.get("reply_markup") == "MENU_KB"
+    assert calls["count"] >= 2
 
 
 async def test_hw_answer_to_feedback_transition(monkeypatch):

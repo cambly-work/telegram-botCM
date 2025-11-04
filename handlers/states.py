@@ -2,11 +2,6 @@
 from aiogram.fsm.state import State, StatesGroup
 
 
-class RegistrationStates(StatesGroup):
-    waiting_email = State()
-    waiting_phone = State()
-
-
 class AnalysisStates(StatesGroup):
     waiting_request = State()
     waiting_format = State()
@@ -111,7 +106,6 @@ class TestStates(StatesGroup):
 
 
 __all__ = [
-    "RegistrationStates",
     "AnalysisStates",
     "HWStates",
     "SupportStates",

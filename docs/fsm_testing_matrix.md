@@ -1,14 +1,9 @@
 # Матрица FSM-сценариев и проверка
 
-## RegistrationStates
-| Состояние | Триггер/действие | Следующее состояние | Ожидаемый ответ | Шаги проверки |
-|-----------|------------------|---------------------|-----------------|---------------|
-| `None` → `waiting_email` | Пользователь запускает `/start`, в профиле отсутствует email | `RegistrationStates.waiting_email` | «Укажи email для связи» | Проверено unit-тестом `test_registration_smoke_flow`: после запуска `/start` без email состояние `waiting_email`, отправлен локализованный текст. 【F:handlers/__init__.py†L6799-L6821】【F:tests/test_fsm_smoke.py†L119-L175】 |
-| `None` → `waiting_phone` | Пользователь запускает `/start`, email заполнен, телефона нет | `RegistrationStates.waiting_phone` | «Укажи номер телефона» | Покрыто unit-тестом `test_registration_smoke_flow`: после пропуска email состояние переключается на `waiting_phone`. 【F:handlers/__init__.py†L6823-L6845】【F:tests/test_fsm_smoke.py†L139-L158】 |
-| `waiting_email` (валидный email) | Ответ с корректным email | `RegistrationStates.waiting_phone` | «Укажи номер телефона» | Проверено в `test_registration_smoke_flow`: после валидного email состояние `waiting_phone`. 【F:handlers.py†L6268-L6287】【F:tests/test_fsm_smoke.py†L162-L174】 |
-| `waiting_email` (невалидный email) | Ответ с ошибочным email | `RegistrationStates.waiting_email` | «Формат неверный. Пример: name@mail.com» | Проверено в `test_registration_smoke_flow`: состояние не меняется, сообщение о валидации. 【F:handlers.py†L6272-L6277】【F:tests/test_fsm_smoke.py†L157-L160】 |
-| `waiting_phone` (валидный номер) | Ответ с корректным телефоном | `None` | Сообщение о завершении регистрации и клавиатура меню | Проверено в `test_registration_smoke_flow`: состояние очищается, отправлен финальный текст. 【F:handlers.py†L6290-L6313】【F:tests/test_fsm_smoke.py†L171-L175】 |
-| `waiting_phone` (невалидный номер) | Ответ с ошибочным телефоном | `RegistrationStates.waiting_phone` | «Формат неверный. Пример: +79991234567» | Проверено в `test_registration_smoke_flow`: состояние не меняется, сообщение о валидации. 【F:handlers.py†L6294-L6299】【F:tests/test_fsm_smoke.py†L166-L170】 |
+## Start flow
+| Сценарий | Ожидаемый результат | Проверка |
+|----------|---------------------|----------|
+| Новый пользователь отправляет `/start` | Пользователь сразу видит главное меню и остаётся вне FSM-регистрации | Unit-тест `test_start_opens_main_menu_without_registration` проверяет, что состояние FSM остаётся `None`, а бот отправляет приветствие с корневой клавиатурой. 【F:handlers/__init__.py†L7039-L7071】【F:tests/test_fsm_smoke.py†L127-L163】 |
 
 ## HWStates
 | Состояние | Триггер/действие | Следующее состояние | Ожидаемый ответ | Шаги проверки |
