@@ -10,10 +10,12 @@ import os
 import urllib.error
 import urllib.request
 import re
-from typing import Optional, Any, Dict, List, Literal, Sequence
+from typing import Optional, Any, Dict, List, Literal, Sequence, Callable, Awaitable
 from contextlib import asynccontextmanager
 from pprint import pformat
 from datetime import datetime, timedelta, timezone
+
+from aiohttp import ClientError, ClientTimeout
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -25,7 +27,11 @@ from pydantic import BaseModel, Field, field_validator
 
 from aiogram import Bot, Dispatcher, types
 from aiogram.client.default import DefaultBotProperties
+from aiogram.client.session.aiohttp import AiohttpSession
+from aiogram.client.session.middlewares.base import BaseRequestMiddleware
 from aiogram.enums import ParseMode
+from aiogram.exceptions import TelegramNetworkError
+from aiogram.methods import Response, TelegramMethod
 from settings import ADMIN_IDS, STAFF_ADMIN_IDS, YOOMONEY_WEBHOOK_SECRET
 from utils import normalize_phone
 
@@ -302,6 +308,12 @@ SUPPORT_CONTACT = os.getenv("SUPPORT_CONTACT", "@codemagnetic")
 MAX_RETRIES = int(os.getenv("MAX_RETRIES", "3"))
 RETRY_DELAY = float(os.getenv("RETRY_DELAY", "0.5"))
 
+TELEGRAM_REQUEST_MAX_RETRIES = int(os.getenv("TELEGRAM_REQUEST_MAX_RETRIES", "3"))
+TELEGRAM_REQUEST_INITIAL_DELAY = float(os.getenv("TELEGRAM_REQUEST_INITIAL_DELAY", "0.5"))
+TELEGRAM_REQUEST_BACKOFF = float(os.getenv("TELEGRAM_REQUEST_BACKOFF", "2.0"))
+TELEGRAM_REQUEST_TIMEOUT = float(os.getenv("TELEGRAM_REQUEST_TIMEOUT", "40"))
+TELEGRAM_REQUEST_CONNECT_TIMEOUT = float(os.getenv("TELEGRAM_REQUEST_CONNECT_TIMEOUT", "10"))
+
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN не задан в окружении (.env).")
 
@@ -325,6 +337,58 @@ if TUNNEL_FETCH_ATTEMPTED and not NGROK_FETCH_SUCCEEDED and not CLOUDFLARED_FETC
         PUBLIC_BASE_URL_SOURCE,
     )
 
+
+class TelegramRequestRetryMiddleware(BaseRequestMiddleware):
+    """Повторяет запросы к Telegram API при сетевых сбоях."""
+
+    def __init__(
+        self,
+        max_retries: int = TELEGRAM_REQUEST_MAX_RETRIES,
+        initial_delay: float = TELEGRAM_REQUEST_INITIAL_DELAY,
+        backoff_factor: float = TELEGRAM_REQUEST_BACKOFF,
+    ) -> None:
+        self.max_retries = max(0, max_retries)
+        self.initial_delay = max(0.0, initial_delay)
+        self.backoff_factor = max(1.0, backoff_factor)
+
+    async def __call__(
+        self,
+        make_request: Callable[["Bot", TelegramMethod[Any]], Awaitable[Response[Any]]],
+        bot: "Bot",
+        method: TelegramMethod[Any],
+    ) -> Response[Any]:
+        attempt = 0
+        delay = self.initial_delay
+
+        while True:
+            try:
+                return await make_request(bot, method)
+            except asyncio.CancelledError:  # pragma: no cover - важно не глотать отмену
+                raise
+            except (TelegramNetworkError, ClientError, asyncio.TimeoutError) as exc:
+                attempt += 1
+                if attempt > self.max_retries:
+                    logger.error(
+                        "telegram request failed after %s retries: %s (%s)",
+                        self.max_retries,
+                        method.__class__.__name__,
+                        exc,
+                    )
+                    raise
+
+                logger.warning(
+                    "telegram request error %s for %s, retry %s/%s in %.2fs",
+                    type(exc).__name__,
+                    method.__class__.__name__,
+                    attempt,
+                    self.max_retries,
+                    delay,
+                )
+
+                if delay > 0:
+                    await asyncio.sleep(delay)
+                delay *= self.backoff_factor
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Локальные модули
 # ──────────────────────────────────────────────────────────────────────────────
@@ -347,7 +411,36 @@ from scheduler import setup_scheduler, shutdown_scheduler, get_scheduler_status
 # ──────────────────────────────────────────────────────────────────────────────
 # Инициализация бота/диспетчера
 # ──────────────────────────────────────────────────────────────────────────────
-bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+_telegram_total_timeout = TELEGRAM_REQUEST_TIMEOUT if TELEGRAM_REQUEST_TIMEOUT > 0 else 40.0
+_telegram_connect_timeout = (
+    TELEGRAM_REQUEST_CONNECT_TIMEOUT if TELEGRAM_REQUEST_CONNECT_TIMEOUT > 0 else 10.0
+)
+
+telegram_session = AiohttpSession(
+    limit=64,
+    timeout=ClientTimeout(
+        total=_telegram_total_timeout,
+        connect=_telegram_connect_timeout,
+        sock_connect=_telegram_connect_timeout,
+        sock_read=_telegram_total_timeout,
+    ),
+)
+telegram_session._connector_init.update(
+    {
+        "limit": 64,
+        "ttl_dns_cache": 300,
+        "enable_cleanup_closed": True,
+        "force_close": True,
+    }
+)
+telegram_session._should_reset_connector = True
+telegram_session.middleware.register(TelegramRequestRetryMiddleware())
+
+bot = Bot(
+    token=BOT_TOKEN,
+    default=DefaultBotProperties(parse_mode=ParseMode.HTML),
+    session=telegram_session,
+)
 dp = Dispatcher()
 dp.include_router(bot_router)  # важно: без условий
 logger.info("Routers attached: %s", [r.name for r in dp.sub_routers])
@@ -539,6 +632,12 @@ async def lifespan(app: FastAPI):
                 logger.info("Scheduler stopped successfully")
         except Exception as e:
             logger.error("Error stopping scheduler: %s", e)
+
+        try:
+            await telegram_session.close()
+            logger.info("Telegram session closed successfully")
+        except Exception as e:
+            logger.error("Error closing Telegram session: %s", e)
 
         try:
             if not SKIP_DB_INIT:
